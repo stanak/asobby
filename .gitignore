@@ -12,7 +12,9 @@ __pycache__/
 venv/
 [Ii]nclude
 [Ll]ib
+[Ll]ib64
 [Ss]cripts
+[Bb]in
 
 # env
 .env
