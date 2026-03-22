@@ -153,16 +153,16 @@ async def upsert_post(body: UpsertPostIn) -> dict[str, Any]:
     if p is None:
         p = Post(id=pid)
 
-    # 新規投稿時だけ、AutoPunchなしならその場で hostability を確認
+    # 新規投稿時だけその場で hostability を確認
     if is_new and (not body.autopunch):
-        await verify_hostable_or_raise(body.addr)
+        hostable = await verify_hostable_or_raise(body.addr)
 
     p.rank = body.rank
     p.addr = body.addr
     p.comment = body.comment
     p.stream_url = body.stream_url
     p.giuroll = body.giuroll
-    p.autopunch = body.autopunch
+    p.autopunch = False if hostable else body.autopunch
     p.match_status = body.match_status
     p.net_status = body.net_status
     p.updated_at = now_ts()
@@ -311,7 +311,7 @@ def check_hostable_consecutive(
     return False
 
 
-async def verify_hostable_or_raise(addr: str) -> None:
+async def verify_hostable_or_raise(addr: str) -> bool:
     try:
         host, port_s = addr.rsplit(":", 1)
         port = int(port_s)
@@ -331,6 +331,7 @@ async def verify_hostable_or_raise(addr: str) -> None:
                 "message": "host not reachable",
             },
         )
+    return True
 
 def is_allowed_stream_url(url: str) -> bool:
     url = (url or "").strip()
