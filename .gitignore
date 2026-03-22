@@ -1,0 +1,36 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# python
+__pycache__/
+.mypy_cache
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+[Ii]nclude
+[Ll]ib
+[Ss]cripts
+
+# env
+.env
+server/.env
+
+# pyinstaller
+dist
+build
+*.exe
+
+# logs
+*.log
+
+# app
+*.json
+
+# docker data
+server/data/
+server/uploads/
+server/postgres_data/
+server/redis_data/

@@ -1,0 +1,9 @@
+services:
+  app:
+    build: ./app
+    container_name: asobby_server
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
