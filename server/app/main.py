@@ -241,7 +241,7 @@ def soku_echo_packet(
 
 
 def is_valid_reply(data: bytes) -> bool:
-    pint(data)
+    print(data)
     return len(data) >= 1 and data[0] in (b'\x07', b'\x08')
 
 
