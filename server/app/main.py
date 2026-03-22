@@ -155,14 +155,14 @@ async def upsert_post(body: UpsertPostIn) -> dict[str, Any]:
 
     # 新規投稿時だけその場で hostability を確認
     if is_new and (not body.autopunch):
-        hostable = await verify_hostable_or_raise(body.addr)
+        await verify_hostable_or_raise(body.addr)
 
     p.rank = body.rank
     p.addr = body.addr
     p.comment = body.comment
     p.stream_url = body.stream_url
     p.giuroll = body.giuroll
-    p.autopunch = False if hostable else body.autopunch
+    p.autopunch = body.autopunch
     p.match_status = body.match_status
     p.net_status = body.net_status
     p.updated_at = now_ts()
