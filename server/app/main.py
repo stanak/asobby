@@ -231,7 +231,7 @@ def soku_echo_packet(
     profile_name_bytes = str.encode(profile_name, "shift-jis")
     return bytes.fromhex(
         "05"
-        "647365d9" "ffc46e48" "8d7ca192" "31347295"
+        "6e7365d9" "ffc46e48" "8d7ca192" "31347295"
         "00000000" "28000000"
         f"{int(should_match):02}"
         f"{len(profile_name_bytes).to_bytes(1, 'big').hex()}"
@@ -241,7 +241,7 @@ def soku_echo_packet(
 
 
 def is_valid_reply(data: bytes) -> bool:
-    print(data)
+    pint(data)
     return len(data) >= 1 and data[0] in (b'\x07', b'\x08')
 
 

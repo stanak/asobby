@@ -175,7 +175,7 @@ class Controller:
                     self._last_sent_payload = None
                     self._seen_recruit_this_run = False
                 if e.response.status_code == 409:
-                    self.log_sink("error", "ポート未開放、かつAutoPunch未起動で接続不可能のため、募集できません")
+                    self.log_sink("error", f"Please either open the port or start autopunch.")
                 else:
                     self.log_sink("error", f"API error: {e}")
 
