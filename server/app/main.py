@@ -241,8 +241,7 @@ def soku_echo_packet(
 
 
 def is_valid_reply(data: bytes) -> bool:
-    print(data)
-    return len(data) >= 1 and data[0] in (b'\x07', b'\x08')
+    return len(data) >= 1 and data[0] in (0x07, 0x08)
 
 
 def probe_host_once(
