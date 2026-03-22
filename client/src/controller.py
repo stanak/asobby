@@ -18,7 +18,6 @@ from config_manager import ConfigManager
 from tool_manager import ToolManager
 
 
-API_BASE = "http://127.0.0.1:8000"
 ActionType = Literal["upsert", "close"]
 
 
@@ -42,7 +41,7 @@ class Controller:
         self.tool_mgr = ToolManager(self.config_mgr)
 
         self.http = httpx.AsyncClient(timeout=10.0)
-        self.api = ApiClient(self.http, API_BASE)
+        self.api = ApiClient(self.http, self.config_mgr.get_api_base())
         self._action_q: asyncio.Queue[Action] = asyncio.Queue()
         self._stop = asyncio.Event()
 
@@ -122,7 +121,7 @@ class Controller:
     # -----------------
     async def sync_initial(self) -> None:
         try:
-            r = await self.http.get(f"{API_BASE}/posts")
+            r = await self.http.get(f"{self.config_mgr.get_api_base()}/posts")
             r.raise_for_status()
             posts: List[Post] = [Post(**x) for x in r.json()]
             self._posts = {p.id: p for p in posts}
@@ -131,7 +130,7 @@ class Controller:
             self.log_sink("error", f"initial error: {e}")
 
     async def sse_loop(self) -> None:
-        sse = SSEClient(self.http, f"{API_BASE}/sse/posts")
+        sse = SSEClient(self.http, f"{self.config_mgr.get_api_base()}/sse/posts")
         try:
             async for ev in sse.events(self._stop):
                 self._apply_sse(ev.event, ev.data)
