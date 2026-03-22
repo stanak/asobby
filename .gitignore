@@ -4,7 +4,7 @@ Thumbs.db
 
 # python
 __pycache__/
-.mypy_cache
+.mypy_cache/
 *.pyc
 *.pyo
 *.pyd
