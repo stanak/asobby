@@ -5,6 +5,8 @@ from tkinter import Tk, filedialog
 
 from dataclasses import dataclass
 
+__version__ = "0.1.0"
+
 MODE_OPTIONS = [
     ("All", "all"),
     ("Any", "any"),

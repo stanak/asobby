@@ -13,12 +13,16 @@ from sse_client import SSEClient
 from api_client import ApiClient
 from detect_api import DetectionState
 from hisoutensoku_memory import read_detection_state
-from services import Post, NET_ALIVE, NET_BATTLE
+from services import Post, NET_ALIVE, NET_BATTLE, __version__
 from config_manager import ConfigManager
 from tool_manager import ToolManager
 
 
 ActionType = Literal["upsert", "close"]
+
+
+def _parse_version(v: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in v.lstrip("v").split(".") if x.isdigit())
 
 
 @dataclass
@@ -128,6 +132,25 @@ class Controller:
             self._apply_posts()
         except Exception as e:
             self.log_sink("error", f"initial error: {e}")
+
+        await self._check_update()
+
+    async def _check_update(self) -> None:
+        result = await self.api.check_update()
+        if result is None:
+            err = getattr(self.api, "_last_update_check_error", None)
+            if err:
+                self.log_sink("error", f"Update check failed: {err}")
+            return
+        latest_tag, release_url = result
+        try:
+            if _parse_version(latest_tag) > _parse_version(__version__):
+                self.log_sink(
+                    "warn",
+                    f"New version {latest_tag} available (current: v{__version__}). {release_url}",
+                )
+        except Exception:
+            pass
 
     async def sse_loop(self) -> None:
         sse = SSEClient(self.http, f"{self.config_mgr.get_api_base()}/sse/posts")
