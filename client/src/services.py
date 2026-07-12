@@ -5,7 +5,7 @@ from tkinter import Tk, filedialog
 
 from dataclasses import dataclass
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 MODE_OPTIONS = [
     ("All", "all"),
@@ -37,11 +37,6 @@ class Post:
     autopunch: bool = False
     match_status: str = ""
     net_status: int = NET_UNKNOWN
-
-
-def clip_text(p: Post) -> str:
-    """コピーするテキスト"""
-    return p.addr
 
 
 def pick_path(title: str = "Select file") -> str | None:

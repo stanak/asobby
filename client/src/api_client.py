@@ -17,13 +17,23 @@ class ApiClient:
         r.raise_for_status()
         return r.json()["ip"]
 
-    async def upsert(self, payload: dict) -> dict:
-        r = await self.http.post(f"{self.base}/posts/upsert", json=payload)
+    async def create(self, payload: dict) -> dict:
+        """投稿を新規作成する。返り値は {"post": {...}, "owner_token": "..."}"""
+        r = await self.http.post(f"{self.base}/posts", json=payload)
         r.raise_for_status()
         return r.json()
 
-    async def close(self, post_id: str, reason: str = "auto") -> dict:
-        r = await self.http.post(f"{self.base}/posts/close", json={"id": post_id, "reason": reason})
+    async def update(self, post_id: str, owner_token: str, payload: dict) -> dict:
+        body = {**payload, "id": post_id, "owner_token": owner_token}
+        r = await self.http.post(f"{self.base}/posts/update", json=body)
+        r.raise_for_status()
+        return r.json()
+
+    async def close(self, post_id: str, owner_token: str, reason: str = "auto") -> dict:
+        r = await self.http.post(
+            f"{self.base}/posts/close",
+            json={"id": post_id, "owner_token": owner_token, "reason": reason},
+        )
         r.raise_for_status()
         return r.json()
 

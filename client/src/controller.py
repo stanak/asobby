@@ -1,24 +1,26 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from dataclasses import dataclass, replace
-from typing import Dict, List, Optional, Literal, Any
+from typing import Dict, Optional, Literal, Any
 from collections import defaultdict
 
 import httpx
 
-from sse_client import SSEClient
 from api_client import ApiClient
 from detect_api import DetectionState
 from hisoutensoku_memory import read_detection_state
 from services import Post, NET_ALIVE, NET_BATTLE, __version__
 from config_manager import ConfigManager
 from tool_manager import ToolManager
+from sound import play_sound
 
 
-ActionType = Literal["upsert", "close"]
+ActionType = Literal["create", "update", "close"]
+
+HEARTBEAT_SEC = 5  # サーバー側 TTL (20s) の 1/4
+CREATE_RETRY_COOLDOWN_SEC = 10
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -32,11 +34,10 @@ class Action:
 
 
 class Controller:
-    """Postsのローカルストア + 自動投稿制御"""
+    """非想天則の状態を検出して募集投稿を自動管理するエージェント"""
 
     def __init__(self, app) -> None:
         self.log_sink = app.emit_log
-        self.posts_sink = app.emit_posts
         self.my_post_sink = app.emit_my_post
         self.btn_labels_sink = app.emit_btn_labels
 
@@ -55,12 +56,14 @@ class Controller:
         self._close_grace_sec = 4
 
         self._last_heartbeat_ts = 0.0
-        self._heartbeat_sec = 3
+        self._next_create_ts = 0.0
 
         self._tool_labels: Dict[str, str] = {}
-        self._posts: Dict[str, Post] = {}
         self._last_sent_payload: Optional[dict] = None
+        self._create_pending = False
+        self._close_pending = False
 
+        self.owner_token: str = ""
         self.my_post: Post = Post()
         self.update_my_post(**self._default_post_params())
 
@@ -71,6 +74,11 @@ class Controller:
         return self.config_mgr.get_post_defaults()
 
     def clear_my_post(self) -> None:
+        self.owner_token = ""
+        self._seen_recruit_this_run = False
+        self._last_sent_payload = None
+        self._create_pending = False
+        self._close_pending = False
         self.my_post = replace(
             self.my_post,
             id="",
@@ -83,7 +91,7 @@ class Controller:
         self.update_my_post()
 
     def has_active_post(self) -> bool:
-        return bool(self.my_post and self.my_post.id)
+        return bool(self.my_post.id and self.owner_token)
 
     def _stable_key(self, key: str, need: int, *, seen: bool) -> bool:
         if seen:
@@ -101,38 +109,49 @@ class Controller:
         if is_battle and lp and rp:
             return f"{lp}({lc}) vs {rp}({rc})"
 
-        if is_recruiting and lp:
-            return lp
-
-        # charsel/other ではキャラ名を出さず、プロフィール名だけ
-        if lp:
-            return lp
-
-        return ""
+        # 募集中/キャラセレ等ではプロフィール名だけ
+        return lp
 
     def _current_addr(self, my_ip: str, port: Optional[int]) -> str:
         if port is None:
             return self.my_post.addr or ""
         return f"{my_ip}:{port}" if my_ip else f"0.0.0.0:{port}"
 
-    def _compare_payload(self, payload: dict) -> dict:
-        d = dict(payload)
-        d.pop("id", None)
-        return d
+    def _build_payload(
+        self,
+        *,
+        addr: str,
+        giuroll: bool,
+        autopunch: bool,
+        match_status: str,
+        net_status: int,
+    ) -> dict:
+        return {
+            "rank": self.my_post.rank or "any",
+            "addr": addr,
+            "comment": self.my_post.comment or "",
+            "stream_url": self.my_post.stream_url or "",
+            "giuroll": giuroll,
+            "autopunch": autopunch,
+            "match_status": match_status,
+            "net_status": net_status,
+        }
+
+    def _play_config_sound(self, key: str) -> None:
+        sounds = self.config_mgr.get_section("sounds")
+        if not sounds.get("enabled", True):
+            return
+        spec = sounds.get(key)
+        if isinstance(spec, dict):
+            try:
+                play_sound(spec)
+            except Exception:
+                pass
 
     # -----------------
-    # sync / sse / loops
+    # loops
     # -----------------
     async def sync_initial(self) -> None:
-        try:
-            r = await self.http.get(f"{self.config_mgr.get_api_base()}/posts")
-            r.raise_for_status()
-            posts: List[Post] = [Post(**x) for x in r.json()]
-            self._posts = {p.id: p for p in posts}
-            self._apply_posts()
-        except Exception as e:
-            self.log_sink("error", f"initial error: {e}")
-
         await self._check_update()
 
     async def _check_update(self) -> None:
@@ -151,14 +170,6 @@ class Controller:
                 )
         except Exception:
             pass
-
-    async def sse_loop(self) -> None:
-        sse = SSEClient(self.http, f"{self.config_mgr.get_api_base()}/sse/posts")
-        try:
-            async for ev in sse.events(self._stop):
-                self._apply_sse(ev.event, ev.data)
-        except Exception as e:
-            self.log_sink("error", f"SSE error: {e}")
 
     async def detector_loop(self) -> None:
         try:
@@ -181,53 +192,30 @@ class Controller:
         while not self._stop.is_set():
             act = await self._action_q.get()
             try:
-                if act.type == "upsert":
-                    res = await self.api.upsert(act.payload)
-                    self.on_upsert_result(res)
+                if act.type == "create":
+                    res = await self.api.create(act.payload)
+                    self._on_create_result(res, giuroll=bool(act.payload.get("giuroll")))
+
+                elif act.type == "update":
+                    await self.api.update(self.my_post.id, self.owner_token, act.payload)
 
                 elif act.type == "close":
-                    await self.api.close(act.payload["id"], act.payload.get("reason", "auto"))
-
-                    # close成功時だけローカル状態を消す
-                    self._seen_recruit_this_run = False
-                    self._last_sent_payload = None
+                    await self.api.close(
+                        self.my_post.id,
+                        self.owner_token,
+                        act.payload.get("reason", "auto"),
+                    )
                     self.clear_my_post()
+
             except httpx.HTTPStatusError as e:
-                if act.type == "upsert":
+                self._on_api_error(act, e)
+            except httpx.HTTPError as e:
+                if act.type == "create":
+                    self._create_pending = False
                     self._last_sent_payload = None
-                    self._seen_recruit_this_run = False
-                if e.response.status_code == 409:
-                    self.log_sink("error", f"Please either open the port or start autopunch.")
-                else:
-                    self.log_sink("error", f"API error: {e}")
-
-    def _apply_posts(self) -> None:
-        self.posts_sink(self._posts.values())
-
-    def _apply_sse(self, event: str, data: str) -> None:
-        if event == "hello":
-            return
-
-        try:
-            obj = json.loads(data) if isinstance(data, str) else data
-        except Exception as e:
-            self.log_sink("error", f"SSE decode error: {e}")
-            return
-
-        if event == "upsert":
-            try:
-                post = Post(**obj)
-            except Exception as e:
-                self.log_sink("error", f"SSE upsert parse error: {e}")
-                return
-            self._posts[post.id] = post
-
-        elif event == "close":
-            post_id = obj.get("id")
-            if post_id:
-                self._posts.pop(str(post_id), None)
-
-        self._apply_posts()
+                elif act.type == "close":
+                    self._close_pending = False
+                self.log_sink("error", f"API error: {e}")
 
     # -----------------
     # auto post logic
@@ -240,11 +228,9 @@ class Controller:
         # -----------------
         if not st.alive:
             self.tool_mgr.reset_state()
-            if self.has_active_post():
-                post_id = self.my_post.id
-                self._seen_recruit_this_run = False
-                self._last_sent_payload = None
-                return Action("close", {"id": post_id, "reason": "process_dead"})
+            if self.has_active_post() and not self._close_pending:
+                self._close_pending = True
+                return Action("close", {"reason": "process_dead"})
             return None
 
         # -----------------
@@ -264,75 +250,64 @@ class Controller:
         )
 
         # -----------------
-        # 1) recruiting upsert
+        # 1) recruiting -> create / update
         # -----------------
         if self._stable_key("recruiting", need=3, seen=is_recruiting):
-            payload = {
-                "id": self.my_post.id if self.has_active_post() else None,
-                "rank": self.my_post.rank or "any",
-                "addr": self._current_addr(my_ip, st.port),
-                "comment": self.my_post.comment or "",
-                "stream_url": self.my_post.stream_url or "",
-                "giuroll": st.giuroll,
-                "autopunch": st.autopunch,
-                "match_status": match_status,
-                "net_status": NET_ALIVE,
-            }
-            self._seen_recruit_this_run = True
-            compare_payload = self._compare_payload(payload)
-            if compare_payload != self._last_sent_payload:
-                self._last_sent_payload = compare_payload
-                self.update_my_post(**compare_payload)
-                return Action("upsert", payload)
+            payload = self._build_payload(
+                addr=self._current_addr(my_ip, st.port),
+                giuroll=st.giuroll,
+                autopunch=st.autopunch,
+                match_status=match_status,
+                net_status=NET_ALIVE,
+            )
+
+            if not self.has_active_post():
+                if not self._create_pending and now >= self._next_create_ts:
+                    self._create_pending = True
+                    self._last_sent_payload = payload
+                    self.update_my_post(**payload)
+                    return Action("create", payload)
+            elif payload != self._last_sent_payload:
+                self._seen_recruit_this_run = True
+                self._last_sent_payload = payload
+                self.update_my_post(**payload)
+                return Action("update", payload)
 
         # -----------------
-        # 2) battle upsert
+        # 2) battle -> update
         # -----------------
         if self.has_active_post() and self._seen_recruit_this_run and self._stable_key("battle", need=2, seen=is_battle):
-            prev = self._posts.get(self.my_post.id, self.my_post)
+            payload = self._build_payload(
+                addr=self.my_post.addr or "",
+                giuroll=st.giuroll,
+                autopunch=st.autopunch,
+                match_status=match_status,
+                net_status=NET_BATTLE,
+            )
 
-            payload = {
-                "id": self.my_post.id,
-                "rank": self.my_post.rank or prev.rank or "any",
-                "addr": prev.addr or self.my_post.addr or "",
-                "comment": self.my_post.comment or prev.comment or "",
-                "stream_url": self.my_post.stream_url or prev.stream_url or "",
-                "giuroll": st.giuroll,
-                "autopunch": st.autopunch,
-                "match_status": match_status,
-                "net_status": NET_BATTLE,
-            }
-
-            compare_payload = self._compare_payload(payload)
-            if compare_payload != self._last_sent_payload:
-                self._last_sent_payload = compare_payload
-                self.update_my_post(**compare_payload)
-                return Action("upsert", payload)
+            if payload != self._last_sent_payload:
+                self._last_sent_payload = payload
+                self.update_my_post(**payload)
+                return Action("update", payload)
 
         # -----------------
-        # 3) heartbeat
+        # 3) heartbeat (updated_at を更新して TTL 失効を防ぐ)
         # -----------------
-        if self.has_active_post() and (now - self._last_heartbeat_ts) >= self._heartbeat_sec:
-            prev = self._posts.get(self.my_post.id, self.my_post)
+        if self.has_active_post() and (now - self._last_heartbeat_ts) >= HEARTBEAT_SEC:
             self._last_heartbeat_ts = now
-            payload = {
-                "id": self.my_post.id,
-                "rank": self.my_post.rank or "any",
-                "addr": self.my_post.addr or "",
-                "comment": self.my_post.comment or "",
-                "stream_url": self.my_post.stream_url or "",
-                "giuroll": self.my_post.giuroll,
-                "autopunch": self.my_post.autopunch,
-                "match_status": prev.match_status or self.my_post.match_status or "",
-                "net_status": self.my_post.net_status or NET_ALIVE,
-            }
-            self.update_my_post(**payload)
-            return Action("upsert", payload)
+            payload = self._build_payload(
+                addr=self.my_post.addr or "",
+                giuroll=self.my_post.giuroll,
+                autopunch=self.my_post.autopunch,
+                match_status=self.my_post.match_status or "",
+                net_status=self.my_post.net_status or NET_ALIVE,
+            )
+            return Action("update", payload)
 
         # -----------------
         # 4) close
         # -----------------
-        if self.has_active_post():
+        if self.has_active_post() and not self._close_pending:
             grace_ok = (now - self._last_keepalive_ts) >= self._close_grace_sec
             quiet = self._stable_key(
                 "idle_or_other",
@@ -341,21 +316,68 @@ class Controller:
             )
 
             if grace_ok and quiet and (not is_battle):
-                post_id = self.my_post.id
-                self.clear_my_post()
-                return Action("close", {"id": post_id, "reason": "recruit_end"})
+                self._close_pending = True
+                return Action("close", {"reason": "recruit_end"})
 
         return None
 
     # -----------------
+    # result / error handling
+    # -----------------
+    def _on_create_result(self, result: dict, *, giuroll: bool) -> None:
+        self._create_pending = False
+        post = result.get("post") or {}
+        token = result.get("owner_token") or ""
+        rid = post.get("id")
+        if not rid or not token:
+            self.log_sink("error", "create response missing id/owner_token")
+            return
+
+        self.owner_token = str(token)
+        self._seen_recruit_this_run = True
+        self.my_post = replace(self.my_post, id=str(rid))
+        self.my_post_sink(self.my_post)
+        self.log_sink("info", f"Post created: {self.my_post.addr}")
+        self._play_config_sound("on_recruit_giuroll" if giuroll else "on_recruit")
+
+    def _on_api_error(self, act: Action, e: httpx.HTTPStatusError) -> None:
+        code = e.response.status_code
+
+        if act.type == "create":
+            self._create_pending = False
+            self._last_sent_payload = None
+            self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
+
+            if code == 409:
+                self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
+                self._play_config_sound("on_recruit_host_unavailable")
+            elif code == 429:
+                self.log_sink("warn", "Rate limited by server. Retrying soon.")
+            else:
+                self.log_sink("error", f"API error: {e}")
+            return
+
+        # update / close
+        if code in (403, 404):
+            # サーバー側で投稿が消えている（TTL失効・再起動等）。
+            # ローカル状態を破棄すれば、募集継続中なら次の周期で再作成される。
+            self.log_sink("warn", "Post lost on server. Re-posting if still hosting.")
+            self.clear_my_post()
+        elif code == 409:
+            # アドレス変更時の到達性検証に失敗。ローカルを破棄して
+            # 次の周期の create（クールダウン付き）からやり直す。
+            self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
+            self._play_config_sound("on_recruit_host_unavailable")
+            self.clear_my_post()
+            self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
+        else:
+            if act.type == "close":
+                self._close_pending = False  # リトライ可能にする
+            self.log_sink("error", f"API error: {e}")
+
+    # -----------------
     # external updates
     # -----------------
-    def on_upsert_result(self, result: dict) -> None:
-        rid = result.get("id")
-        if rid:
-            self.my_post = replace(self.my_post, id=str(rid))
-            self.my_post_sink(self.my_post)
-
     def update_my_post(self, **kwargs) -> None:
         self.my_post = replace(self.my_post, **kwargs)
         self.my_post_sink(self.my_post)
@@ -368,8 +390,15 @@ class Controller:
         }
         self.btn_labels_sink(self._tool_labels)
 
+    def lobby_url(self) -> str:
+        return self.config_mgr.get_api_base().rstrip("/") + "/"
 
     async def close(self) -> None:
         self._stop.set()
+        if self.has_active_post():
+            try:
+                await self.api.close(self.my_post.id, self.owner_token, "app_exit")
+            except Exception:
+                pass
         await self.config_mgr.flush()
         await self.http.aclose()

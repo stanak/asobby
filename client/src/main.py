@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable
+import webbrowser
 from time import sleep
 
 from textual.app import App, ComposeResult
@@ -10,8 +10,7 @@ from textual.reactive import reactive
 from textual.message import Message
 
 from controller import Controller
-from services import MODE_OPTIONS, Post, pick_path
-from widgets.lobby_table import LobbyTable, CopyRequested
+from services import MODE_OPTIONS, Post, pick_path, NET_BATTLE, __version__
 
 
 class LogMessage(Message):
@@ -23,38 +22,28 @@ class LogMessage(Message):
 
 class SokulobbyApp(App):
     theme = "solarized-dark"
+    TITLE = f"asobby agent v{__version__}"
     CSS = """
     Screen {
-    }
-
-    #root {
-        layout: horizontal;
-        height: 100%;
-    }
-
-    LobbyTable {
         layout: vertical;
-        height: 1fr;
-        overflow: hidden;
-        width: 1fr;
     }
 
-    #post-rank {
-        width: 16;
+    #status-bar {
+        height: 1;
+        padding: 0 1;
+        background: $panel;
+        color: $text-muted;
     }
 
-    #bottom-pane {
+    #main-pane {
         layout: horizontal;
-        height: 18;
-        border-top: solid $panel;
-        overflow: hidden hidden;
+        height: 1fr;
     }
 
     #post-form {
         layout: vertical;
         width: 2fr;
-        padding-left: 1;
-        padding-right: 1;
+        padding: 1;
     }
 
     #post-form Input,
@@ -67,13 +56,8 @@ class SokulobbyApp(App):
         color: $text-muted;
     }
 
-    #action-pane {
-        width: 24;
-        padding-left: 1;
-        padding-right: 1;
-        border-left: solid $panel;
-        layout: vertical;
-        overflow: hidden hidden;
+    #post-rank {
+        width: 16;
     }
 
     #post-grid {
@@ -86,17 +70,23 @@ class SokulobbyApp(App):
         height: auto;
     }
 
+    #log {
+        height: 1fr;
+        margin-top: 1;
+        border: solid $panel;
+    }
+
+    #action-pane {
+        width: 26;
+        padding: 1;
+        border-left: solid $panel;
+        layout: vertical;
+        overflow: hidden hidden;
+    }
+
     #action-pane Button {
         width: 100%;
         margin-bottom: 1;
-    }
-
-    #action-pane Button:last-child {
-        margin-bottom: 0;
-    }
-
-    #log {
-        height: 4;
     }
     """
     my_post = reactive(Post)
@@ -108,13 +98,14 @@ class SokulobbyApp(App):
 
     def __init__(self) -> None:
         super().__init__()
-        self.controller = Controller(self)
-        self.lobby = LobbyTable(self.emit_log)
+        # Controller の初期化中に reactive の watcher が発火するため、
+        # 参照される属性は Controller 生成より先に定義しておく
         self._tool_buttons_ready = False
+        self.controller = Controller(self)
 
     def compose(self) -> ComposeResult:
-        yield self.lobby
-        with Horizontal(id="bottom-pane"):
+        yield Label("", id="status-bar")
+        with Horizontal(id="main-pane"):
             with Container(id="post-form"):
                 with Grid(id="post-grid"):
                     yield Label("Post Rank :", classes="form-label")
@@ -130,10 +121,10 @@ class SokulobbyApp(App):
                     yield Label("Stream URL:", classes="form-label")
                     yield Input(placeholder="https://...", id="stream-url")
 
-                yield Label("Log:", classes="form-label")
-                yield RichLog(id="log", wrap=True, markup=True, max_lines=100)
+                yield RichLog(id="log", wrap=True, markup=True, max_lines=200)
 
             with Vertical(id="action-pane"):
+                yield Button("Open Lobby Page", id="btn-lobby", variant="primary")
                 yield Button(self.tool_labels["autopunch"], id="btn-autopunch")
                 yield Button(self.tool_labels["giuroll"], id="btn-giuroll")
                 yield Button(self.tool_labels["soku"], id="btn-soku")
@@ -142,10 +133,8 @@ class SokulobbyApp(App):
     async def on_mount(self) -> None:
         self._tool_buttons_ready = True
         await self.controller.sync_initial()
-        self.run_worker(self.controller.sse_loop(), name="sse", thread=False)
         self.run_worker(self.controller.detector_loop(), name="detector", thread=False)
         self.run_worker(self.controller.api_loop(), name="api", thread=False)
-        self.lobby.table.focus()
 
         # 初期値の配置
         post = self.controller.my_post
@@ -153,12 +142,11 @@ class SokulobbyApp(App):
         self.query_one("#post-comment", Input).value = post.comment or ""
         self.query_one("#stream-url", Input).value = post.stream_url or ""
         self._refresh_tool_buttons()
+        self._refresh_status(post)
+        self.emit_log("info", f"Lobby page: {self.controller.lobby_url()}")
 
     async def on_unmount(self) -> None:
         await self.controller.close()
-
-    async def on_copy_requested(self, msg: CopyRequested) -> None:
-        self.copy_to_clipboard(msg.text)
 
     async def on_log_message(self, msg: LogMessage) -> None:
         log = self.query_one("#log", RichLog)
@@ -172,25 +160,25 @@ class SokulobbyApp(App):
     def emit_log(self, level: str, text: str) -> None:
         self.post_message(LogMessage(level, text))
 
-    def emit_posts(self, posts: Iterable[Post]) -> None:
-        self.lobby.set_posts(posts)
-
     def emit_my_post(self, post: Post) -> None:
         self.my_post = post
 
     def emit_btn_labels(self, d: dict) -> None:
         self.tool_labels = d
 
-    def watch_post(self, post: Post) -> None:
-        rank = self.query_one("#post-rank", Select)
-        comment = self.query_one("#post-comment", Input)
-        stream = self.query_one("#stream-url", Input)
-        if rank.value != post.rank:
-            rank.value = post.rank
-        if comment.value != post.comment:
-            comment.value = post.comment
-        if stream.value != post.stream_url:
-            stream.value = post.stream_url
+    def watch_my_post(self, post: Post) -> None:
+        if not self._tool_buttons_ready:
+            return
+        self._refresh_status(post)
+
+    def _refresh_status(self, post: Post) -> None:
+        bar = self.query_one("#status-bar", Label)
+        if not post.id:
+            bar.update("待機中 - 非想天則でホストを立てると自動で募集が投稿されます")
+        elif post.net_status == NET_BATTLE:
+            bar.update(f"対戦中: {post.match_status or post.addr}")
+        else:
+            bar.update(f"募集中: {post.addr}")
 
     def watch_tool_labels(self, value) -> None:
         if not self._tool_buttons_ready:
@@ -218,7 +206,9 @@ class SokulobbyApp(App):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id
 
-        if bid == "btn-autopunch":
+        if bid == "btn-lobby":
+            webbrowser.open(self.controller.lobby_url())
+        elif bid == "btn-autopunch":
             self._handle_tool_button("autopunch", "Select autopunch exe")
         elif bid == "btn-giuroll":
             self._handle_tool_button("giuroll", "Select giuroll exe")

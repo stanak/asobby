@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>asobby - 非想天則ロビー</title>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1c2129;
+    --border: #2c3440;
+    --text: #d8dee9;
+    --muted: #7b8794;
+    --accent: #6ab0f3;
+    --battle: #5a6470;
+    --ok: #57c07d;
+    --err: #e06c75;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 15px;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 16px 20px 8px;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 20px;
+    letter-spacing: 1px;
+  }
+  header .sub { color: var(--muted); font-size: 13px; }
+  #status {
+    margin-left: auto;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  #status.connected::before { content: "●"; color: var(--ok); margin-right: 6px; }
+  #status.disconnected::before { content: "●"; color: var(--err); margin-right: 6px; }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 20px;
+  }
+  .toolbar label { color: var(--muted); font-size: 13px; }
+  select {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 14px;
+  }
+  #count { color: var(--muted); font-size: 13px; }
+  main { padding: 0 20px 32px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th, td {
+    text-align: left;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  td.comment { white-space: normal; word-break: break-word; }
+  th {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: rgba(255,255,255,0.02);
+  }
+  tr:last-child td { border-bottom: none; }
+  tr.battle td { color: var(--battle); }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-right: 4px;
+    color: var(--muted);
+  }
+  a.stream { color: var(--accent); text-decoration: none; }
+  a.stream:hover { text-decoration: underline; }
+  button.copy {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  button.copy:hover { border-color: var(--accent); }
+  button.copy.copied { color: var(--ok); border-color: var(--ok); }
+  #empty {
+    padding: 40px 0;
+    text-align: center;
+    color: var(--muted);
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>asobby</h1>
+  <span class="sub">非想天則 対戦募集ロビー</span>
+  <span id="status" class="disconnected">接続中...</span>
+</header>
+
+<div class="toolbar">
+  <label for="rank-filter">Rank:</label>
+  <select id="rank-filter">
+    <option value="all">All</option>
+    <option value="any">Any</option>
+    <option value="easy">E</option>
+    <option value="normal">N</option>
+    <option value="ex">Ex</option>
+    <option value="hard">H</option>
+    <option value="luna">L</option>
+    <option value="ph">Ph</option>
+  </select>
+  <span id="count"></span>
+</div>
+
+<main>
+  <table>
+    <thead>
+      <tr>
+        <th>Match</th>
+        <th>Rank</th>
+        <th>Cap</th>
+        <th>Stream</th>
+        <th>Comment</th>
+        <th>Addr</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="empty" hidden>現在募集はありません</div>
+</main>
+
+<script>
+"use strict";
+
+const NET_BATTLE = 4;
+const RANK_LABEL = {
+  any: "Any", easy: "E", normal: "N", ex: "Ex", hard: "H", luna: "L", ph: "Ph",
+};
+
+const posts = new Map();
+let filterRank = "all";
+
+const rowsEl = document.getElementById("rows");
+const emptyEl = document.getElementById("empty");
+const countEl = document.getElementById("count");
+const statusEl = document.getElementById("status");
+
+document.getElementById("rank-filter").addEventListener("change", (e) => {
+  filterRank = e.target.value;
+  render();
+});
+
+function render() {
+  let list = [...posts.values()];
+  if (filterRank !== "all" && filterRank !== "any") {
+    list = list.filter((p) => (p.rank || "any").toLowerCase() === filterRank);
+  }
+  list.sort((a, b) => b.updated_at - a.updated_at);
+
+  rowsEl.textContent = "";
+  for (const p of list) {
+    const tr = document.createElement("tr");
+    if (p.net_status === NET_BATTLE) tr.classList.add("battle");
+
+    tr.appendChild(td(p.match_status || ""));
+    tr.appendChild(td(RANK_LABEL[(p.rank || "any").toLowerCase()] || p.rank || ""));
+
+    const cap = document.createElement("td");
+    if (p.autopunch) cap.appendChild(badge("A"));
+    if (p.giuroll) cap.appendChild(badge("G"));
+    tr.appendChild(cap);
+
+    const stream = document.createElement("td");
+    if ((p.stream_url || "").trim()) {
+      const a = document.createElement("a");
+      a.className = "stream";
+      a.href = p.stream_url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = "▶ 配信";
+      stream.appendChild(a);
+    }
+    tr.appendChild(stream);
+
+    const comment = td(p.comment || "");
+    comment.className = "comment";
+    tr.appendChild(comment);
+
+    const addr = document.createElement("td");
+    const btn = document.createElement("button");
+    btn.className = "copy";
+    btn.textContent = p.addr;
+    btn.title = "クリックでコピー";
+    btn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(p.addr);
+      } catch (_) {
+        const ta = document.createElement("textarea");
+        ta.value = p.addr;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+      }
+      btn.classList.add("copied");
+      const orig = btn.textContent;
+      btn.textContent = "コピーしました";
+      setTimeout(() => {
+        btn.classList.remove("copied");
+        btn.textContent = orig;
+      }, 1200);
+    });
+    addr.appendChild(btn);
+    tr.appendChild(addr);
+
+    rowsEl.appendChild(tr);
+  }
+
+  emptyEl.hidden = list.length > 0;
+  countEl.textContent = `${list.length} 件`;
+}
+
+function td(text) {
+  const el = document.createElement("td");
+  el.textContent = text;
+  return el;
+}
+
+function badge(text) {
+  const el = document.createElement("span");
+  el.className = "badge";
+  el.textContent = text;
+  return el;
+}
+
+function connect() {
+  const es = new EventSource("/sse/posts");
+
+  es.addEventListener("open", () => {
+    statusEl.className = "connected";
+    statusEl.textContent = "リアルタイム更新中";
+  });
+
+  es.addEventListener("snapshot", (e) => {
+    posts.clear();
+    for (const p of JSON.parse(e.data)) posts.set(p.id, p);
+    render();
+  });
+
+  es.addEventListener("upsert", (e) => {
+    const p = JSON.parse(e.data);
+    posts.set(p.id, p);
+    render();
+  });
+
+  es.addEventListener("close", (e) => {
+    const d = JSON.parse(e.data);
+    posts.delete(d.id);
+    render();
+  });
+
+  es.addEventListener("error", () => {
+    statusEl.className = "disconnected";
+    statusEl.textContent = "再接続中...";
+    // EventSource は自動再接続する。再接続時に snapshot が届いて全同期される。
+  });
+}
+
+connect();
+render();
+</script>
+</body>
+</html>
