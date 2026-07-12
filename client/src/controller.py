@@ -14,7 +14,6 @@ from hisoutensoku_memory import read_detection_state
 from services import Post, NET_ALIVE, NET_BATTLE, __version__
 from config_manager import ConfigManager
 from tool_manager import ToolManager
-from sound import play_sound
 
 
 ActionType = Literal["create", "update", "close"]
@@ -38,6 +37,7 @@ class Controller:
 
     def __init__(self, app) -> None:
         self.log_sink = app.emit_log
+        self.notify_sink = app.emit_notify
         self.my_post_sink = app.emit_my_post
         self.btn_labels_sink = app.emit_btn_labels
 
@@ -95,6 +95,16 @@ class Controller:
     def set_active_comment(self, text: str) -> None:
         self.config_mgr.set_post_default("comment", text)
         self.update_my_post(comment=text)
+
+    def stream_presets(self) -> list[str]:
+        v = self.config_mgr.get_value("post_defaults", "stream_url_presets", [])
+        if not isinstance(v, list):
+            return []
+        return [str(x) for x in v if str(x).strip()]
+
+    def set_active_stream(self, text: str) -> None:
+        self.config_mgr.set_post_default("stream_url", text)
+        self.update_my_post(stream_url=text)
 
     def clear_my_post(self) -> None:
         self.owner_token = ""
@@ -159,17 +169,6 @@ class Controller:
             "match_status": match_status,
             "net_status": net_status,
         }
-
-    def _play_config_sound(self, key: str) -> None:
-        sounds = self.config_mgr.get_section("sounds")
-        if not sounds.get("enabled", True):
-            return
-        spec = sounds.get(key)
-        if isinstance(spec, dict):
-            try:
-                play_sound(spec)
-            except Exception:
-                pass
 
     # -----------------
     # loops
@@ -379,7 +378,6 @@ class Controller:
         self.my_post = replace(self.my_post, id=str(rid))
         self.my_post_sink(self.my_post)
         self.log_sink("info", f"Post created: {self.my_post.addr}")
-        self._play_config_sound("on_recruit_giuroll" if giuroll else "on_recruit")
 
     def _on_api_error(self, act: Action, e: httpx.HTTPStatusError) -> None:
         code = e.response.status_code
@@ -395,7 +393,7 @@ class Controller:
                 self._next_create_ts = 0.0
             elif code == 409:
                 self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
-                self._play_config_sound("on_recruit_host_unavailable")
+                self.notify_sink("募集に失敗しました: ポート開放または autopunch を確認してください")
             elif code == 429:
                 self.log_sink("warn", "Rate limited by server. Retrying soon.")
             else:
@@ -412,7 +410,7 @@ class Controller:
             # アドレス変更時の到達性検証に失敗。ローカルを破棄して
             # 次の周期の create（クールダウン付き）からやり直す。
             self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
-            self._play_config_sound("on_recruit_host_unavailable")
+            self.notify_sink("募集に失敗しました: ポート開放または autopunch を確認してください")
             self.clear_my_post()
             self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
         else:

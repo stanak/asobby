@@ -25,26 +25,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "comment": "",
         "comment_presets": [],
         "stream_url": "",
+        "stream_url_presets": [],
         "rank": "any",
-    },
-    "sounds": {
-        "enabled": True,
-        "mode": "beep",
-        "on_recruit": {
-            "kind": "beep",
-            "freq": 880,
-            "duration_ms": 180,
-        },
-        "on_recruit_giuroll": {
-            "kind": "beep",
-            "freq": 1046,
-            "duration_ms": 180,
-        },
-        "on_recruit_host_unavailable": {
-            "kind": "beep",
-            "freq": 440,
-            "duration_ms": 400,
-        },
     },
 }
 

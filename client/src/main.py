@@ -61,8 +61,9 @@ class TrayApp:
     # -----------------
     def emit_log(self, level: str, text: str) -> None:
         self._append_log(level, text)
-        if level in ("warn", "error"):
-            self._notify(text)
+
+    def emit_notify(self, text: str) -> None:
+        self._notify(text)
 
     def emit_my_post(self, post: Post) -> None:
         self.post = post
@@ -267,6 +268,33 @@ class TrayApp:
         if not presets:
             yield MenuItem("投稿設定でコメントを追加できます", None, enabled=False)
 
+    def _stream_menu_items(self):
+        """配信URL切替サブメニュー (プリセットからラジオ選択)。"""
+        current = self.controller.my_post.stream_url or ""
+        presets = self.controller.stream_presets()
+
+        def make_action(text: str):
+            def act(icon, item):
+                self.controller.set_active_stream(text)
+            return act
+
+        yield MenuItem(
+            "（なし）",
+            make_action(""),
+            radio=True,
+            checked=lambda item: (self.controller.my_post.stream_url or "") == "",
+        )
+        for url in presets:
+            label = url if len(url) <= 30 else url[:30] + "…"
+            yield MenuItem(
+                label,
+                make_action(url),
+                radio=True,
+                checked=lambda item, url=url: self.controller.my_post.stream_url == url,
+            )
+        if not presets:
+            yield MenuItem("投稿設定で配信URLを追加できます", None, enabled=False)
+
     def _build_menu(self) -> Menu:
         return Menu(
             MenuItem(lambda item: self._status_text(), None, enabled=False),
@@ -274,6 +302,7 @@ class TrayApp:
             MenuItem("ロビーページを開く", lambda: self._open_lobby(), default=True),
             MenuItem("投稿設定...", lambda: self._open_settings()),
             MenuItem("コメント切替", Menu(lambda: self._comment_menu_items())),
+            MenuItem("配信URL切替", Menu(lambda: self._stream_menu_items())),
             MenuItem(lambda item: self._discord_label(), lambda: self._discord_action()),
             Menu.SEPARATOR,
             MenuItem(lambda item: self._tool_label("autopunch"),
