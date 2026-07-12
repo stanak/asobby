@@ -12,6 +12,7 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `POST /posts` | 募集の新規作成。レスポンスで `owner_token` を発行 |
 | `POST /posts/update` | 募集の更新。`id` + `owner_token` が必須 |
 | `POST /posts/close` | 募集の削除。`id` + `owner_token` が必須 |
+| `POST /posts/result` | 対戦勝敗の報告。`id` + `owner_token` + `winner` (`host`/`guest`/`draw`) |
 | `GET /sse/posts` | SSE。接続直後に `snapshot`、以後 `upsert` / `close` |
 | `POST /auth/device` | Discord ログイン開始。`device_code` と `verify_url` を返す |
 | `GET /auth/discord/start` | (ブラウザ用) Discord の認可画面へリダイレクト |
@@ -83,6 +84,8 @@ Discord で承認 → クライアントが `POST /auth/device/poll` で `sessio
 応答に含まれるゲスト IP:port を取得し、`users.last_ip` と照合して Discord
 ユーザーを同定する。同定できた場合はロビーの User 列に `vs <ゲスト名>` が
 表示され、ホストがログイン済みなら `matches` テーブルに対戦記録が残る。
+ホストのクライアントが KO 検出時に `POST /posts/result` で勝敗を報告し、
+`matches.winner` に記録される。
 `ASOBBY_HOSTCHECK=off` の場合はプローブ自体が無効になる。
 
 ### 設定手順

@@ -16,7 +16,7 @@ from config_manager import ConfigManager
 from tool_manager import ToolManager
 
 
-ActionType = Literal["create", "update", "close"]
+ActionType = Literal["create", "update", "close", "result"]
 
 HEARTBEAT_SEC = 5  # サーバー側 TTL (20s) の 1/4
 CREATE_RETRY_COOLDOWN_SEC = 10
@@ -68,6 +68,7 @@ class Controller:
         self._last_sent_payload: Optional[dict] = None
         self._create_pending = False
         self._close_pending = False
+        self._result_reported = False
 
         self.owner_token: str = ""
         self.my_post: Post = Post()
@@ -116,6 +117,7 @@ class Controller:
         self._last_sent_payload = None
         self._create_pending = False
         self._close_pending = False
+        self._result_reported = False
         self.my_post = replace(
             self.my_post,
             id="",
@@ -265,6 +267,20 @@ class Controller:
                     )
                     self.clear_my_post()
 
+                elif act.type == "result":
+                    try:
+                        await self.api.report_result(
+                            self.my_post.id,
+                            self.owner_token,
+                            act.payload["winner"],
+                        )
+                        self.log_sink(
+                            "info",
+                            f"Match result reported: {act.payload['winner']}",
+                        )
+                    except httpx.HTTPError as e:
+                        self.log_sink("error", f"Result report failed: {e}")
+
             except httpx.HTTPStatusError as e:
                 self._on_api_error(act, e)
             except httpx.HTTPError as e:
@@ -306,6 +322,27 @@ class Controller:
             is_recruiting=is_recruiting,
             is_battle=is_battle,
         )
+
+        # -----------------
+        # 0) KO 確定 -> result (この周期では result を優先)
+        # -----------------
+        if (
+            is_battle
+            and self.has_active_post()
+            and not self._result_reported
+            and st.btl_mode == 5
+            and st.lwin is not None
+            and st.rwin is not None
+            and 0 <= st.lwin <= 2
+            and 0 <= st.rwin <= 2
+            and (st.lwin == 2 or st.rwin == 2)
+        ):
+            self._result_reported = True
+            winner = "host" if st.lwin == 2 else "guest"
+            return Action("result", {"winner": winner})
+
+        if not is_battle:
+            self._result_reported = False
 
         # -----------------
         # 1) recruiting -> create / update

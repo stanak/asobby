@@ -243,3 +243,14 @@ async def record_match(
         s.add(match)
         await s.commit()
         return match.id
+
+
+async def set_match_winner(match_id: str, winner: str) -> bool:
+    """該当 Match の winner が空のときだけセットする。二重報告は無視。"""
+    async with session() as s:
+        match = await s.get(Match, match_id)
+        if match is None or match.winner:
+            return False
+        match.winner = winner
+        await s.commit()
+        return True

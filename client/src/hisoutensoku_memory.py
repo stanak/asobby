@@ -70,6 +70,14 @@ SERVER08_OFF = 0x08  # u16le: 513=募集 / 114=client connect mode / それ以�
 SERVER09_OFF = 0x09      # u8
 SERVER_PHASE_OFF = 0x11A0  # u8
 
+# PBATTLEMGR (KO 後の勝利数読み取り用。検出ロジックには使わない)
+PBATTLEMGR = 0x008985E4
+PBATTLEMGR_GIUROLL = 0x0047579C
+LCHAROFS = 0x0C
+RCHAROFS = 0x10
+BTLMODEOFS = 0x88
+WINCNTOFS = 0x573
+
 # ========================
 # Character enum (SWRSSCHAR from SWRSAddrDef.h)
 # ========================
@@ -315,6 +323,41 @@ def _sanitize_profile(name: str) -> str:
     return name
 
 
+def _resolve_battle_mgr(h: wt.HANDLE, giuroll: bool) -> Optional[int]:
+    """PBATTLEMGR ポインタを解決する。giuroll 時は代替アドレスも試す。"""
+    ptr = _read_u32le(h, PBATTLEMGR)
+    if ptr and is_readable_ptr(h, ptr):
+        return ptr
+    if giuroll:
+        ptr = _read_u32le(h, PBATTLEMGR_GIUROLL)
+        if ptr and is_readable_ptr(h, ptr):
+            return ptr
+    return None
+
+
+def _read_battle_result(
+    h: wt.HANDLE, giuroll: bool
+) -> tuple[Optional[int], Optional[int], Optional[int]]:
+    """(btl_mode, lwin, rwin) を返す。読めない場合は各要素 None。"""
+    btl = _resolve_battle_mgr(h, giuroll)
+    if not btl:
+        return (None, None, None)
+
+    btl_mode = _read_u32le(h, btl + BTLMODEOFS)
+
+    lchar = _read_u32le(h, btl + LCHAROFS)
+    lwin: Optional[int] = None
+    if lchar and is_readable_ptr(h, lchar):
+        lwin = _read_u8(h, lchar + WINCNTOFS)
+
+    rchar = _read_u32le(h, btl + RCHAROFS)
+    rwin: Optional[int] = None
+    if rchar and is_readable_ptr(h, rchar):
+        rwin = _read_u8(h, rchar + WINCNTOFS)
+
+    return (btl_mode, lwin, rwin)
+
+
 def _decide_mode(server08: Optional[int], server09: Optional[int], scene_id: Optional[int]) -> str:
     # 対戦 (シーン ID で確定。giuroll はシーン遷移を差し替えないため
     # MOD 有無に関わらず安定して判定できる)
@@ -411,6 +454,10 @@ def read_detection_state() -> DetectionState:
         lcid = _read_u32le(h, LCHARID)
         rcid = _read_u32le(h, RCHARID)
 
+        btl_mode = lwin = rwin = None
+        if scene_id in NET_BATTLE_SCENES:
+            btl_mode, lwin, rwin = _read_battle_result(h, giu)
+
         # 将来、対戦募集のランクをどこかから読めたらここに入れる。
         return DetectionState(
             alive=True,
@@ -424,6 +471,9 @@ def read_detection_state() -> DetectionState:
             rchar_id=rcid,
             lchar_name=_char_name(lcid),
             rchar_name=_char_name(rcid),
+            btl_mode=btl_mode,
+            lwin=lwin,
+            rwin=rwin,
         )
     finally:
         kernel32.CloseHandle(h)

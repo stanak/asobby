@@ -15,7 +15,7 @@ import socket
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 from uuid import uuid4
 from urllib.parse import urlencode, urlparse
 
@@ -128,6 +128,7 @@ class PostRecord:
     creator_ip: str
     owner_user_id: str = ""  # 作成者がログイン済みなら Discord ID
     guest_ip: str = ""  # 現在対戦中のゲスト IP（空なら対戦中でない）
+    match_id: str = ""  # 対戦記録 (matches.id)。ゲスト検出時に設定
 
 
 def now_ts() -> float:
@@ -157,6 +158,12 @@ class ClosePostIn(BaseModel):
     id: str = Field(max_length=64)
     owner_token: str = Field(max_length=128)
     reason: str = Field(default="manual", max_length=64)
+
+
+class ReportResultIn(BaseModel):
+    id: str = Field(max_length=64)
+    owner_token: str = Field(max_length=128)
+    winner: Literal["host", "guest", "draw"]
 
 
 class DevicePollIn(BaseModel):
@@ -768,6 +775,15 @@ async def close_post(body: ClosePostIn) -> dict[str, Any]:
     return {"ok": True, "id": body.id}
 
 
+@app.post("/posts/result")
+async def report_result(body: ReportResultIn) -> dict[str, Any]:
+    rec = get_record_or_raise(body.id, body.owner_token)
+    if not rec.match_id or not db.is_configured():
+        return {"ok": True, "recorded": False}
+    recorded = await db.set_match_winner(rec.match_id, body.winner)
+    return {"ok": True, "recorded": recorded}
+
+
 @app.post("/posts/upsert")
 async def legacy_upsert() -> None:
     raise HTTPException(
@@ -917,6 +933,7 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
     if matched is None:
         if len(reply) >= 1 and reply[0] == 0x07 and rec.guest_ip:
             rec.guest_ip = ""
+            rec.match_id = ""
             post.guest_name = ""
             post.guest_avatar = ""
             await HUB.publish("upsert", asdict(post))
@@ -927,6 +944,7 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
         return
 
     rec.guest_ip = ip
+    rec.match_id = ""
     user = None
     if db.is_configured():
         user = await db.find_user_by_ip(ip)
@@ -942,7 +960,7 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
 
     if db.is_configured() and rec.owner_user_id:
         host_ip, _, _ = post.addr.partition(":")
-        await db.record_match(
+        rec.match_id = await db.record_match(
             host_user_id=rec.owner_user_id,
             guest_user_id=(user.id if user else None),
             host_ip=host_ip,

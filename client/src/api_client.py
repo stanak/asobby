@@ -45,6 +45,14 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    async def report_result(self, post_id: str, owner_token: str, winner: str) -> dict:
+        r = await self.http.post(
+            f"{self.base}/posts/result",
+            json={"id": post_id, "owner_token": owner_token, "winner": winner},
+        )
+        r.raise_for_status()
+        return r.json()
+
     async def auth_device_start(self) -> dict:
         """Discord ログインを開始する。{"device_code", "verify_url", "expires_in", "interval"}"""
         r = await self.http.post(f"{self.base}/auth/device")

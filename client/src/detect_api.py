@@ -25,3 +25,8 @@ class DetectionState:
     rchar_id: Optional[int]
     lchar_name: str
     rchar_name: str
+
+    # 対戦勝敗 (NET_BATTLE_SCENES 時のみ読む。KO 確定は btl_mode==5)
+    btl_mode: Optional[int] = None
+    lwin: Optional[int] = None
+    rwin: Optional[int] = None
