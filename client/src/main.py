@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw
 from pystray import Menu, MenuItem
 
 from controller import Controller
-from services import Post, edit_post_settings, pick_path, NET_BATTLE, __version__
+from services import Post, edit_post_settings, NET_BATTLE, __version__
 
 LOG_PATH = Path("asobby.log")
 LOG_MAX_BYTES = 256 * 1024
@@ -33,10 +33,16 @@ def make_icon_image(color: tuple[int, int, int]) -> Image.Image:
 
 
 class TrayApp:
-    """タスクトレイ常駐の自動投稿エージェント & ツールランチャー"""
+    """タスクトレイ常駐の自動投稿エージェント & ツールランチャー。
+
+    tkinter (ダイアログ類) はメインスレッドで動かし、pystray は
+    run_detached、asyncio ループは別スレッドで回す。tkinter を
+    ワーカースレッドで動かすと Windows でキー入力が効かないため。
+    """
 
     def __init__(self) -> None:
         self.icon: pystray.Icon | None = None
+        self.tk_root = None  # run() で作る tkinter のルート (非表示)
         self.post: Post = Post()
 
         self._rotate_log()
@@ -120,14 +126,38 @@ class TrayApp:
     def _open_lobby(self) -> None:
         webbrowser.open(self.controller.lobby_url())
 
+    def _on_tk(self, fn) -> None:
+        """tkinter メインスレッドで fn を実行する。"""
+        if self.tk_root is not None:
+            self.tk_root.after(0, fn)
+
     def _open_settings(self) -> None:
         current = self.controller.config_mgr.get_post_defaults()
-        result = edit_post_settings(current)
-        if result is None:
-            return
-        for key, value in result.items():
-            self.controller.config_mgr.set_post_default(key, value)
-        self.controller.update_my_post(**result)
+
+        def apply(result: dict) -> None:
+            for key, value in result.items():
+                self.controller.config_mgr.set_post_default(key, value)
+            self.controller.update_my_post(
+                rank=result["rank"],
+                comment=result["comment"],
+                stream_url=result["stream_url"],
+            )
+            if self.icon:
+                self.icon.update_menu()
+
+        self._on_tk(lambda: edit_post_settings(self.tk_root, current, apply))
+
+    def _pick_path(self, title: str, callback) -> None:
+        """ファイル選択ダイアログを tk メインスレッドで開き、結果を callback に渡す。"""
+        def do() -> None:
+            from tkinter import filedialog
+            path = filedialog.askopenfilename(
+                parent=self.tk_root,
+                title=title,
+                filetypes=[("Executable", "*.exe"), ("All Files", "*.*")],
+            )
+            callback(path or None)
+        self._on_tk(do)
 
     def _open_log(self) -> None:
         if LOG_PATH.exists():
@@ -139,9 +169,13 @@ class TrayApp:
     def _handle_tool(self, tool_name: str, title: str) -> None:
         entry = self.controller.tool_mgr.get(tool_name)
         if entry.state.name == "NO_PATH" and not entry.is_active:
-            path = pick_path(title)
-            if path:
-                self.controller.tool_mgr.set_path(tool_name, path)
+            def on_picked(path: str | None) -> None:
+                if path:
+                    self.controller.tool_mgr.set_path(tool_name, path)
+                if self.icon:
+                    self.icon.update_menu()
+            self._pick_path(title, on_picked)
+            return
         elif tool_name == "soku":
             if entry.state.name == "LOADED" and entry.is_active:
                 self.controller.tool_mgr.kill_hisoutensoku()
@@ -200,16 +234,46 @@ class TrayApp:
         self.loop.call_soon_threadsafe(self.loop.stop)
         if self.icon:
             self.icon.stop()
+        if self.tk_root is not None:
+            self.tk_root.after(0, self.tk_root.destroy)  # mainloop を抜けて終了
 
     # -----------------
     # menu construction
     # -----------------
+    def _comment_menu_items(self):
+        """コメント切替サブメニュー (プリセットからラジオ選択)。"""
+        current = self.controller.my_post.comment or ""
+        presets = self.controller.comment_presets()
+
+        def make_action(text: str):
+            def act(icon, item):
+                self.controller.set_active_comment(text)
+            return act
+
+        yield MenuItem(
+            "（なし）",
+            make_action(""),
+            radio=True,
+            checked=lambda item: (self.controller.my_post.comment or "") == "",
+        )
+        for c in presets:
+            label = c if len(c) <= 24 else c[:24] + "…"
+            yield MenuItem(
+                label,
+                make_action(c),
+                radio=True,
+                checked=lambda item, c=c: self.controller.my_post.comment == c,
+            )
+        if not presets:
+            yield MenuItem("投稿設定でコメントを追加できます", None, enabled=False)
+
     def _build_menu(self) -> Menu:
         return Menu(
             MenuItem(lambda item: self._status_text(), None, enabled=False),
             Menu.SEPARATOR,
             MenuItem("ロビーページを開く", lambda: self._open_lobby(), default=True),
             MenuItem("投稿設定...", lambda: self._open_settings()),
+            MenuItem("コメント切替", Menu(lambda: self._comment_menu_items())),
             MenuItem(lambda item: self._discord_label(), lambda: self._discord_action()),
             Menu.SEPARATOR,
             MenuItem(lambda item: self._tool_label("autopunch"),
@@ -239,6 +303,12 @@ class TrayApp:
         self.loop.run_forever()
 
     def run(self) -> None:
+        from tkinter import Tk
+
+        # tkinter はメインスレッドで動かす (ダイアログのキー入力のため)
+        self.tk_root = Tk()
+        self.tk_root.withdraw()
+
         threading.Thread(target=self._run_loop, daemon=True, name="asyncio-loop").start()
 
         self.icon = pystray.Icon(
@@ -249,7 +319,8 @@ class TrayApp:
         )
         self._append_log("info", f"asobby agent v{__version__} started")
         self._append_log("info", f"Lobby page: {self.controller.lobby_url()}")
-        self.icon.run()
+        self.icon.run_detached()
+        self.tk_root.mainloop()
 
 
 if __name__ == "__main__":

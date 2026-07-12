@@ -82,7 +82,19 @@ class Controller:
     # basic helpers
     # -----------------
     def _default_post_params(self) -> Dict[str, Any]:
-        return self.config_mgr.get_post_defaults()
+        # post_defaults には comment_presets 等 Post に無いキーも入るので絞る
+        d = self.config_mgr.get_post_defaults()
+        return {k: d[k] for k in ("rank", "comment", "stream_url") if k in d}
+
+    def comment_presets(self) -> list[str]:
+        v = self.config_mgr.get_value("post_defaults", "comment_presets", [])
+        if not isinstance(v, list):
+            return []
+        return [str(x) for x in v if str(x).strip()]
+
+    def set_active_comment(self, text: str) -> None:
+        self.config_mgr.set_post_default("comment", text)
+        self.update_my_post(comment=text)
 
     def clear_my_post(self) -> None:
         self.owner_token = ""

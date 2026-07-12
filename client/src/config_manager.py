@@ -23,6 +23,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "post_defaults": {
         "comment": "",
+        "comment_presets": [],
         "stream_url": "",
         "rank": "any",
     },
