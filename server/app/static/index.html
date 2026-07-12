@@ -254,7 +254,26 @@ function render() {
       img.alt = "";
       userCell.appendChild(img);
     }
-    userCell.appendChild(document.createTextNode(p.owner_name || ""));
+    if (p.owner_name) {
+      userCell.appendChild(document.createTextNode(p.owner_name));
+    }
+    if (p.guest_name) {
+      if (p.owner_name) {
+        userCell.appendChild(document.createTextNode(" vs "));
+      } else {
+        userCell.appendChild(document.createTextNode("vs "));
+      }
+      if (p.guest_avatar) {
+        const gimg = document.createElement("img");
+        gimg.className = "avatar";
+        gimg.src = p.guest_avatar;
+        gimg.loading = "lazy";
+        gimg.referrerPolicy = "no-referrer";
+        gimg.alt = "";
+        userCell.appendChild(gimg);
+      }
+      userCell.appendChild(document.createTextNode(p.guest_name));
+    }
     tr.appendChild(userCell);
     tr.appendChild(td(RANK_LABEL[(p.rank || "any").toLowerCase()] || p.rank || ""));
 

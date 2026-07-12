@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import secrets
@@ -40,6 +41,7 @@ ALLOWED_STREAM_DOMAINS = {
 # 一時的なネットワーク断や GC 停止では投稿が消えないようにする。
 POST_TTL_SEC = 20
 CLEANUP_INTERVAL_SEC = 5
+GUEST_PROBE_INTERVAL_SEC = 10
 SSE_PING_INTERVAL_SEC = 15
 
 # 作成レート制限（IP 単位）
@@ -113,6 +115,8 @@ class Post:
     net_status: int = 0
     owner_name: str = ""  # Discord ログイン時の表示名（未ログインなら空）
     owner_avatar: str = ""
+    guest_name: str = ""  # 対戦中ゲストが Discord ログイン済みなら表示名
+    guest_avatar: str = ""
 
 
 @dataclass
@@ -122,6 +126,8 @@ class PostRecord:
     post: Post
     owner_token: str
     creator_ip: str
+    owner_user_id: str = ""  # 作成者がログイン済みなら Discord ID
+    guest_ip: str = ""  # 現在対戦中のゲスト IP（空なら対戦中でない）
 
 
 def now_ts() -> float:
@@ -342,6 +348,36 @@ async def cleanup_loop() -> None:
         await asyncio.sleep(CLEANUP_INTERVAL_SEC)
 
 
+async def guest_probe_loop() -> None:
+    """各募集ホストへ soku echo を送り、対戦中ゲスト IP を定期的に取得する。"""
+    if not HOSTCHECK_ENABLED:
+        return
+
+    while True:
+        try:
+            for rec in list(RECORDS.values()):
+                post = rec.post
+                if RECORDS.get(post.id) is not rec:
+                    continue
+                try:
+                    host, port_s = post.addr.rsplit(":", 1)
+                    port = int(port_s)
+                    if not (0 < port < 65536):
+                        continue
+                    socket.inet_aton(host)
+                except (ValueError, OSError):
+                    continue
+
+                reply = await asyncio.to_thread(
+                    probe_post_status, host, port, post.autopunch
+                )
+                await apply_guest_probe(rec, reply)
+        except Exception as e:
+            print(f"guest_probe_loop error: {e}")
+
+        await asyncio.sleep(GUEST_PROBE_INTERVAL_SEC)
+
+
 def run_migrations() -> None:
     """Alembic マイグレーションを head まで適用する (起動時に別スレッドで実行)。"""
     from alembic import command
@@ -358,11 +394,13 @@ async def lifespan(app: FastAPI):
     if DATABASE_URL:
         await asyncio.to_thread(run_migrations)
         db.init_engine(DATABASE_URL)
-    task = asyncio.create_task(cleanup_loop())
+    cleanup_task = asyncio.create_task(cleanup_loop())
+    guest_probe_task = asyncio.create_task(guest_probe_loop())
     try:
         yield
     finally:
-        task.cancel()
+        cleanup_task.cancel()
+        guest_probe_task.cancel()
         if db.is_configured():
             await db.dispose()
 
@@ -640,12 +678,14 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
     # クライアントに期限切れセッションを破棄させる。
     owner_name = ""
     owner_avatar = ""
+    owner_user_id = ""
     if request.headers.get("authorization"):
         sess = await resolve_session(request)
         if sess is None:
             raise HTTPException(status_code=401, detail="invalid or expired session")
         owner_name = sess["name"]
         owner_avatar = sess["avatar"]
+        owner_user_id = sess["id"]
 
     ip = client_ip(request)
     now = now_ts()
@@ -679,6 +719,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         post=post,
         owner_token=secrets.token_urlsafe(24),
         creator_ip=ip,
+        owner_user_id=owner_user_id,
     )
     RECORDS[post.id] = rec
 
@@ -783,6 +824,130 @@ def soku_echo_packet(
 
 def is_valid_reply(data: bytes) -> bool:
     return len(data) >= 1 and data[0] in (0x07, 0x08)
+
+
+def parse_matched_client(data: bytes) -> Optional[tuple[str, int]]:
+    """0x08 応答から接続中クライアントの (ip, port) を取り出す。"""
+    if len(data) < 13 or data[0] != 0x08:
+        return None
+    port = int.from_bytes(data[7:9], "big")
+    ip = str(ipaddress.IPv4Address(data[9:13]))
+    return ip, port
+
+
+def _autopunch_nat_port(host: str, port: int) -> Optional[int]:
+    """AutoPunch リレー Stage 2 と同じ手順で NAT ポートを引く。
+    呼び出し側が _probe_lock を保持していること。"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        bind_addr = _probe_bind_addr()
+        if bind_addr:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((bind_addr, PROBE_BIND_PORT))
+        else:
+            sock.bind(("0.0.0.0", 0))
+
+        my_port = sock.getsockname()[1]
+
+        relay_host, relay_port_s = AUTOPUNCH_RELAY.rsplit(":", 1)
+        try:
+            relay_port = int(relay_port_s)
+            if not (0 < relay_port < 65536):
+                raise ValueError
+            relay_ip = socket.gethostbyname(relay_host)
+        except (OSError, ValueError):
+            return None
+
+        relay_addr = (relay_ip, relay_port)
+        lookup = struct.pack("!H", my_port) + socket.inet_aton(host) + struct.pack("!H", port)
+        nat_port: Optional[int] = None
+        for _ in range(3):
+            try:
+                sock.sendto(lookup, relay_addr)
+                deadline = time.monotonic() + 1.0
+                while time.monotonic() < deadline:
+                    remaining = deadline - time.monotonic()
+                    sock.settimeout(remaining)
+                    data, addr = sock.recvfrom(4096)
+                    if addr[0] != relay_ip or len(data) != 8:
+                        continue
+                    candidate_nat_port = struct.unpack("!H", data[2:4])[0]
+                    ip = socket.inet_ntoa(data[4:8])
+                    if ip == host:
+                        nat_port = candidate_nat_port
+                        break
+                if nat_port is not None:
+                    break
+            except OSError:
+                pass
+
+        return nat_port
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
+
+def probe_post_status(host: str, port: int, autopunch: bool) -> Optional[bytes]:
+    """soku echo でホスト状態を 1 回プローブする（スレッド内で呼ぶ）。"""
+    with _probe_lock:
+        probe_port = port
+        if autopunch:
+            nat_port = _autopunch_nat_port(host, port)
+            if nat_port is None:
+                return None
+            probe_port = nat_port
+
+        return probe_host_once(
+            host,
+            probe_port,
+            soku_echo_packet(),
+            timeout_sec=0.5,
+        )
+
+
+async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
+    """プローブ応答を PostRecord に反映し、必要なら SSE / matches を更新する。"""
+    if reply is None:
+        return
+
+    post = rec.post
+    matched = parse_matched_client(reply)
+
+    if matched is None:
+        if len(reply) >= 1 and reply[0] == 0x07 and rec.guest_ip:
+            rec.guest_ip = ""
+            post.guest_name = ""
+            post.guest_avatar = ""
+            await HUB.publish("upsert", asdict(post))
+        return
+
+    ip, _port = matched
+    if ip == rec.guest_ip:
+        return
+
+    rec.guest_ip = ip
+    user = None
+    if db.is_configured():
+        user = await db.find_user_by_ip(ip)
+
+    if user is not None:
+        post.guest_name = user.name
+        post.guest_avatar = discord_avatar_url(user.id, user.avatar)
+    else:
+        post.guest_name = ""
+        post.guest_avatar = ""
+
+    await HUB.publish("upsert", asdict(post))
+
+    if db.is_configured() and rec.owner_user_id:
+        host_ip, _, _ = post.addr.partition(":")
+        await db.record_match(
+            host_user_id=rec.owner_user_id,
+            guest_user_id=(user.id if user else None),
+            host_ip=host_ip,
+            guest_ip=ip,
+        )
 
 
 _probe_bind_addr_cache: Optional[str] = None

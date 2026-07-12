@@ -223,3 +223,23 @@ async def find_user_by_ip(ip: str) -> Optional[User]:
             .limit(1)
         )
         return res.scalar_one_or_none()
+
+
+async def record_match(
+    host_user_id: str,
+    guest_user_id: Optional[str],
+    host_ip: str,
+    guest_ip: str,
+) -> str:
+    """対戦開始を matches に記録する。insert した行の id を返す。"""
+    async with session() as s:
+        match = Match(
+            host_user_id=host_user_id,
+            guest_user_id=guest_user_id,
+            host_ip=host_ip,
+            guest_ip=guest_ip,
+            played_at=utcnow(),
+        )
+        s.add(match)
+        await s.commit()
+        return match.id

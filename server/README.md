@@ -77,6 +77,14 @@ Discord で承認 → クライアントが `POST /auth/device/poll` で `sessio
 ログイン完了時と認証付きリクエストのたびにユーザーの `last_ip` が最新化される。
 **Discord ログインには `DATABASE_URL` の設定も必要。**
 
+### 対戦相手の同定
+
+10 秒間隔で各募集ホストへ soku echo (UDP) をプローブする。対戦中 (0x08) の
+応答に含まれるゲスト IP:port を取得し、`users.last_ip` と照合して Discord
+ユーザーを同定する。同定できた場合はロビーの User 列に `vs <ゲスト名>` が
+表示され、ホストがログイン済みなら `matches` テーブルに対戦記録が残る。
+`ASOBBY_HOSTCHECK=off` の場合はプローブ自体が無効になる。
+
 ### 設定手順
 
 1. [Discord Developer Portal](https://discord.com/developers/applications) でアプリを作成
