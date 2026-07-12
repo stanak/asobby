@@ -109,6 +109,7 @@ class Post:
     match_status: str = ""
     net_status: int = 0
     owner_name: str = ""  # Discord ログイン時の表示名（未ログインなら空）
+    owner_avatar: str = ""
 
 
 @dataclass
@@ -206,9 +207,15 @@ def session_from_request(request: Request) -> Optional[dict[str, Any]]:
     return verify_session_token(auth[7:].strip())
 
 
+def discord_avatar_url(user_id: str, avatar_hash: str) -> str:
+    if not avatar_hash:
+        return ""
+    return f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=64"
+
+
 async def resolve_session(request: Request) -> Optional[dict[str, Any]]:
     """Bearer トークンを検証し、DB の token_version と突合する。
-    有効なら {"id", "name"} を返し、last_seen / last_ip も最新化する。"""
+    有効なら {"id", "name", "avatar"} を返し、last_seen / last_ip も最新化する。"""
     sess = session_from_request(request)
     if sess is None or not db.is_configured():
         return None
@@ -216,7 +223,11 @@ async def resolve_session(request: Request) -> Optional[dict[str, Any]]:
     if user is None:
         return None
     await db.touch_user(user.id, client_ip(request))
-    return {"id": user.id, "name": user.name}
+    return {
+        "id": user.id,
+        "name": user.name,
+        "avatar": discord_avatar_url(user.id, user.avatar),
+    }
 
 
 # ----------------------------
@@ -462,12 +473,15 @@ async def auth_discord_callback(state: str, code: str = "", error: str = "") -> 
         "id": str(me.get("id", "")),
         "name": str(me.get("global_name") or me.get("username") or ""),
     }
+    avatar = str(me.get("avatar") or "")
     if not user["id"] or not user["name"]:
         return _login_result_page(ok=False, message="Discord ユーザー情報が不正です。")
 
     # users テーブルに upsert (名前更新・ログイン時刻)。IP はブラウザ経由の
     # 可能性があるため、クライアント本体からのポーリング時に更新する。
-    user_row = await db.upsert_user_on_login(user["id"], user["name"], ip="")
+    user_row = await db.upsert_user_on_login(
+        user["id"], user["name"], ip="", avatar=avatar
+    )
 
     login.user = user
     login.session_token = make_session_token(user, user_row.token_version)
@@ -533,11 +547,13 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
     # Discord ログインは任意。ただしヘッダがあるのに無効なら 401 を返して
     # クライアントに期限切れセッションを破棄させる。
     owner_name = ""
+    owner_avatar = ""
     if request.headers.get("authorization"):
         sess = await resolve_session(request)
         if sess is None:
             raise HTTPException(status_code=401, detail="invalid or expired session")
         owner_name = sess["name"]
+        owner_avatar = sess["avatar"]
 
     ip = client_ip(request)
     now = now_ts()
@@ -564,6 +580,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         match_status=body.match_status,
         net_status=body.net_status,
         owner_name=owner_name,
+        owner_avatar=owner_avatar,
         updated_at=now,
     )
     rec = PostRecord(

@@ -35,6 +35,7 @@ class User(Base):
     # Discord のユーザー ID (snowflake)。名前変更でも不変なので主キーにする。
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[str] = mapped_column(String(100), default="")
+    avatar: Mapped[str] = mapped_column(String(64), default="")
     # トークン失効管理: この値を上げると発行済みセッションが全て無効になる
     token_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     # 最後に確認したクライアント IP (echo パケットでの対戦相手照合に使う)
@@ -160,7 +161,9 @@ async def dispose() -> None:
 # ----------------------------
 # User helpers
 # ----------------------------
-async def upsert_user_on_login(user_id: str, name: str, ip: str) -> User:
+async def upsert_user_on_login(
+    user_id: str, name: str, ip: str, avatar: str = ""
+) -> User:
     """ログイン完了時のユーザー登録/更新。IP が変わっていれば更新する。"""
     async with session() as s:
         user = await s.get(User, user_id)
@@ -169,6 +172,7 @@ async def upsert_user_on_login(user_id: str, name: str, ip: str) -> User:
             user = User(
                 id=user_id,
                 name=name,
+                avatar=avatar,
                 token_version=1,
                 last_ip=ip,
                 created_at=now,
@@ -178,6 +182,7 @@ async def upsert_user_on_login(user_id: str, name: str, ip: str) -> User:
             s.add(user)
         else:
             user.name = name
+            user.avatar = avatar
             if ip and user.last_ip != ip:
                 user.last_ip = ip
             user.last_login_at = now

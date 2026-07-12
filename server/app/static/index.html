@@ -113,6 +113,13 @@
     text-align: center;
     color: var(--muted);
   }
+  .avatar {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    vertical-align: -4px;
+    margin-right: 6px;
+  }
 </style>
 </head>
 <body>
@@ -189,7 +196,19 @@ function render() {
     if (p.net_status === NET_BATTLE) tr.classList.add("battle");
 
     tr.appendChild(td(p.match_status || ""));
-    tr.appendChild(td(p.owner_name || ""));
+
+    const userCell = document.createElement("td");
+    if (p.owner_avatar) {
+      const img = document.createElement("img");
+      img.className = "avatar";
+      img.src = p.owner_avatar;
+      img.loading = "lazy";
+      img.referrerPolicy = "no-referrer";
+      img.alt = "";
+      userCell.appendChild(img);
+    }
+    userCell.appendChild(document.createTextNode(p.owner_name || ""));
+    tr.appendChild(userCell);
     tr.appendChild(td(RANK_LABEL[(p.rank || "any").toLowerCase()] || p.rank || ""));
 
     const cap = document.createElement("td");
