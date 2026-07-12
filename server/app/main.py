@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
+import os
 import secrets
+import struct
+import threading
 import time
 import socket
 from contextlib import asynccontextmanager
@@ -10,11 +16,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 from uuid import uuid4
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
+
+import db
 
 ALLOWED_STREAM_DOMAINS = {
     "youtube.com",
@@ -37,7 +46,49 @@ SSE_PING_INTERVAL_SEC = 15
 CREATE_MIN_INTERVAL_SEC = 2.0
 MAX_ACTIVE_POSTS_PER_IP = 2
 
-STATIC_DIR = Path(__file__).parent / "static"
+# ホスト到達性検証 (UDP プローブ) の有効/無効。
+# 外向き UDP が一切通らない環境では off にする。
+HOSTCHECK_ENABLED = os.environ.get("ASOBBY_HOSTCHECK", "on").lower() not in ("off", "0", "false")
+
+# fly.io では任意ポートへの外向き UDP が遮断されるが、UDP サービスとして
+# 公開したポート (fly-global-services にバインド) を送信元にすれば
+# 専用 IPv4 経由で返信が戻ってくる。その場合はここで送信元を固定する。
+# 例: ASOBBY_PROBE_BIND_HOST=fly-global-services ASOBBY_PROBE_BIND_PORT=10800
+PROBE_BIND_HOST = os.environ.get("ASOBBY_PROBE_BIND_HOST", "")
+PROBE_BIND_PORT = int(os.environ.get("ASOBBY_PROBE_BIND_PORT", "0"))
+
+# AutoPunch のリレーサーバー (delthas.fr:14763)。テスト時に差し替え可能にする。
+AUTOPUNCH_RELAY = os.environ.get("ASOBBY_AUTOPUNCH_RELAY", "delthas.fr:14763")
+
+# ----------------------------
+# Discord OAuth (任意ログイン)
+# ----------------------------
+# クライアント ID/secret が未設定なら認証エンドポイントは 503 を返す。
+DISCORD_CLIENT_ID = os.environ.get("ASOBBY_DISCORD_CLIENT_ID", "")
+DISCORD_CLIENT_SECRET = os.environ.get("ASOBBY_DISCORD_CLIENT_SECRET", "")
+# OAuth リダイレクトに使う公開 URL（Discord 側にも登録が必要）
+PUBLIC_BASE_URL = os.environ.get("ASOBBY_BASE_URL", "https://asobby.com").rstrip("/")
+# セッショントークンの署名鍵。未設定だと起動ごとにランダム生成され、
+# 再起動で全セッションが無効になるので本番では必ず設定する。
+SESSION_SECRET = os.environ.get("ASOBBY_SESSION_SECRET", "")
+if not SESSION_SECRET:
+    SESSION_SECRET = secrets.token_urlsafe(32)
+    if DISCORD_CLIENT_ID:
+        print("WARNING: ASOBBY_SESSION_SECRET not set; sessions will not survive restarts")
+
+SESSION_TTL_SEC = 30 * 24 * 3600  # 30 日
+DEVICE_CODE_TTL_SEC = 600
+DEVICE_POLL_INTERVAL_SEC = 2
+
+DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
+DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token"
+DISCORD_ME_URL = "https://discord.com/api/users/@me"
+
+# 永続化 (PostgreSQL)。未設定なら Discord ログインは無効 (投稿は通常動作)。
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+APP_DIR = Path(__file__).parent
+STATIC_DIR = APP_DIR / "static"
 
 
 # ----------------------------
@@ -57,6 +108,7 @@ class Post:
     autopunch: bool = False
     match_status: str = ""
     net_status: int = 0
+    owner_name: str = ""  # Discord ログイン時の表示名（未ログインなら空）
 
 
 @dataclass
@@ -95,6 +147,107 @@ class ClosePostIn(BaseModel):
     id: str = Field(max_length=64)
     owner_token: str = Field(max_length=128)
     reason: str = Field(default="manual", max_length=64)
+
+
+class DevicePollIn(BaseModel):
+    device_code: str = Field(max_length=128)
+
+
+# ----------------------------
+# Sessions (署名付きトークン; サーバー側の保存なし)
+# ----------------------------
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _b64url_decode(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def make_session_token(user: dict[str, Any], token_version: int) -> str:
+    payload = {
+        "sub": user["id"],
+        "name": user["name"],
+        "ver": token_version,  # users.token_version と一致しないトークンは無効
+        "exp": int(time.time()) + SESSION_TTL_SEC,
+    }
+    body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
+    sig = _b64url_encode(
+        hmac.new(SESSION_SECRET.encode(), body.encode(), hashlib.sha256).digest()
+    )
+    return f"{body}.{sig}"
+
+
+def verify_session_token(token: str) -> Optional[dict[str, Any]]:
+    """署名と期限が有効なら {"sub", "name", "ver"} を返す。無効なら None。"""
+    try:
+        body, sig = token.rsplit(".", 1)
+        expected = _b64url_encode(
+            hmac.new(SESSION_SECRET.encode(), body.encode(), hashlib.sha256).digest()
+        )
+        if not hmac.compare_digest(sig, expected):
+            return None
+        payload = json.loads(_b64url_decode(body))
+        if payload.get("exp", 0) < time.time():
+            return None
+        return {
+            "sub": str(payload["sub"]),
+            "name": str(payload["name"]),
+            "ver": int(payload.get("ver", 0)),
+        }
+    except Exception:
+        return None
+
+
+def session_from_request(request: Request) -> Optional[dict[str, Any]]:
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return None
+    return verify_session_token(auth[7:].strip())
+
+
+async def resolve_session(request: Request) -> Optional[dict[str, Any]]:
+    """Bearer トークンを検証し、DB の token_version と突合する。
+    有効なら {"id", "name"} を返し、last_seen / last_ip も最新化する。"""
+    sess = session_from_request(request)
+    if sess is None or not db.is_configured():
+        return None
+    user = await db.get_user_if_token_valid(sess["sub"], sess["ver"])
+    if user is None:
+        return None
+    await db.touch_user(user.id, client_ip(request))
+    return {"id": user.id, "name": user.name}
+
+
+# ----------------------------
+# Device-code login flow
+# ----------------------------
+@dataclass
+class DeviceLogin:
+    device_code: str  # クライアントがポーリングに使う秘密
+    web_code: str     # ブラウザ URL / OAuth state に使う値
+    created_at: float
+    session_token: str = ""
+    user: Optional[dict[str, Any]] = None
+
+
+DEVICE_LOGINS: Dict[str, DeviceLogin] = {}  # web_code -> DeviceLogin
+
+
+def cleanup_device_logins() -> None:
+    now = time.time()
+    for key in [
+        k for k, v in DEVICE_LOGINS.items()
+        if (now - v.created_at) > DEVICE_CODE_TTL_SEC
+    ]:
+        DEVICE_LOGINS.pop(key, None)
+
+
+def require_discord_configured() -> None:
+    if not DISCORD_CLIENT_ID or not DISCORD_CLIENT_SECRET:
+        raise HTTPException(status_code=503, detail="discord login is not configured")
+    if not db.is_configured():
+        raise HTTPException(status_code=503, detail="database is not configured")
 
 
 # ----------------------------
@@ -158,13 +311,29 @@ async def cleanup_loop() -> None:
         await asyncio.sleep(CLEANUP_INTERVAL_SEC)
 
 
+def run_migrations() -> None:
+    """Alembic マイグレーションを head まで適用する (起動時に別スレッドで実行)。"""
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config(str(APP_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(APP_DIR / "migrations"))
+    cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
+    command.upgrade(cfg, "head")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if DATABASE_URL:
+        await asyncio.to_thread(run_migrations)
+        db.init_engine(DATABASE_URL)
     task = asyncio.create_task(cleanup_loop())
     try:
         yield
     finally:
         task.cancel()
+        if db.is_configured():
+            await db.dispose()
 
 
 app = FastAPI(title="asobby api", version="0.2", lifespan=lifespan)
@@ -211,6 +380,141 @@ async def get_myip(request: Request) -> dict[str, str]:
     return {"ip": client_ip(request)}
 
 
+# ----------------------------
+# Auth routes
+# ----------------------------
+@app.post("/auth/device")
+async def auth_device_start() -> dict[str, Any]:
+    """クライアントがログインを開始する。verify_url をブラウザで開かせ、
+    device_code で /auth/device/poll をポーリングする。"""
+    require_discord_configured()
+    cleanup_device_logins()
+
+    login = DeviceLogin(
+        device_code=secrets.token_urlsafe(32),
+        web_code=secrets.token_urlsafe(24),
+        created_at=time.time(),
+    )
+    DEVICE_LOGINS[login.web_code] = login
+    return {
+        "device_code": login.device_code,
+        "verify_url": f"{PUBLIC_BASE_URL}/auth/discord/start?code={login.web_code}",
+        "expires_in": DEVICE_CODE_TTL_SEC,
+        "interval": DEVICE_POLL_INTERVAL_SEC,
+    }
+
+
+@app.get("/auth/discord/start")
+async def auth_discord_start(code: str) -> RedirectResponse:
+    require_discord_configured()
+    cleanup_device_logins()
+    if code not in DEVICE_LOGINS:
+        raise HTTPException(status_code=404, detail="login request expired")
+
+    params = urlencode({
+        "client_id": DISCORD_CLIENT_ID,
+        "redirect_uri": f"{PUBLIC_BASE_URL}/auth/discord/callback",
+        "response_type": "code",
+        "scope": "identify",
+        "state": code,
+        "prompt": "none",
+    })
+    return RedirectResponse(f"{DISCORD_AUTHORIZE_URL}?{params}", status_code=302)
+
+
+@app.get("/auth/discord/callback")
+async def auth_discord_callback(state: str, code: str = "", error: str = "") -> HTMLResponse:
+    require_discord_configured()
+    cleanup_device_logins()
+
+    login = DEVICE_LOGINS.get(state)
+    if login is None:
+        raise HTTPException(status_code=404, detail="login request expired")
+    if error or not code:
+        DEVICE_LOGINS.pop(state, None)
+        return _login_result_page(ok=False, message="ログインがキャンセルされました。")
+
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        token_res = await http.post(
+            DISCORD_TOKEN_URL,
+            data={
+                "client_id": DISCORD_CLIENT_ID,
+                "client_secret": DISCORD_CLIENT_SECRET,
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": f"{PUBLIC_BASE_URL}/auth/discord/callback",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        if token_res.status_code != 200:
+            return _login_result_page(ok=False, message="Discord との連携に失敗しました。")
+        access_token = token_res.json().get("access_token", "")
+
+        me_res = await http.get(
+            DISCORD_ME_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if me_res.status_code != 200:
+            return _login_result_page(ok=False, message="Discord ユーザー情報の取得に失敗しました。")
+        me = me_res.json()
+
+    user = {
+        "id": str(me.get("id", "")),
+        "name": str(me.get("global_name") or me.get("username") or ""),
+    }
+    if not user["id"] or not user["name"]:
+        return _login_result_page(ok=False, message="Discord ユーザー情報が不正です。")
+
+    # users テーブルに upsert (名前更新・ログイン時刻)。IP はブラウザ経由の
+    # 可能性があるため、クライアント本体からのポーリング時に更新する。
+    user_row = await db.upsert_user_on_login(user["id"], user["name"], ip="")
+
+    login.user = user
+    login.session_token = make_session_token(user, user_row.token_version)
+    return _login_result_page(ok=True, message=f"{user['name']} としてログインしました。アプリに戻ってください。")
+
+
+def _login_result_page(*, ok: bool, message: str) -> HTMLResponse:
+    color = "#57c07d" if ok else "#e06c75"
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8"><title>asobby</title></head>
+<body style="background:#14171c;color:#d8dee9;font-family:sans-serif;
+display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+<div style="text-align:center">
+<h1 style="color:{color}">{"ログイン完了" if ok else "ログイン失敗"}</h1>
+<p>{message}</p>
+<p style="color:#7b8794">このタブは閉じて構いません。</p>
+</div></body></html>""")
+
+
+@app.post("/auth/device/poll")
+async def auth_device_poll(body: DevicePollIn, request: Request) -> dict[str, Any]:
+    cleanup_device_logins()
+    for web_code, login in list(DEVICE_LOGINS.items()):
+        if secrets.compare_digest(login.device_code, body.device_code):
+            if not login.session_token:
+                return {"status": "pending"}
+            DEVICE_LOGINS.pop(web_code, None)  # ワンショット
+            # ポーリング元 = クライアント本体なので、この IP を記録する
+            if login.user:
+                await db.touch_user(login.user["id"], client_ip(request))
+            return {
+                "status": "ok",
+                "session_token": login.session_token,
+                "user": login.user,
+            }
+    raise HTTPException(status_code=404, detail="login request expired")
+
+
+@app.get("/auth/me")
+async def auth_me(request: Request) -> dict[str, Any]:
+    """セッション検証。クライアントは起動時に呼び、その都度 IP が最新化される。"""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    return sess
+
+
 @app.get("/posts")
 async def list_posts() -> list[dict[str, Any]]:
     return sorted_public_posts()
@@ -224,6 +528,17 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
             detail="stream_url must be youtube, twitch, or niconico",
         )
 
+    parse_ipv4_addr_or_raise(body.addr)
+
+    # Discord ログインは任意。ただしヘッダがあるのに無効なら 401 を返して
+    # クライアントに期限切れセッションを破棄させる。
+    owner_name = ""
+    if request.headers.get("authorization"):
+        sess = await resolve_session(request)
+        if sess is None:
+            raise HTTPException(status_code=401, detail="invalid or expired session")
+        owner_name = sess["name"]
+
     ip = client_ip(request)
     now = now_ts()
 
@@ -235,8 +550,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
     if active >= MAX_ACTIVE_POSTS_PER_IP:
         raise HTTPException(status_code=429, detail="too many active posts")
 
-    if not body.autopunch:
-        await verify_hostable_or_raise(body.addr)
+    await verify_hostable_or_raise(body.addr, autopunch=body.autopunch)
 
     LAST_CREATE_AT[ip] = now
 
@@ -249,6 +563,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         autopunch=body.autopunch,
         match_status=body.match_status,
         net_status=body.net_status,
+        owner_name=owner_name,
         updated_at=now,
     )
     rec = PostRecord(
@@ -270,12 +585,14 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
             detail="stream_url must be youtube, twitch, or niconico",
         )
 
+    parse_ipv4_addr_or_raise(body.addr)
+
     rec = get_record_or_raise(body.id, body.owner_token)
     p = rec.post
 
     # 再ホスト等でアドレスが変わった場合のみ到達性を再確認する
-    if body.addr != p.addr and not body.autopunch:
-        await verify_hostable_or_raise(body.addr)
+    if body.addr != p.addr:
+        await verify_hostable_or_raise(body.addr, autopunch=body.autopunch)
 
     p.rank = body.rank
     p.addr = body.addr
@@ -357,6 +674,22 @@ def is_valid_reply(data: bytes) -> bool:
     return len(data) >= 1 and data[0] in (0x07, 0x08)
 
 
+_probe_bind_addr_cache: Optional[str] = None
+# 送信元ポートを固定する場合、同時プローブは同じポートを取り合うので直列化する
+_probe_lock = threading.Lock()
+
+
+def _probe_bind_addr() -> Optional[str]:
+    """PROBE_BIND_HOST の解決結果 (IPv4) を返す。未設定なら None。"""
+    global _probe_bind_addr_cache
+    if not PROBE_BIND_HOST:
+        return None
+    if _probe_bind_addr_cache is None:
+        infos = socket.getaddrinfo(PROBE_BIND_HOST, None, socket.AF_INET, socket.SOCK_DGRAM)
+        _probe_bind_addr_cache = infos[0][4][0]
+    return _probe_bind_addr_cache
+
+
 def probe_host_once(
     host: str,
     port: int,
@@ -366,10 +699,25 @@ def probe_host_once(
 ) -> Optional[bytes]:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
+        bind_addr = _probe_bind_addr()
+        if bind_addr:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((bind_addr, PROBE_BIND_PORT))
+
         sock.settimeout(timeout_sec)
         sock.sendto(packet, (host, port))
-        data, _addr = sock.recvfrom(4096)
-        return data
+
+        # 送信元ポート固定時は他ホストからの迷いパケットも届き得るので
+        # 送信先からの応答だけを受け取る
+        deadline = time.monotonic() + timeout_sec
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            sock.settimeout(remaining)
+            data, addr = sock.recvfrom(4096)
+            if addr[0] == host or not bind_addr:
+                return data
     except (socket.timeout, OSError):
         return None
     finally:
@@ -394,48 +742,177 @@ def check_hostable_consecutive(
 
     consecutive = 0
 
-    for i in range(attempts):
-        reply = probe_host_once(
-            host,
-            port,
-            packet,
-            timeout_sec=timeout_sec,
-        )
+    with _probe_lock:
+        for i in range(attempts):
+            reply = probe_host_once(
+                host,
+                port,
+                packet,
+                timeout_sec=timeout_sec,
+            )
 
-        if reply is not None and is_valid_reply(reply):
-            consecutive += 1
-        else:
-            consecutive = 0
+            if reply is not None and is_valid_reply(reply):
+                consecutive += 1
+            else:
+                consecutive = 0
 
-        if consecutive >= needed_consecutive:
-            return True
+            if consecutive >= needed_consecutive:
+                return True
 
-        if i != attempts - 1:
-            time.sleep(interval_sec)
+            if i != attempts - 1:
+                time.sleep(interval_sec)
 
     return False
 
 
-async def verify_hostable_or_raise(addr: str) -> bool:
+def check_hostable_autopunch(host: str, port: int) -> bool:
+    """AutoPunch リレー経由でホスト登録と soku echo を検証する。"""
+    with _probe_lock:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            bind_addr = _probe_bind_addr()
+            if bind_addr:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind((bind_addr, PROBE_BIND_PORT))
+            else:
+                sock.bind(("0.0.0.0", 0))
+
+            my_port = sock.getsockname()[1]
+
+            relay_host, relay_port_s = AUTOPUNCH_RELAY.rsplit(":", 1)
+            try:
+                relay_port = int(relay_port_s)
+                if not (0 < relay_port < 65536):
+                    raise ValueError
+                relay_ip = socket.gethostbyname(relay_host)
+            except (OSError, ValueError):
+                print("autopunch relay resolution failed, skipping verification")
+                return True
+
+            relay_addr = (relay_ip, relay_port)
+
+            # Stage 1: リレー到達性 (fail-open)
+            relay_ok = False
+            for _ in range(3):
+                try:
+                    sock.sendto(b"\x00", relay_addr)
+                    deadline = time.monotonic() + 1.0
+                    while time.monotonic() < deadline:
+                        remaining = deadline - time.monotonic()
+                        sock.settimeout(remaining)
+                        data, addr = sock.recvfrom(4096)
+                        if addr[0] == relay_ip and len(data) == 1:
+                            relay_ok = True
+                            break
+                    if relay_ok:
+                        break
+                except OSError:
+                    pass
+
+            if not relay_ok:
+                print("autopunch relay unreachable, skipping verification")
+                return True
+
+            # Stage 2: リレー上の登録確認
+            lookup = struct.pack("!H", my_port) + socket.inet_aton(host) + struct.pack("!H", port)
+            nat_port: Optional[int] = None
+            for _ in range(3):
+                try:
+                    sock.sendto(lookup, relay_addr)
+                    deadline = time.monotonic() + 1.0
+                    while time.monotonic() < deadline:
+                        remaining = deadline - time.monotonic()
+                        sock.settimeout(remaining)
+                        data, addr = sock.recvfrom(4096)
+                        if addr[0] != relay_ip or len(data) != 8:
+                            continue
+                        internal_port = struct.unpack("!H", data[0:2])[0]
+                        candidate_nat_port = struct.unpack("!H", data[2:4])[0]
+                        ip = socket.inet_ntoa(data[4:8])
+                        if ip == host:
+                            nat_port = candidate_nat_port
+                            break
+                    if nat_port is not None:
+                        break
+                except OSError:
+                    pass
+
+            if nat_port is None:
+                return False
+
+            # Stage 3: NAT ポートへ soku echo プローブ
+            packet = soku_echo_packet()
+            for _ in range(10):
+                try:
+                    sock.sendto(packet, (host, nat_port))
+                    deadline = time.monotonic() + 0.4
+                    while time.monotonic() < deadline:
+                        remaining = deadline - time.monotonic()
+                        sock.settimeout(remaining)
+                        data, addr = sock.recvfrom(4096)
+                        if addr[0] != host:
+                            continue
+                        if len(data) < 2:
+                            continue
+                        if data[0] in (0x07, 0x08):
+                            return True
+                except OSError:
+                    pass
+
+            return False
+        except OSError:
+            return False
+        finally:
+            sock.close()
+
+
+def parse_ipv4_addr_or_raise(addr: str) -> tuple[str, int]:
+    """'IPv4:port' 形式を検証する。非想天則は IPv4 のみ対応のため、
+    IPv6 アドレス (クライアントが IPv6 でサーバーに接続した場合など) は弾く。"""
     try:
         host, port_s = addr.rsplit(":", 1)
         port = int(port_s)
-    except Exception:
-        raise HTTPException(status_code=422, detail="invalid addr")
-
-    result = await asyncio.to_thread(
-        check_hostable_consecutive,
-        host,
-        port,
-    )
-
-    if not result:
+        if not (0 < port < 65536):
+            raise ValueError
+        socket.inet_aton(host)  # IPv4 表記のみ許可
+        if host.count(".") != 3:
+            raise ValueError  # "127.1" のような省略表記は弾く
+    except (ValueError, OSError):
         raise HTTPException(
-            status_code=409,
-            detail={
-                "message": "host not reachable",
-            },
+            status_code=422,
+            detail="addr must be IPv4:port (IPv6 is not supported by the game)",
         )
+    return host, port
+
+
+async def verify_hostable_or_raise(addr: str, *, autopunch: bool = False) -> bool:
+    host, port = parse_ipv4_addr_or_raise(addr)
+
+    if not HOSTCHECK_ENABLED:
+        return True
+
+    if autopunch:
+        result = await asyncio.to_thread(check_hostable_autopunch, host, port)
+        if not result:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "autopunch host not reachable (is autopunch running?)",
+                },
+            )
+    else:
+        result = await asyncio.to_thread(
+            check_hostable_consecutive,
+            host,
+            port,
+        )
+        if not result:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "host not reachable",
+                },
+            )
     return True
 
 

@@ -1,227 +1,142 @@
 from __future__ import annotations
 
+import asyncio
+import os
+import threading
 import webbrowser
+from datetime import datetime
+from pathlib import Path
 from time import sleep
 
-from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical, Grid, Container
-from textual.widgets import Select, Label, Input, Button, RichLog
-from textual.reactive import reactive
-from textual.message import Message
+import pystray
+from PIL import Image, ImageDraw
+from pystray import Menu, MenuItem
 
 from controller import Controller
-from services import MODE_OPTIONS, Post, pick_path, NET_BATTLE, __version__
+from services import Post, edit_post_settings, pick_path, NET_BATTLE, __version__
+
+LOG_PATH = Path("asobby.log")
+LOG_MAX_BYTES = 256 * 1024
+
+# トレイアイコンの状態色
+COLOR_IDLE = (128, 128, 128)     # 待機中
+COLOR_RECRUIT = (46, 160, 67)    # 募集中
+COLOR_BATTLE = (219, 109, 40)    # 対戦中
 
 
-class LogMessage(Message):
-    def __init__(self, level: str, text: str):
-        super().__init__()
-        self.level = level
-        self.text = text
+def make_icon_image(color: tuple[int, int, int]) -> Image.Image:
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.ellipse((4, 4, 60, 60), fill=color + (255,))
+    d.ellipse((20, 20, 44, 44), fill=(255, 255, 255, 230))
+    return img
 
 
-class SokulobbyApp(App):
-    theme = "solarized-dark"
-    TITLE = f"asobby agent v{__version__}"
-    CSS = """
-    Screen {
-        layout: vertical;
-    }
-
-    #status-bar {
-        height: 1;
-        padding: 0 1;
-        background: $panel;
-        color: $text-muted;
-    }
-
-    #main-pane {
-        layout: horizontal;
-        height: 1fr;
-    }
-
-    #post-form {
-        layout: vertical;
-        width: 2fr;
-        padding: 1;
-    }
-
-    #post-form Input,
-    #post-form Select {
-        width: 100%;
-    }
-
-    .form-label {
-        content-align: right middle;
-        color: $text-muted;
-    }
-
-    #post-rank {
-        width: 16;
-    }
-
-    #post-grid {
-        layout: grid;
-        grid-size: 2 3;
-        grid-columns: 12 1fr;
-        grid-rows: auto auto auto;
-        grid-gutter: 1 2;
-        width: 100%;
-        height: auto;
-    }
-
-    #log {
-        height: 1fr;
-        margin-top: 1;
-        border: solid $panel;
-    }
-
-    #action-pane {
-        width: 26;
-        padding: 1;
-        border-left: solid $panel;
-        layout: vertical;
-        overflow: hidden hidden;
-    }
-
-    #action-pane Button {
-        width: 100%;
-        margin-bottom: 1;
-    }
-    """
-    my_post = reactive(Post)
-    tool_labels = reactive({
-        "soku": "set soku path",
-        "giuroll": "set giuroll path",
-        "autopunch": "set autopunch path",
-    })
+class TrayApp:
+    """タスクトレイ常駐の自動投稿エージェント & ツールランチャー"""
 
     def __init__(self) -> None:
-        super().__init__()
-        # Controller の初期化中に reactive の watcher が発火するため、
-        # 参照される属性は Controller 生成より先に定義しておく
-        self._tool_buttons_ready = False
+        self.icon: pystray.Icon | None = None
+        self.post: Post = Post()
+
+        self._rotate_log()
+
+        self.loop = asyncio.new_event_loop()
         self.controller = Controller(self)
 
-    def compose(self) -> ComposeResult:
-        yield Label("", id="status-bar")
-        with Horizontal(id="main-pane"):
-            with Container(id="post-form"):
-                with Grid(id="post-grid"):
-                    yield Label("Post Rank :", classes="form-label")
-                    yield Select(
-                        MODE_OPTIONS[1:],
-                        value="any",
-                        id="post-rank",
-                    )
+        self._icons = {
+            "idle": make_icon_image(COLOR_IDLE),
+            "recruit": make_icon_image(COLOR_RECRUIT),
+            "battle": make_icon_image(COLOR_BATTLE),
+        }
 
-                    yield Label("Comment   :", classes="form-label")
-                    yield Input(placeholder="Comment", id="post-comment")
-
-                    yield Label("Stream URL:", classes="form-label")
-                    yield Input(placeholder="https://...", id="stream-url")
-
-                yield RichLog(id="log", wrap=True, markup=True, max_lines=200)
-
-            with Vertical(id="action-pane"):
-                yield Button("Open Lobby Page", id="btn-lobby", variant="primary")
-                yield Button(self.tool_labels["autopunch"], id="btn-autopunch")
-                yield Button(self.tool_labels["giuroll"], id="btn-giuroll")
-                yield Button(self.tool_labels["soku"], id="btn-soku")
-                yield Button("Reset Paths", id="btn-reset")
-
-    async def on_mount(self) -> None:
-        self._tool_buttons_ready = True
-        await self.controller.sync_initial()
-        self.run_worker(self.controller.detector_loop(), name="detector", thread=False)
-        self.run_worker(self.controller.api_loop(), name="api", thread=False)
-
-        # 初期値の配置
-        post = self.controller.my_post
-        self.query_one("#post-rank", Select).value = post.rank or "any"
-        self.query_one("#post-comment", Input).value = post.comment or ""
-        self.query_one("#stream-url", Input).value = post.stream_url or ""
-        self._refresh_tool_buttons()
-        self._refresh_status(post)
-        self.emit_log("info", f"Lobby page: {self.controller.lobby_url()}")
-
-    async def on_unmount(self) -> None:
-        await self.controller.close()
-
-    async def on_log_message(self, msg: LogMessage) -> None:
-        log = self.query_one("#log", RichLog)
-        if msg.level == "error":
-            log.write(f"[red]{msg.text}[/red]")
-        elif msg.level == "warn":
-            log.write(f"[yellow]{msg.text}[/yellow]")
-        else:
-            log.write(msg.text)
-
+    # -----------------
+    # Controller sinks
+    # -----------------
     def emit_log(self, level: str, text: str) -> None:
-        self.post_message(LogMessage(level, text))
+        self._append_log(level, text)
+        if level in ("warn", "error"):
+            self._notify(text)
 
     def emit_my_post(self, post: Post) -> None:
-        self.my_post = post
+        self.post = post
+        self._refresh_icon()
 
     def emit_btn_labels(self, d: dict) -> None:
-        self.tool_labels = d
+        if self.icon:
+            self.icon.update_menu()
 
-    def watch_my_post(self, post: Post) -> None:
-        if not self._tool_buttons_ready:
+    # -----------------
+    # log / notify
+    # -----------------
+    def _rotate_log(self) -> None:
+        try:
+            if LOG_PATH.exists() and LOG_PATH.stat().st_size > LOG_MAX_BYTES:
+                LOG_PATH.unlink()
+        except OSError:
+            pass
+
+    def _append_log(self, level: str, text: str) -> None:
+        line = f"{datetime.now():%Y-%m-%d %H:%M:%S} [{level}] {text}\n"
+        try:
+            with LOG_PATH.open("a", encoding="utf-8") as f:
+                f.write(line)
+        except OSError:
+            pass
+
+    def _notify(self, text: str) -> None:
+        if self.icon:
+            try:
+                self.icon.notify(text, title="asobby")
+            except Exception:
+                pass
+
+    # -----------------
+    # icon state
+    # -----------------
+    def _status_text(self) -> str:
+        if not self.post.id:
+            return "待機中 - ホストを立てると自動投稿"
+        if self.post.net_status == NET_BATTLE:
+            return f"対戦中: {self.post.match_status or self.post.addr}"
+        return f"募集中: {self.post.addr}"
+
+    def _refresh_icon(self) -> None:
+        if not self.icon:
             return
-        self._refresh_status(post)
-
-    def _refresh_status(self, post: Post) -> None:
-        bar = self.query_one("#status-bar", Label)
-        if not post.id:
-            bar.update("待機中 - 非想天則でホストを立てると自動で募集が投稿されます")
-        elif post.net_status == NET_BATTLE:
-            bar.update(f"対戦中: {post.match_status or post.addr}")
+        if not self.post.id:
+            key = "idle"
+        elif self.post.net_status == NET_BATTLE:
+            key = "battle"
         else:
-            bar.update(f"募集中: {post.addr}")
+            key = "recruit"
+        self.icon.icon = self._icons[key]
+        self.icon.title = f"asobby v{__version__} - {self._status_text()}"
+        self.icon.update_menu()
 
-    def watch_tool_labels(self, value) -> None:
-        if not self._tool_buttons_ready:
+    # -----------------
+    # menu actions
+    # -----------------
+    def _open_lobby(self) -> None:
+        webbrowser.open(self.controller.lobby_url())
+
+    def _open_settings(self) -> None:
+        current = self.controller.config_mgr.get_post_defaults()
+        result = edit_post_settings(current)
+        if result is None:
             return
-        self._refresh_tool_buttons()
+        for key, value in result.items():
+            self.controller.config_mgr.set_post_default(key, value)
+        self.controller.update_my_post(**result)
 
-    def _refresh_tool_buttons(self) -> None:
-        self.query_one("#btn-giuroll", Button).label = self.controller.tool_mgr.button_label("giuroll")
-        self.query_one("#btn-autopunch", Button).label = self.controller.tool_mgr.button_label("autopunch")
-        self.query_one("#btn-soku", Button).label = self.controller.tool_mgr.button_label("soku")
+    def _open_log(self) -> None:
+        if LOG_PATH.exists():
+            os.startfile(str(LOG_PATH.resolve()))  # noqa: S606 (Windows 専用)
 
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id == "post-rank":
-            self.controller.update_my_post(rank=str(event.value))
-            self.controller.config_mgr.set_post_default("rank", str(event.value))
+    def _tool_label(self, tool_name: str) -> str:
+        return self.controller.tool_mgr.button_label(tool_name)
 
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "post-comment":
-            self.controller.update_my_post(comment=str(event.value))
-            self.controller.config_mgr.set_post_default("comment", str(event.value))
-        elif event.input.id == "stream-url":
-            self.controller.update_my_post(stream_url=str(event.value))
-            self.controller.config_mgr.set_post_default("stream_url", str(event.value))
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        bid = event.button.id
-
-        if bid == "btn-lobby":
-            webbrowser.open(self.controller.lobby_url())
-        elif bid == "btn-autopunch":
-            self._handle_tool_button("autopunch", "Select autopunch exe")
-        elif bid == "btn-giuroll":
-            self._handle_tool_button("giuroll", "Select giuroll exe")
-        elif bid == "btn-soku":
-            self._handle_tool_button("soku", "Select th123.exe")
-        elif bid == "btn-reset":
-            self.controller.tool_mgr.clear_path("autopunch")
-            self.controller.tool_mgr.clear_path("giuroll")
-            self.controller.tool_mgr.clear_path("soku")
-            self.controller.tool_mgr.reset_state()
-        self._refresh_tool_buttons()
-
-    def _handle_tool_button(self, tool_name: str, title: str) -> None:
+    def _handle_tool(self, tool_name: str, title: str) -> None:
         entry = self.controller.tool_mgr.get(tool_name)
         if entry.state.name == "NO_PATH" and not entry.is_active:
             path = pick_path(title)
@@ -241,10 +156,101 @@ class SokulobbyApp(App):
         else:
             if entry.state.name == "READY":
                 self.controller.tool_mgr.load(tool_name)
-            elif entry.state.name == "LOADED":
-                pass
-        self._refresh_tool_buttons()
+        if self.icon:
+            self.icon.update_menu()
+
+    def _discord_label(self) -> str:
+        if self.controller.is_logged_in():
+            name = self.controller.discord_user or "?"
+            return f"ログアウト ({name})"
+        return "Discord でログイン"
+
+    def _discord_action(self) -> None:
+        if self.controller.is_logged_in():
+            self.controller.logout_discord()
+            if self.icon:
+                self.icon.update_menu()
+            return
+
+        def open_browser(url: str) -> None:
+            webbrowser.open(url)
+
+        def done(_fut) -> None:
+            if self.icon:
+                self.icon.update_menu()
+
+        fut = asyncio.run_coroutine_threadsafe(
+            self.controller.login_discord(open_browser), self.loop
+        )
+        fut.add_done_callback(done)
+
+    def _reset_paths(self) -> None:
+        for name in ("autopunch", "giuroll", "soku"):
+            self.controller.tool_mgr.clear_path(name)
+        self.controller.tool_mgr.reset_state()
+        if self.icon:
+            self.icon.update_menu()
+
+    def _quit(self) -> None:
+        fut = asyncio.run_coroutine_threadsafe(self.controller.close(), self.loop)
+        try:
+            fut.result(timeout=5)
+        except Exception:
+            pass
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        if self.icon:
+            self.icon.stop()
+
+    # -----------------
+    # menu construction
+    # -----------------
+    def _build_menu(self) -> Menu:
+        return Menu(
+            MenuItem(lambda item: self._status_text(), None, enabled=False),
+            Menu.SEPARATOR,
+            MenuItem("ロビーページを開く", lambda: self._open_lobby(), default=True),
+            MenuItem("投稿設定...", lambda: self._open_settings()),
+            MenuItem(lambda item: self._discord_label(), lambda: self._discord_action()),
+            Menu.SEPARATOR,
+            MenuItem(lambda item: self._tool_label("autopunch"),
+                     lambda: self._handle_tool("autopunch", "Select autopunch exe")),
+            MenuItem(lambda item: self._tool_label("giuroll"),
+                     lambda: self._handle_tool("giuroll", "Select giuroll exe")),
+            MenuItem(lambda item: self._tool_label("soku"),
+                     lambda: self._handle_tool("soku", "Select th123.exe")),
+            MenuItem("ツールのパスをリセット", lambda: self._reset_paths()),
+            Menu.SEPARATOR,
+            MenuItem("ログを開く", lambda: self._open_log()),
+            MenuItem("終了", lambda: self._quit()),
+        )
+
+    # -----------------
+    # startup
+    # -----------------
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self.loop)
+
+        async def startup() -> None:
+            await self.controller.sync_initial()
+            asyncio.ensure_future(self.controller.detector_loop())
+            asyncio.ensure_future(self.controller.api_loop())
+
+        self.loop.create_task(startup())
+        self.loop.run_forever()
+
+    def run(self) -> None:
+        threading.Thread(target=self._run_loop, daemon=True, name="asyncio-loop").start()
+
+        self.icon = pystray.Icon(
+            "asobby",
+            icon=self._icons["idle"],
+            title=f"asobby v{__version__} - {self._status_text()}",
+            menu=self._build_menu(),
+        )
+        self._append_log("info", f"asobby agent v{__version__} started")
+        self._append_log("info", f"Lobby page: {self.controller.lobby_url()}")
+        self.icon.run()
 
 
 if __name__ == "__main__":
-    SokulobbyApp().run()
+    TrayApp().run()

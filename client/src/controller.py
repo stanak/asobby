@@ -45,7 +45,12 @@ class Controller:
         self.config = self.config_mgr.get()
         self.tool_mgr = ToolManager(self.config_mgr)
 
-        self.http = httpx.AsyncClient(timeout=10.0)
+        # 非想天則の対戦は IPv4 のみ。IPv6 でサーバーに接続すると /myip が
+        # IPv6 を返して募集アドレスが壊れるため、通信を IPv4 に強制する。
+        self.http = httpx.AsyncClient(
+            timeout=10.0,
+            transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
+        )
         self.api = ApiClient(self.http, self.config_mgr.get_api_base())
         self._action_q: asyncio.Queue[Action] = asyncio.Queue()
         self._stop = asyncio.Event()
@@ -66,6 +71,12 @@ class Controller:
         self.owner_token: str = ""
         self.my_post: Post = Post()
         self.update_my_post(**self._default_post_params())
+
+        # Discord ログイン（任意）。設定に保存済みのセッションを復元する。
+        auth = self.config_mgr.get_section("auth")
+        self.api.session_token = str(auth.get("session_token", ""))
+        self.discord_user: str = str(auth.get("username", "")) if self.api.session_token else ""
+        self._login_in_progress = False
 
     # -----------------
     # basic helpers
@@ -153,6 +164,24 @@ class Controller:
     # -----------------
     async def sync_initial(self) -> None:
         await self._check_update()
+        await self._validate_session()
+
+    async def _validate_session(self) -> None:
+        """起動時にセッションを検証する。サーバー側で IP も最新化される。"""
+        if not self.api.session_token:
+            return
+        try:
+            me = await self.api.auth_me()
+            name = str(me.get("name", ""))
+            if name and name != self.discord_user:
+                self.discord_user = name
+                self.config_mgr.set_value("auth", "username", name)
+            self.log_sink("info", f"Discord ログイン中: {self.discord_user}")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                self._clear_expired_session()
+        except httpx.HTTPError:
+            pass  # オフライン等。セッションは保持したままにする
 
     async def _check_update(self) -> None:
         result = await self.api.check_update()
@@ -348,7 +377,11 @@ class Controller:
             self._last_sent_payload = None
             self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
 
-            if code == 409:
+            if code == 401:
+                # セッション切れ。破棄すれば次の create は匿名で通る。
+                self._clear_expired_session()
+                self._next_create_ts = 0.0
+            elif code == 409:
                 self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
                 self._play_config_sound("on_recruit_host_unavailable")
             elif code == 429:
@@ -374,6 +407,63 @@ class Controller:
             if act.type == "close":
                 self._close_pending = False  # リトライ可能にする
             self.log_sink("error", f"API error: {e}")
+
+    # -----------------
+    # Discord login
+    # -----------------
+    def is_logged_in(self) -> bool:
+        return bool(self.api.session_token)
+
+    async def login_discord(self, open_browser) -> None:
+        """Discord ログインフロー。open_browser(url) でブラウザを開き、
+        完了までポーリングする。"""
+        if self._login_in_progress:
+            return
+        self._login_in_progress = True
+        try:
+            start = await self.api.auth_device_start()
+            open_browser(start["verify_url"])
+            self.log_sink("info", "ブラウザで Discord ログインを完了してください")
+
+            interval = float(start.get("interval", 2))
+            deadline = time.time() + float(start.get("expires_in", 600))
+            while time.time() < deadline and not self._stop.is_set():
+                await asyncio.sleep(interval)
+                res = await self.api.auth_device_poll(start["device_code"])
+                if res.get("status") == "ok":
+                    self.api.session_token = str(res["session_token"])
+                    self.discord_user = str((res.get("user") or {}).get("name", ""))
+                    self.config_mgr.set_values(
+                        "auth",
+                        session_token=self.api.session_token,
+                        username=self.discord_user,
+                    )
+                    self.log_sink("info", f"Discord にログインしました: {self.discord_user}")
+                    return
+            self.log_sink("warn", "Discord ログインがタイムアウトしました")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 503:
+                self.log_sink("error", "サーバーで Discord ログインが設定されていません")
+            elif e.response.status_code == 404:
+                self.log_sink("warn", "ログイン要求が期限切れになりました。もう一度お試しください")
+            else:
+                self.log_sink("error", f"Discord ログインに失敗: {e}")
+        except httpx.HTTPError as e:
+            self.log_sink("error", f"Discord ログインに失敗: {e}")
+        finally:
+            self._login_in_progress = False
+
+    def logout_discord(self) -> None:
+        self.api.session_token = ""
+        self.discord_user = ""
+        self.config_mgr.set_values("auth", session_token="", username="")
+        self.log_sink("info", "Discord からログアウトしました")
+
+    def _clear_expired_session(self) -> None:
+        self.api.session_token = ""
+        self.discord_user = ""
+        self.config_mgr.set_values("auth", session_token="", username="")
+        self.log_sink("warn", "Discord セッションが期限切れです。再ログインしてください")
 
     # -----------------
     # external updates

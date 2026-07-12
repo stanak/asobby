@@ -142,6 +142,7 @@
     <thead>
       <tr>
         <th>Match</th>
+        <th>User</th>
         <th>Rank</th>
         <th>Cap</th>
         <th>Stream</th>
@@ -188,6 +189,7 @@ function render() {
     if (p.net_status === NET_BATTLE) tr.classList.add("battle");
 
     tr.appendChild(td(p.match_status || ""));
+    tr.appendChild(td(p.owner_name || ""));
     tr.appendChild(td(RANK_LABEL[(p.rank || "any").toLowerCase()] || p.rank || ""));
 
     const cap = document.createElement("td");

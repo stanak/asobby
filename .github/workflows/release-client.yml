@@ -38,7 +38,7 @@ jobs:
           if (Test-Path "asobby.spec") {
             pyinstaller asobby.spec
           } else {
-            pyinstaller --noconfirm --clean --onedir --name asobby src\main.py
+            pyinstaller --noconfirm --clean --onedir --noconsole --hidden-import pystray._win32 --name asobby src\main.py
           }
 
       - name: Archive build output

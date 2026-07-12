@@ -10,7 +10,11 @@ CONFIG_PATH = Path("asobby_config.json")
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "server": {
-        "api_base": "http://133.130.100.128:8000",
+        "api_base": "https://asobby.com",
+    },
+    "auth": {
+        "session_token": "",
+        "username": "",
     },
     "tools": {
         "giuroll_path": "",
