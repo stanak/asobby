@@ -15,9 +15,11 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `GET /sse/posts` | SSE。接続直後に `snapshot`、以後 `upsert` / `close` |
 | `POST /auth/device` | Discord ログイン開始。`device_code` と `verify_url` を返す |
 | `GET /auth/discord/start` | (ブラウザ用) Discord の認可画面へリダイレクト |
+| `GET /auth/discord/web` | (Web 閲覧用) Discord ログイン。完了後クッキーセッションを発行 |
 | `GET /auth/discord/callback` | (ブラウザ用) OAuth コールバック。完了ページを表示 |
 | `POST /auth/device/poll` | ログイン完了ポーリング。完了時に `session_token` を返す |
-| `GET /auth/me` | `Authorization: Bearer` のセッション検証・ユーザー情報 |
+| `GET /auth/me` | `Authorization: Bearer` またはクッキーのセッション検証・ユーザー情報 |
+| `GET /auth/logout` | Web クッキーセッションを削除して `/` へリダイレクト |
 
 - 投稿の更新・削除には作成時に発行される `owner_token` が必要（他人の投稿は操作不可）
 - 投稿は TTL 20 秒。クライアントは 5 秒間隔のハートビート（update）で維持する
@@ -61,6 +63,10 @@ DATABASE_URL=... ../bin/alembic revision --autogenerate -m "add xxx"
 
 クライアントはログインなしでも投稿できる。ログインすると投稿に Discord の
 表示名（`owner_name`）が載り、ロビーの User 列に表示される。
+
+**ロビー閲覧（`GET /posts`, `GET /sse/posts`）はログイン必須。**
+Web ページ（`GET /`）は未ログインでも開けるが、一覧は Discord ログイン後に
+表示される。Web ログインはクッキーセッション（`asobby_session`、有効期限 30 日）。
 
 フローはデバイスコード方式:
 クライアントが `POST /auth/device` → ユーザーがブラウザで `verify_url` を開いて

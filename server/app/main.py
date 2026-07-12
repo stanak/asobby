@@ -20,7 +20,7 @@ from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 import db
@@ -79,6 +79,9 @@ if not SESSION_SECRET:
 SESSION_TTL_SEC = 30 * 24 * 3600  # 30 日
 DEVICE_CODE_TTL_SEC = 600
 DEVICE_POLL_INTERVAL_SEC = 2
+
+# ログアウト済みセッショントークン (クッキー削除に加えサーバー側でも失効)
+LOGOUT_REVOKED: set[str] = set()
 
 DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
 DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token"
@@ -181,6 +184,8 @@ def make_session_token(user: dict[str, Any], token_version: int) -> str:
 
 def verify_session_token(token: str) -> Optional[dict[str, Any]]:
     """署名と期限が有効なら {"sub", "name", "ver"} を返す。無効なら None。"""
+    if not token or token in LOGOUT_REVOKED:
+        return None
     try:
         body, sig = token.rsplit(".", 1)
         expected = _b64url_encode(
@@ -202,9 +207,12 @@ def verify_session_token(token: str) -> Optional[dict[str, Any]]:
 
 def session_from_request(request: Request) -> Optional[dict[str, Any]]:
     auth = request.headers.get("authorization", "")
-    if not auth.lower().startswith("bearer "):
-        return None
-    return verify_session_token(auth[7:].strip())
+    if auth.lower().startswith("bearer "):
+        return verify_session_token(auth[7:].strip())
+    cookie = request.cookies.get("asobby_session")
+    if cookie:
+        return verify_session_token(cookie)
+    return None
 
 
 def discord_avatar_url(user_id: str, avatar_hash: str) -> str:
@@ -244,6 +252,9 @@ class DeviceLogin:
 
 DEVICE_LOGINS: Dict[str, DeviceLogin] = {}  # web_code -> DeviceLogin
 
+# Web ブラウザ直接ログイン (state -> created_at)
+WEB_LOGINS: Dict[str, float] = {}
+
 
 def cleanup_device_logins() -> None:
     now = time.time()
@@ -252,6 +263,15 @@ def cleanup_device_logins() -> None:
         if (now - v.created_at) > DEVICE_CODE_TTL_SEC
     ]:
         DEVICE_LOGINS.pop(key, None)
+
+
+def cleanup_web_logins() -> None:
+    now = time.time()
+    for key in [
+        k for k, ts in WEB_LOGINS.items()
+        if (now - ts) > DEVICE_CODE_TTL_SEC
+    ]:
+        WEB_LOGINS.pop(key, None)
 
 
 def require_discord_configured() -> None:
@@ -419,6 +439,7 @@ async def auth_device_start() -> dict[str, Any]:
 async def auth_discord_start(code: str) -> RedirectResponse:
     require_discord_configured()
     cleanup_device_logins()
+    cleanup_web_logins()
     if code not in DEVICE_LOGINS:
         raise HTTPException(status_code=404, detail="login request expired")
 
@@ -433,15 +454,41 @@ async def auth_discord_start(code: str) -> RedirectResponse:
     return RedirectResponse(f"{DISCORD_AUTHORIZE_URL}?{params}", status_code=302)
 
 
-@app.get("/auth/discord/callback")
-async def auth_discord_callback(state: str, code: str = "", error: str = "") -> HTMLResponse:
+@app.get("/auth/discord/web")
+async def auth_discord_web() -> RedirectResponse:
+    """Web ページ閲覧用の Discord ログイン。完了後はクッキーセッションを発行する。"""
+    require_discord_configured()
+    cleanup_web_logins()
+    state = "w-" + secrets.token_urlsafe(24)
+    WEB_LOGINS[state] = time.time()
+    params = urlencode({
+        "client_id": DISCORD_CLIENT_ID,
+        "redirect_uri": f"{PUBLIC_BASE_URL}/auth/discord/callback",
+        "response_type": "code",
+        "scope": "identify",
+        "state": state,
+        "prompt": "none",
+    })
+    return RedirectResponse(f"{DISCORD_AUTHORIZE_URL}?{params}", status_code=302)
+
+
+@app.get("/auth/discord/callback", response_model=None)
+async def auth_discord_callback(
+    request: Request,
+    state: str,
+    code: str = "",
+    error: str = "",
+) -> Response:
     require_discord_configured()
     cleanup_device_logins()
+    cleanup_web_logins()
 
+    is_web = state in WEB_LOGINS
     login = DEVICE_LOGINS.get(state)
-    if login is None:
+    if not is_web and login is None:
         raise HTTPException(status_code=404, detail="login request expired")
     if error or not code:
+        WEB_LOGINS.pop(state, None)
         DEVICE_LOGINS.pop(state, None)
         return _login_result_page(ok=False, message="ログインがキャンセルされました。")
 
@@ -458,6 +505,8 @@ async def auth_discord_callback(state: str, code: str = "", error: str = "") -> 
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         if token_res.status_code != 200:
+            if is_web:
+                WEB_LOGINS.pop(state, None)
             return _login_result_page(ok=False, message="Discord との連携に失敗しました。")
         access_token = token_res.json().get("access_token", "")
 
@@ -466,6 +515,8 @@ async def auth_discord_callback(state: str, code: str = "", error: str = "") -> 
             headers={"Authorization": f"Bearer {access_token}"},
         )
         if me_res.status_code != 200:
+            if is_web:
+                WEB_LOGINS.pop(state, None)
             return _login_result_page(ok=False, message="Discord ユーザー情報の取得に失敗しました。")
         me = me_res.json()
 
@@ -475,9 +526,29 @@ async def auth_discord_callback(state: str, code: str = "", error: str = "") -> 
     }
     avatar = str(me.get("avatar") or "")
     if not user["id"] or not user["name"]:
+        if is_web:
+            WEB_LOGINS.pop(state, None)
         return _login_result_page(ok=False, message="Discord ユーザー情報が不正です。")
 
-    # users テーブルに upsert (名前更新・ログイン時刻)。IP はブラウザ経由の
+    if is_web:
+        WEB_LOGINS.pop(state, None)
+        user_row = await db.upsert_user_on_login(
+            user["id"], user["name"], ip=client_ip(request), avatar=avatar
+        )
+        token = make_session_token(user, user_row.token_version)
+        response = RedirectResponse("/", status_code=302)
+        response.set_cookie(
+            key="asobby_session",
+            value=token,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=2592000,
+            path="/",
+        )
+        return response
+
+    # デバイスコードフロー: users テーブルに upsert。IP はブラウザ経由の
     # 可能性があるため、クライアント本体からのポーリング時に更新する。
     user_row = await db.upsert_user_on_login(
         user["id"], user["name"], ip="", avatar=avatar
@@ -486,6 +557,25 @@ async def auth_discord_callback(state: str, code: str = "", error: str = "") -> 
     login.user = user
     login.session_token = make_session_token(user, user_row.token_version)
     return _login_result_page(ok=True, message=f"{user['name']} としてログインしました。アプリに戻ってください。")
+
+
+@app.get("/auth/logout")
+async def auth_logout(request: Request) -> RedirectResponse:
+    token = request.cookies.get("asobby_session")
+    if token:
+        LOGOUT_REVOKED.add(token)
+    response = RedirectResponse("/", status_code=302)
+    # ログイン時と同じ属性で上書き削除する (Secure 不一致だとブラウザが消せない)
+    response.set_cookie(
+        key="asobby_session",
+        value="",
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=0,
+        path="/",
+    )
+    return response
 
 
 def _login_result_page(*, ok: bool, message: str) -> HTMLResponse:
@@ -530,7 +620,9 @@ async def auth_me(request: Request) -> dict[str, Any]:
 
 
 @app.get("/posts")
-async def list_posts() -> list[dict[str, Any]]:
+async def list_posts(request: Request) -> list[dict[str, Any]]:
+    if await resolve_session(request) is None:
+        raise HTTPException(status_code=401, detail="login required")
     return sorted_public_posts()
 
 
@@ -645,6 +737,8 @@ async def legacy_upsert() -> None:
 
 @app.get("/sse/posts")
 async def sse_posts(request: Request):
+    if await resolve_session(request) is None:
+        raise HTTPException(status_code=401, detail="login required")
     q = await HUB.subscribe()
 
     async def gen():
