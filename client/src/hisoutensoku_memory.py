@@ -29,17 +29,31 @@ TH32CS_SNAPPROCESS = 0x00000002
 # Static addresses (AlwaysRecordable準拠)
 # ========================
 PNETOBJECT = 0x008986A0
-PBATTLEMGR = 0x008985E4
-PBATTLEMGR_GIUROLL = 0x0047579C
 COMMMODE = 0x00898690
 SCENEID = 0x008A0044
 
+# SWRSSCENE (SokuLib Scenes.hpp 準拠)。シーン遷移は giuroll が
+# 差し替えないため、MOD 有無に依存しない対戦判定に使える。
+SCENE_SELECTSV = 8
+SCENE_SELECTCL = 9
+SCENE_LOADINGSV = 10
+SCENE_LOADINGCL = 11
+SCENE_LOADINGWATCH = 12
+SCENE_BATTLESV = 13
+SCENE_BATTLECL = 14
+SCENE_BATTLEWATCH = 15
+
+NET_BATTLE_SCENES = {SCENE_BATTLESV, SCENE_BATTLECL, SCENE_BATTLEWATCH}
+NET_CHARSEL_SCENES = {SCENE_SELECTSV, SCENE_SELECTCL}
+# 相手プロフィール名が意味を持つのはネット対戦系シーンのみ
+NET_SCENES = {
+    SCENE_SELECTSV, SCENE_SELECTCL,
+    SCENE_LOADINGSV, SCENE_LOADINGCL, SCENE_LOADINGWATCH,
+    SCENE_BATTLESV, SCENE_BATTLECL, SCENE_BATTLEWATCH,
+}
+
 LCHARID = 0x00899D10
 RCHARID = 0x00899D30
-
-LCHAROFS = 0x0C
-RCHAROFS = 0x10
-WINCNTOFS = 0x573
 
 # PNET profile name offsets
 LPROFOFS = 0x04
@@ -261,10 +275,6 @@ kernel32.Module32First.restype  = wt.BOOL
 kernel32.Module32Next.argtypes  = [wt.HANDLE, ctypes.POINTER(MODULEENTRY32)]
 kernel32.Module32Next.restype   = wt.BOOL
 
-def read_pbattlemgr_ptr(h: wt.HANDLE, giuroll_loaded: bool) -> Optional[int]:
-    pbattlemgr = PBATTLEMGR_GIUROLL if giuroll_loaded else PBATTLEMGR
-    return _read_u32le(h, pbattlemgr)
-
 def list_modules_toolhelp(pid: int) -> list[str]:
     snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid)
     if snap == wt.HANDLE(-1).value:
@@ -290,24 +300,29 @@ def detect_tools_from_loaded_modules(pid: int) -> tuple[bool, bool]:
     return giu, ap
 
 
-def _battlemgr_alive(h: wt.HANDLE, giuroll_loaded: bool) -> bool:
-    btl = read_pbattlemgr_ptr(h, giuroll_loaded)
-    if not btl or btl < 0x10000:
-        return False
-    p1 = _read_u32le(h, btl + LCHAROFS)
-    p2 = _read_u32le(h, btl + RCHAROFS)
-    if not p1 or not p2 or p1 < 0x10000 or p2 < 0x10000:
-        return False
-    # wincntが読めるなら相当“本物”
-    w1 = _read_u8(h, p1 + WINCNTOFS)
-    w2 = _read_u8(h, p2 + WINCNTOFS)
-    return (w1 is not None) and (w2 is not None)
+def _sanitize_profile(name: str) -> str:
+    """プロフィール名らしくない文字列 (未初期化メモリ等) を弾く。
+
+    giuroll はネットワークオブジェクトを差し替えるため、相手不在時の
+    rprof 領域に未初期化のゴミが残ることがある。制御文字や cp932 の
+    デコード失敗 (置換文字) を含むものはプロフィール名として扱わない。
+    """
+    if not name:
+        return ""
+    for ch in name:
+        if ord(ch) < 0x20 or ch == "\ufffd":
+            return ""
+    return name
 
 
-def _decide_mode(server08: Optional[int], server09: Optional[int], battle_alive: bool) -> str:
-    # 対戦（PBATTLEMGRで確定）
-    if battle_alive:
+def _decide_mode(server08: Optional[int], server09: Optional[int], scene_id: Optional[int]) -> str:
+    # 対戦 (シーン ID で確定。giuroll はシーン遷移を差し替えないため
+    # MOD 有無に関わらず安定して判定できる)
+    if scene_id in NET_BATTLE_SCENES:
         return "battle"
+
+    if scene_id in NET_CHARSEL_SCENES:
+        return "charsel"
 
     if server08 is None or server09 is None:
         return "idle"
@@ -365,12 +380,18 @@ def read_detection_state() -> DetectionState:
     try:
         giu, ap = detect_tools_from_loaded_modules(pid)
 
+        scene_id = _read_u32le(h, SCENEID)
+
         pnet = _read_u32le(h, PNETOBJECT)
         lprof = rprof = ""
         server = None
         if pnet:
-            lprof = _read_cpsz_cp932(h, pnet + LPROFOFS, PROFSZ)
-            rprof = _read_cpsz_cp932(h, pnet + RPROFOFS, PROFSZ)
+            lprof = _sanitize_profile(_read_cpsz_cp932(h, pnet + LPROFOFS, PROFSZ))
+            rprof = _sanitize_profile(_read_cpsz_cp932(h, pnet + RPROFOFS, PROFSZ))
+            # 相手プロフィールはネット対戦系シーン以外では意味を持たない
+            # (giuroll 環境では未初期化のゴミが残ることがある)
+            if scene_id not in NET_SCENES:
+                rprof = ""
             adrbeg = _read_u32le(h, pnet + ADRBEGOFS)
             if adrbeg:
                 server = _read_u32le(h, adrbeg + SERVEROFS)
@@ -385,8 +406,7 @@ def read_detection_state() -> DetectionState:
             server09 = None
             server08 = None
             # phase = None
-        battle_alive = _battlemgr_alive(h, giu)
-        mode = _decide_mode(server08, server09, battle_alive)
+        mode = _decide_mode(server08, server09, scene_id)
 
         lcid = _read_u32le(h, LCHARID)
         rcid = _read_u32le(h, RCHARID)
