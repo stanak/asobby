@@ -64,6 +64,8 @@ class TrayApp:
 
     def emit_notify(self, text: str) -> None:
         self._notify(text)
+        if self.icon:
+            self.icon.update_menu()
 
     def emit_my_post(self, post: Post) -> None:
         self.post = post
@@ -163,6 +165,11 @@ class TrayApp:
     def _open_log(self) -> None:
         if LOG_PATH.exists():
             os.startfile(str(LOG_PATH.resolve()))  # noqa: S606 (Windows 専用)
+
+    def _open_update_page(self) -> None:
+        if self.controller.update_available:
+            _, url = self.controller.update_available
+            webbrowser.open(url)
 
     def _tool_label(self, tool_name: str) -> str:
         return self.controller.tool_mgr.button_label(tool_name)
@@ -313,6 +320,13 @@ class TrayApp:
                      lambda: self._handle_tool("soku", "Select th123.exe")),
             MenuItem("ツールのパスをリセット", lambda: self._reset_paths()),
             Menu.SEPARATOR,
+            MenuItem(
+                lambda item: f"更新 {self.controller.update_available[0]} をダウンロード"
+                if self.controller.update_available
+                else "",
+                lambda: self._open_update_page(),
+                visible=lambda item: self.controller.update_available is not None,
+            ),
             MenuItem("ログを開く", lambda: self._open_log()),
             MenuItem("終了", lambda: self._quit()),
         )
@@ -325,6 +339,7 @@ class TrayApp:
 
         async def startup() -> None:
             await self.controller.sync_initial()
+            asyncio.ensure_future(self.controller.update_check_loop())
             asyncio.ensure_future(self.controller.detector_loop())
             asyncio.ensure_future(self.controller.api_loop())
 

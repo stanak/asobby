@@ -20,6 +20,7 @@ ActionType = Literal["create", "update", "close"]
 
 HEARTBEAT_SEC = 5  # サーバー側 TTL (20s) の 1/4
 CREATE_RETRY_COOLDOWN_SEC = 10
+UPDATE_CHECK_INTERVAL_SEC = 6 * 3600
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -71,6 +72,9 @@ class Controller:
         self.owner_token: str = ""
         self.my_post: Post = Post()
         self.update_my_post(**self._default_post_params())
+
+        self.update_available: Optional[tuple[str, str]] = None
+        self._notified_update_tag: str = ""
 
         # Discord ログイン（任意）。設定に保存済みのセッションを復元する。
         auth = self.config_mgr.get_section("auth")
@@ -174,7 +178,6 @@ class Controller:
     # loops
     # -----------------
     async def sync_initial(self) -> None:
-        await self._check_update()
         await self._validate_session()
 
     async def _validate_session(self) -> None:
@@ -204,12 +207,27 @@ class Controller:
         latest_tag, release_url = result
         try:
             if _parse_version(latest_tag) > _parse_version(__version__):
+                self.update_available = (latest_tag, release_url)
+                if self._notified_update_tag != latest_tag:
+                    self.notify_sink(
+                        f"asobby {latest_tag} が公開されています。トレイメニューから開けます"
+                    )
+                    self._notified_update_tag = latest_tag
                 self.log_sink(
                     "warn",
                     f"New version {latest_tag} available (current: v{__version__}). {release_url}",
                 )
         except Exception:
             pass
+
+    async def update_check_loop(self) -> None:
+        """起動直後と、以後6時間ごとに更新を確認する。"""
+        while not self._stop.is_set():
+            await self._check_update()
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=UPDATE_CHECK_INTERVAL_SEC)
+            except asyncio.TimeoutError:
+                pass
 
     async def detector_loop(self) -> None:
         try:
