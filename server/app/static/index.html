@@ -91,15 +91,6 @@
   }
   tr:last-child td { border-bottom: none; }
   tr.battle td { color: var(--battle); }
-  .badge {
-    display: inline-block;
-    font-size: 11px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 1px 5px;
-    margin-right: 4px;
-    color: var(--muted);
-  }
   a.stream { color: var(--accent); text-decoration: none; }
   a.stream:hover { text-decoration: underline; }
   button.copy {
@@ -218,7 +209,7 @@
           <th>Match</th>
           <th>User</th>
           <th>Rank</th>
-          <th>Cap</th>
+          <th>Giuroll</th>
           <th>Stream</th>
           <th>Comment</th>
           <th>Addr</th>
@@ -239,7 +230,7 @@
         <th>Match</th>
         <th>User</th>
         <th>Rank</th>
-        <th>Cap</th>
+        <th>Giuroll</th>
         <th>Stream</th>
         <th>Comment</th>
         <th>Addr</th>
@@ -339,10 +330,7 @@ function buildRow(p) {
   tr.appendChild(userCell);
   tr.appendChild(td(rankLabel(p)));
 
-  const cap = document.createElement("td");
-  if (p.autopunch) cap.appendChild(badge("A"));
-  if (p.giuroll) cap.appendChild(badge("G"));
-  tr.appendChild(cap);
+  tr.appendChild(td(p.giuroll ? "o" : "x"));
 
   const stream = document.createElement("td");
   if ((p.stream_url || "").trim()) {
@@ -426,13 +414,6 @@ function render() {
 
 function td(text) {
   const el = document.createElement("td");
-  el.textContent = text;
-  return el;
-}
-
-function badge(text) {
-  const el = document.createElement("span");
-  el.className = "badge";
   el.textContent = text;
   return el;
 }

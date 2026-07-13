@@ -18,7 +18,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "tools": {
         "giuroll_path": "",
-        "autopunch_path": "",
         "soku_path": "",
     },
     "post_defaults": {
@@ -165,7 +164,6 @@ class ConfigManager:
         sec = self.get_section("tools")
         return {
             "giuroll_path": str(sec.get("giuroll_path", "")),
-            "autopunch_path": str(sec.get("autopunch_path", "")),
             "soku_path": str(sec.get("soku_path", "")),
         }
 

@@ -231,7 +231,7 @@ class TrayApp:
         fut.add_done_callback(done)
 
     def _reset_paths(self) -> None:
-        for name in ("autopunch", "giuroll", "soku"):
+        for name in ("giuroll", "soku"):
             self.controller.tool_mgr.clear_path(name)
         self.controller.tool_mgr.reset_state()
         if self.icon:
@@ -316,13 +316,10 @@ class TrayApp:
             MenuItem("配信URL切替", Menu(lambda: self._stream_menu_items())),
             MenuItem(lambda item: self._discord_label(), lambda: self._discord_action()),
             Menu.SEPARATOR,
-            MenuItem(lambda item: self._tool_label("autopunch"),
-                     lambda: self._handle_tool("autopunch", "Select autopunch exe")),
             MenuItem(lambda item: self._tool_label("giuroll"),
                      lambda: self._handle_tool("giuroll", "Select giuroll exe")),
             MenuItem(lambda item: self._tool_label("soku"),
                      lambda: self._handle_tool("soku", "Select th123.exe")),
-            MenuItem("ツールのパスをリセット", lambda: self._reset_paths()),
             Menu.SEPARATOR,
             MenuItem(
                 lambda item: f"更新 {self.controller.update_available[0]} をダウンロード"
@@ -332,6 +329,7 @@ class TrayApp:
                 visible=lambda item: self.controller.update_available is not None,
             ),
             MenuItem("ログを開く", lambda: self._open_log()),
+            MenuItem("ツールのパスをリセット", lambda: self._reset_paths()),
             MenuItem("終了", lambda: self._quit()),
         )
 
