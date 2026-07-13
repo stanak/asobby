@@ -22,13 +22,13 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 from uuid import uuid4
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 import trueskill
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 import db
 
@@ -254,6 +254,57 @@ class DevicePollIn(BaseModel):
 
 class ChooseRankIn(BaseModel):
     rank: Literal["easy", "normal", "ex", "hard", "luna"]
+
+
+_CLIENT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_SYNC_PLAYED_AT_MIN = datetime(2004, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+
+def _normalize_char(char: Optional[int]) -> Optional[int]:
+    if char is None:
+        return None
+    if 0 <= char <= 19:
+        return char
+    return None
+
+
+class SyncMatchIn(BaseModel):
+    client_id: str
+    played_at: float
+    my_side: Literal["host", "guest"]
+    winner: Literal["host", "guest", "draw"]
+    my_char: Optional[int] = None
+    opp_char: Optional[int] = None
+    my_profile: str = Field(default="", max_length=64)
+    opp_profile: str = Field(default="", max_length=64)
+
+    @field_validator("client_id")
+    @classmethod
+    def validate_client_id(cls, v: str) -> str:
+        if not _CLIENT_ID_RE.match(v):
+            raise ValueError("client_id must be 32 hex chars")
+        return v
+
+    @field_validator("my_char", "opp_char", mode="before")
+    @classmethod
+    def validate_char(cls, v: Any) -> Optional[int]:
+        if v is None:
+            return None
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return None
+        return _normalize_char(n)
+
+
+class SyncMatchesIn(BaseModel):
+    matches: list[SyncMatchIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_count(self) -> SyncMatchesIn:
+        if len(self.matches) > 500:
+            raise ValueError("matches must be at most 500")
+        return self
 
 
 # ----------------------------
@@ -982,6 +1033,221 @@ async def import_tensokukan(request: Request) -> dict[str, Any]:
         "skipped_invalid": skipped_invalid,
         "total": total,
     }
+
+
+def _is_near_existing_with_id(
+    played_at: datetime,
+    existing: list[tuple[float, str]],
+    *,
+    window_sec: int = 60,
+) -> Optional[str]:
+    """existing [(ts, id), ...] 昇順) に ±window_sec 以内の時刻があればその match id を返す。"""
+    if not existing:
+        return None
+    ts = _dt_ts(played_at)
+    ts_list = [t for t, _ in existing]
+    lo = bisect.bisect_left(ts_list, ts - window_sec)
+    hi = bisect.bisect_right(ts_list, ts + window_sec)
+    for i in range(lo, hi):
+        if abs(ts_list[i] - ts) <= window_sec:
+            return existing[i][1]
+    return None
+
+
+def _sync_match_id(user_id: str, client_id: str) -> str:
+    return hashlib.md5(f"sync:{user_id}:{client_id}".encode()).hexdigest()
+
+
+def _parse_sync_played_at(ts: float) -> Optional[datetime]:
+    """unix 秒を UTC datetime に変換。2004 年以前や未来+1 日は None。"""
+    try:
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
+    if dt < _SYNC_PLAYED_AT_MIN:
+        return None
+    if dt > db.utcnow() + timedelta(days=1):
+        return None
+    return dt
+
+
+def _match_to_stats_item(match: db.Match, user_id: str, has_replay: bool) -> dict[str, Any]:
+    my_side = "host" if match.host_user_id == user_id else "guest"
+    return {
+        "id": match.id,
+        "played_at": _dt_ts(match.played_at) if match.played_at else 0.0,
+        "my_side": my_side,
+        "winner": match.winner,
+        "host_char": match.host_char,
+        "guest_char": match.guest_char,
+        "host_profile": match.host_profile or "",
+        "guest_profile": match.guest_profile or "",
+        "ranked": match.ranked,
+        "source": match.source,
+        "has_replay": has_replay,
+    }
+
+
+def _content_disposition_attachment(filename: str) -> str:
+    """RFC 5987 対応の Content-Disposition を生成する。"""
+    safe_ascii = _FILENAME_UNSAFE_RE.sub("_", filename or "replay.rep")
+    try:
+        safe_ascii.encode("ascii")
+        ascii_name = safe_ascii
+    except UnicodeEncodeError:
+        ascii_name = "replay.rep"
+    if ascii_name != filename:
+        return (
+            f'attachment; filename="{ascii_name}"; '
+            f"filename*=UTF-8''{quote(filename)}"
+        )
+    return f'attachment; filename="{ascii_name}"'
+
+
+def _sync_row_from_item(user_id: str, item: SyncMatchIn, match_id: str, played_at: datetime) -> dict[str, Any]:
+    my_char = _normalize_char(item.my_char)
+    opp_char = _normalize_char(item.opp_char)
+    if item.my_side == "host":
+        return {
+            "id": match_id,
+            "host_user_id": user_id,
+            "guest_user_id": None,
+            "host_ip": "",
+            "guest_ip": "",
+            "winner": item.winner,
+            "host_char": my_char,
+            "guest_char": opp_char,
+            "host_profile": item.my_profile,
+            "guest_profile": item.opp_profile,
+            "ranked": False,
+            "source": "sync",
+            "played_at": played_at,
+        }
+    return {
+        "id": match_id,
+        "host_user_id": None,
+        "guest_user_id": user_id,
+        "host_ip": "",
+        "guest_ip": "",
+        "winner": item.winner,
+        "host_char": opp_char,
+        "guest_char": my_char,
+        "host_profile": item.opp_profile,
+        "guest_profile": item.my_profile,
+        "ranked": False,
+        "source": "sync",
+        "played_at": played_at,
+    }
+
+
+@app.get("/stats/me/matches")
+async def stats_me_matches(
+    request: Request,
+    since: float = 0,
+    limit: int = 500,
+) -> dict[str, Any]:
+    """ログインユーザーの対戦一覧 (played_at 昇順)。"""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    if not db.is_configured():
+        return {"ok": True, "matches": []}
+
+    limit = min(max(1, limit), 1000)
+    rows = await db.fetch_user_matches_since(sess["id"], since_ts=since, limit=limit)
+    matches = [_match_to_stats_item(m, sess["id"], has_replay) for m, has_replay in rows]
+    return {"ok": True, "matches": matches}
+
+
+@app.get("/replays/{match_id}")
+async def download_replay(match_id: str, request: Request) -> Response:
+    """対戦参加者のみリプレイをダウンロードできる。"""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    if not db.is_configured():
+        raise HTTPException(status_code=404, detail="not found")
+
+    match = await db.get_match_by_id(match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="not found")
+    uid = sess["id"]
+    if match.host_user_id != uid and match.guest_user_id != uid:
+        raise HTTPException(status_code=404, detail="not found")
+
+    replay = await db.get_replay_for_match(match_id)
+    if replay is None:
+        raise HTTPException(status_code=404, detail="not found")
+
+    return Response(
+        content=replay.data,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": _content_disposition_attachment(replay.filename),
+        },
+    )
+
+
+@app.post("/matches/sync")
+async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
+    """クライアントのローカル戦績を一括登録する。"""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    if not db.is_configured():
+        return {"ok": True, "results": []}
+
+    user_id = sess["id"]
+    results: list[dict[str, Any]] = []
+    to_insert: list[dict[str, Any]] = []
+
+    existing_ids = await db.filter_existing_match_ids(
+        [_sync_match_id(user_id, m.client_id) for m in body.matches]
+    )
+    near_existing = await db.fetch_user_match_times_with_ids(user_id, exclude_source="sync")
+
+    for item in body.matches:
+        match_id = _sync_match_id(user_id, item.client_id)
+        if match_id in existing_ids:
+            results.append({
+                "client_id": item.client_id,
+                "server_id": match_id,
+                "status": "duplicate",
+            })
+            continue
+
+        played_at = _parse_sync_played_at(item.played_at)
+        if played_at is None:
+            results.append({
+                "client_id": item.client_id,
+                "server_id": None,
+                "status": "invalid",
+            })
+            continue
+
+        near_id = _is_near_existing_with_id(played_at, near_existing)
+        if near_id is not None:
+            results.append({
+                "client_id": item.client_id,
+                "server_id": near_id,
+                "status": "duplicate",
+            })
+            continue
+
+        row = _sync_row_from_item(user_id, item, match_id, played_at)
+        to_insert.append(row)
+        existing_ids.add(match_id)
+        bisect.insort(near_existing, (_dt_ts(played_at), match_id))
+        results.append({
+            "client_id": item.client_id,
+            "server_id": match_id,
+            "status": "imported",
+        })
+
+    if to_insert:
+        await db.bulk_insert_matches(to_insert)
+
+    return {"ok": True, "results": results}
 
 
 @app.get("/stats/me")

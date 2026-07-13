@@ -13,6 +13,7 @@ import httpx
 from api_client import ApiClient
 from detect_api import DetectionState
 from hisoutensoku_memory import read_detection_state
+from local_store import LocalStore
 from services import Post, NET_ALIVE, NET_BATTLE, POST_TYPE_LABEL, __version__, format_system_rank
 from config_manager import ConfigManager
 from tool_manager import ToolManager
@@ -32,6 +33,10 @@ REPLAY_MAX_BYTES = 300 * 1024
 REPLAY_POLL_INTERVAL_SEC = 2.0
 REPLAY_POLL_TIMEOUT_SEC = 60.0
 REPLAY_MTIME_MARGIN_SEC = 10.0
+
+STATS_SYNC_INITIAL_DELAY_SEC = 10.0
+STATS_SYNC_INTERVAL_SEC = 10 * 60
+STATS_SYNC_BATCH = 500
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -56,6 +61,8 @@ class Controller:
         self.config_mgr = ConfigManager()
         self.config = self.config_mgr.get()
         self.tool_mgr = ToolManager(self.config_mgr)
+        db_path = self.config_mgr.path.parent / "matches.db"
+        self.local_store = LocalStore(db_path)
 
         # 非想天則の対戦は IPv4 のみ。IPv6 でサーバーに接続すると /myip が
         # IPv6 を返して募集アドレスが壊れるため、通信を IPv4 に強制する。
@@ -80,6 +87,8 @@ class Controller:
         self._create_pending = False
         self._close_pending = False
         self._result_reported = False
+        self._local_match_recorded = False
+        self._pending_local_match: Optional[dict] = None
 
         self.owner_token: str = ""
         self.my_post: Post = Post()
@@ -136,6 +145,8 @@ class Controller:
         self._create_pending = False
         self._close_pending = False
         self._result_reported = False
+        self._local_match_recorded = False
+        self._pending_local_match = None
         self._notified_casual_fallback = False
         self.my_post = replace(
             self.my_post,
@@ -273,6 +284,10 @@ class Controller:
                 battle_start_ts, exe_path = self._pending_replay_upload
                 self._pending_replay_upload = None
                 asyncio.create_task(self._upload_replay(battle_start_ts, exe_path))
+            if self._pending_local_match is not None:
+                payload = self._pending_local_match
+                self._pending_local_match = None
+                asyncio.create_task(self._record_local_match(payload))
             await asyncio.sleep(DETECT_INTERVAL_SEC)
 
     async def api_loop(self) -> None:
@@ -407,7 +422,41 @@ class Controller:
             return Action("close", {"reason": "joined_other_host"})
 
         # -----------------
-        # 0) KO 確定 -> result (ホスト側のみ。ゲスト対戦は自分の募集に反映しない)
+        # 0) KO 確定 -> ローカル戦績 (ホスト/ゲスト、ログイン不要)
+        # -----------------
+        if (
+            st.net_side in ("host", "client")
+            and is_battle
+            and not self._local_match_recorded
+            and st.btl_mode == 5
+            and st.lwin is not None
+            and st.rwin is not None
+            and 0 <= st.lwin <= 2
+            and 0 <= st.rwin <= 2
+            and (st.lwin == 2 or st.rwin == 2)
+        ):
+            self._local_match_recorded = True
+            my_side = "host" if st.net_side == "host" else "guest"
+            winner = "host" if st.lwin == 2 else "guest"
+            ranked = 0
+            if (
+                st.net_side == "host"
+                and self.has_active_post()
+                and self.my_post.post_type == "ranked"
+            ):
+                ranked = 1
+            self._pending_local_match = {
+                "my_side": my_side,
+                "winner": winner,
+                "host_char": st.lchar_id,
+                "guest_char": st.rchar_id,
+                "host_profile": (st.lprof or ""),
+                "guest_profile": (st.rprof or ""),
+                "ranked": ranked,
+            }
+
+        # -----------------
+        # 0b) KO 確定 -> result (ホスト側のみ。ゲスト対戦は自分の募集に反映しない)
         # -----------------
         if (
             st.net_side == "host"
@@ -456,6 +505,7 @@ class Controller:
 
         if not is_battle:
             self._result_reported = False
+            self._local_match_recorded = False
 
         # -----------------
         # リプレイ収集 (ホスト/ゲスト両方)
@@ -663,6 +713,99 @@ class Controller:
             self.log_sink("info", f"Replay not stored: {reason}")
 
         self._uploaded_replays.add(str(chosen))
+
+    async def _record_local_match(self, payload: dict) -> None:
+        try:
+            match_id = await asyncio.to_thread(self.local_store.record_local, **payload)
+            self.log_sink("info", f"Local match recorded: {match_id}")
+        except Exception as e:
+            self.log_sink("warn", f"Local match record failed: {e}")
+
+    def _sync_payload_from_row(self, row: dict) -> dict:
+        my_side = row["my_side"]
+        if my_side == "host":
+            my_char = row.get("host_char")
+            opp_char = row.get("guest_char")
+            my_profile = row.get("host_profile", "")
+            opp_profile = row.get("guest_profile", "")
+        else:
+            my_char = row.get("guest_char")
+            opp_char = row.get("host_char")
+            my_profile = row.get("guest_profile", "")
+            opp_profile = row.get("host_profile", "")
+        return {
+            "client_id": row["id"],
+            "played_at": row["played_at"],
+            "my_side": my_side,
+            "winner": row["winner"],
+            "my_char": my_char,
+            "opp_char": opp_char,
+            "my_profile": my_profile or "",
+            "opp_profile": opp_profile or "",
+        }
+
+    async def stats_sync_loop(self) -> None:
+        """ログイン時にサーバー戦績と双方向同期する。"""
+        try:
+            await asyncio.wait_for(self._stop.wait(), timeout=STATS_SYNC_INITIAL_DELAY_SEC)
+            return
+        except asyncio.TimeoutError:
+            pass
+
+        while not self._stop.is_set():
+            if self.is_logged_in():
+                await self._sync_stats_once()
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(), timeout=STATS_SYNC_INTERVAL_SEC
+                )
+                return
+            except asyncio.TimeoutError:
+                pass
+
+    async def _sync_stats_once(self) -> None:
+        try:
+            since = await asyncio.to_thread(self.local_store.max_server_played_at)
+            while True:
+                resp = await self.api.fetch_my_matches(
+                    since=since, limit=STATS_SYNC_BATCH
+                )
+                rows = resp.get("matches") or []
+                if rows:
+                    inserted = await asyncio.to_thread(
+                        self.local_store.merge_server_rows, rows
+                    )
+                    since = max(float(r["played_at"]) for r in rows)
+                    if inserted:
+                        self.log_sink("info", f"Stats pull: {inserted} new match(es)")
+                if len(rows) < STATS_SYNC_BATCH:
+                    break
+
+            while True:
+                unpushed = await asyncio.to_thread(self.local_store.fetch_unpushed)
+                if not unpushed:
+                    break
+                batch = unpushed[:STATS_SYNC_BATCH]
+                payload = [
+                    self._sync_payload_from_row(r) for r in batch
+                ]
+                resp = await self.api.sync_matches(payload)
+                for result in resp.get("results") or []:
+                    client_id = str(result.get("client_id", ""))
+                    server_id = result.get("server_id")
+                    status = result.get("status", "")
+                    if not client_id:
+                        continue
+                    sid = str(server_id) if server_id else None
+                    await asyncio.to_thread(
+                        self.local_store.mark_pushed, client_id, sid
+                    )
+                    if status == "imported":
+                        self.log_sink("info", f"Stats push: imported {client_id}")
+                if len(unpushed) <= STATS_SYNC_BATCH:
+                    break
+        except Exception as e:
+            self.log_sink("warn", f"Stats sync failed: {e}")
 
     # -----------------
     # result / error handling

@@ -165,6 +165,16 @@
         <tbody id="opp-profile-rows"></tbody>
       </table>
     </div>
+    <div class="panel" id="recent-matches-panel">
+      <h2>最近の対戦</h2>
+      <table>
+        <thead><tr>
+          <th>日時</th><th>自キャラ</th><th>相手キャラ</th><th>相手プロファイル</th>
+          <th>勝敗</th><th>ランクマ</th><th>リプレイ</th>
+        </tr></thead>
+        <tbody id="recent-match-rows"></tbody>
+      </table>
+    </div>
     <div class="panel" id="import-panel">
       <h2>天則観インポート</h2>
       <p style="color:var(--muted);font-size:14px;margin:0 0 12px;line-height:1.5">
@@ -239,6 +249,102 @@ function fillProfileTable(tbody, rows) {
     appendRow(tbody, [r.profile, String(r.games), wl(r), pct(r.win_rate)]);
   }
   if (!rows.length) appendEmptyRow(tbody);
+}
+
+function formatJst(unixSec) {
+  const d = new Date(unixSec * 1000);
+  const opts = {
+    timeZone: "Asia/Tokyo",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false,
+  };
+  return d.toLocaleString("ja-JP", opts);
+}
+
+function resultLabel(m) {
+  if (m.winner === "draw") return "引分";
+  const won = (m.my_side === "host" && m.winner === "host")
+    || (m.my_side === "guest" && m.winner === "guest");
+  return won ? "勝ち" : "負け";
+}
+
+function myChar(m) {
+  return m.my_side === "host" ? m.host_char : m.guest_char;
+}
+
+function oppChar(m) {
+  return m.my_side === "host" ? m.guest_char : m.host_char;
+}
+
+function oppProfile(m) {
+  return m.my_side === "host" ? (m.guest_profile || "") : (m.host_profile || "");
+}
+
+function fillRecentMatches(rows) {
+  const tbody = document.getElementById("recent-match-rows");
+  tbody.textContent = "";
+  const sorted = rows.slice().sort((a, b) => b.played_at - a.played_at);
+  for (const m of sorted) {
+    const tr = document.createElement("tr");
+
+    const tdTime = document.createElement("td");
+    tdTime.textContent = formatJst(m.played_at);
+    tr.appendChild(tdTime);
+
+    const tdMy = document.createElement("td");
+    tdMy.textContent = charName(myChar(m));
+    tr.appendChild(tdMy);
+
+    const tdOpp = document.createElement("td");
+    tdOpp.textContent = charName(oppChar(m));
+    tr.appendChild(tdOpp);
+
+    const tdProf = document.createElement("td");
+    tdProf.textContent = oppProfile(m);
+    tr.appendChild(tdProf);
+
+    const tdRes = document.createElement("td");
+    tdRes.textContent = resultLabel(m);
+    tr.appendChild(tdRes);
+
+    const tdRanked = document.createElement("td");
+    tdRanked.textContent = m.ranked ? "o" : "x";
+    tr.appendChild(tdRanked);
+
+    const tdReplay = document.createElement("td");
+    if (m.has_replay) {
+      const a = document.createElement("a");
+      a.href = `/replays/${m.id}`;
+      a.textContent = "DL";
+      tdReplay.appendChild(a);
+    } else {
+      tdReplay.textContent = "-";
+    }
+    tr.appendChild(tdReplay);
+
+    tbody.appendChild(tr);
+  }
+  if (!sorted.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 7;
+    td.style.color = "var(--muted)";
+    td.textContent = "データなし";
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+}
+
+async function loadRecentMatches() {
+  try {
+    const res = await fetch("/stats/me/matches?limit=100", { credentials: "same-origin" });
+    if (!res.ok) return;
+    const data = await res.json();
+    fillRecentMatches(data.matches || []);
+  } catch (_) {
+    /* 一覧取得失敗は他パネル表示を妨げない */
+  }
 }
 
 function render(data) {
@@ -319,6 +425,7 @@ function render(data) {
   fillCharTable(document.getElementById("opp-char-rows"), data.by_opp_char);
   fillProfileTable(document.getElementById("opp-profile-rows"), data.by_opp_profile);
   setupTskImport();
+  loadRecentMatches();
 }
 
 function setupTskImport() {

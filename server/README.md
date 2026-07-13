@@ -9,6 +9,9 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `GET /` | 閲覧用 Web ページ（SSE でリアルタイム更新） |
 | `GET /stats` | 戦績閲覧用 Web ページ |
 | `GET /stats/me` | ログインユーザーの戦績集計（JSON） |
+| `GET /stats/me/matches` | ログインユーザーの対戦一覧（`since` / `limit` クエリ、played_at 昇順） |
+| `GET /replays/{match_id}` | 対戦参加者のみリプレイ (.rep) をダウンロード |
+| `POST /matches/sync` | クライアントのローカル戦績を一括登録（最大 500 件） |
 | `GET /myip` | クライアントのグローバル IP を返す |
 | `GET /posts` | 募集一覧（公開フィールドのみ） |
 | `POST /posts` | 募集の新規作成（Discord ログイン必須）。レスポンスで `owner_token` を発行 |
@@ -108,6 +111,10 @@ KO 報告 (`POST /posts/result`) には使用キャラとプロファイル名�
 天則観 (AlwaysRecordable/tsk) の SQLite 戦績 DB (.db) を `POST /import/tensokukan` で
 取り込める。天則観の p1 (自分) は asobby 側のホスト欄に格納され、カジュアル扱い
 (`ranked=False`) となる。同じ DB を再アップロードしても決定的 ID により重複しない。
+asobby クライアントはローカル SQLite に戦績を保持し、`POST /matches/sync` で
+サーバー未記録分を一括同期できる（決定的 ID により再送安全）。同期済みの対戦で
+リプレイが添付されていれば `GET /replays/{match_id}` からダウンロードできる
+（参加者のみ、未ログイン・非参加者は 404）。
 
 ### ランクマッチ
 

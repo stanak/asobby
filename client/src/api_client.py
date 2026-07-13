@@ -124,6 +124,26 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    async def fetch_my_matches(self, since: float = 0.0, limit: int = 500) -> dict:
+        """自分の戦績一覧を取得する。"""
+        r = await self.http.get(
+            f"{self.base}/stats/me/matches",
+            params={"since": since, "limit": limit},
+            headers=self._auth_headers(),
+        )
+        r.raise_for_status()
+        return r.json()
+
+    async def sync_matches(self, matches: list[dict]) -> dict:
+        """未送信のローカル戦績をサーバーへ同期する。"""
+        r = await self.http.post(
+            f"{self.base}/matches/sync",
+            json={"matches": matches},
+            headers=self._auth_headers(),
+        )
+        r.raise_for_status()
+        return r.json()
+
     async def check_update(self) -> Optional[Tuple[str, str]]:
         """Fetch latest release from GitHub. Returns (tag_name, html_url) or None."""
         try:

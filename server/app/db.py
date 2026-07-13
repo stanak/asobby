@@ -553,3 +553,67 @@ async def bulk_insert_matches(rows: list[dict]) -> int:
             await s.commit()
             inserted += len(chunk)
     return inserted
+
+
+async def fetch_user_matches_since(
+    user_id: str,
+    since_ts: float = 0.0,
+    limit: int = 500,
+) -> list[tuple[Match, bool]]:
+    """ユーザーの確定済み対戦を played_at 昇順で返す。(Match, has_replay) のリスト。"""
+    since_dt = datetime.fromtimestamp(since_ts, tz=timezone.utc)
+    replay_exists = exists().where(Replay.match_id == Match.id)
+    async with session() as s:
+        res = await s.execute(
+            select(Match, replay_exists.label("has_replay"))
+            .where(
+                ((Match.host_user_id == user_id) | (Match.guest_user_id == user_id))
+                & (Match.winner != "")
+                & Match.played_at.is_not(None)
+                & (Match.played_at > since_dt)
+            )
+            .order_by(Match.played_at.asc())
+            .limit(limit)
+        )
+        return [(row[0], bool(row[1])) for row in res.all()]
+
+
+async def get_match_by_id(match_id: str) -> Optional[Match]:
+    """match id で 1 件取得する。"""
+    async with session() as s:
+        return await s.get(Match, match_id)
+
+
+async def get_replay_for_match(match_id: str) -> Optional[Replay]:
+    """match に紐づくリプレイを 1 件返す (unique 想定)。"""
+    async with session() as s:
+        res = await s.execute(
+            select(Replay).where(Replay.match_id == match_id).limit(1)
+        )
+        return res.scalar_one_or_none()
+
+
+async def fetch_user_match_times_with_ids(
+    user_id: str, exclude_source: str = "sync"
+) -> list[tuple[float, str]]:
+    """ユーザーの確定済み対戦 (played_at 昇順) を (unix_ts, match_id) で返す。"""
+    async with session() as s:
+        res = await s.execute(
+            select(Match.played_at, Match.id)
+            .where(
+                ((Match.host_user_id == user_id) | (Match.guest_user_id == user_id))
+                & (Match.winner != "")
+                & Match.played_at.is_not(None)
+                & (Match.source != exclude_source)
+            )
+            .order_by(Match.played_at.asc())
+        )
+        out: list[tuple[float, str]] = []
+        for played_at, match_id in res.all():
+            if played_at is None:
+                continue
+            ts = played_at.timestamp()
+            if played_at.tzinfo is None:
+                ts = played_at.replace(tzinfo=timezone.utc).timestamp()
+            out.append((ts, match_id))
+        return out

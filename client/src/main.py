@@ -14,6 +14,7 @@ from pystray import Menu, MenuItem
 
 from controller import Controller
 from services import Post, POST_TYPE_LABEL, edit_post_settings, NET_BATTLE, __version__
+from stats_window import open_stats_window
 
 LOG_PATH = Path("asobby.log")
 LOG_MAX_BYTES = 256 * 1024
@@ -153,6 +154,11 @@ class TrayApp:
                 self.icon.update_menu()
 
         self._on_tk(lambda: edit_post_settings(self.tk_root, current, apply))
+
+    def _open_stats(self) -> None:
+        self._on_tk(
+            lambda: open_stats_window(self.tk_root, self.controller.local_store)
+        )
 
     def _pick_path(self, title: str, callback) -> None:
         """ファイル選択ダイアログを tk メインスレッドで開き、結果を callback に渡す。"""
@@ -312,6 +318,7 @@ class TrayApp:
             Menu.SEPARATOR,
             MenuItem("ロビーページを開く", lambda: self._open_lobby(), default=True),
             MenuItem("投稿設定...", lambda: self._open_settings()),
+            MenuItem("戦績を見る...", lambda: self._open_stats()),
             MenuItem("コメント切替", Menu(lambda: self._comment_menu_items())),
             MenuItem("配信URL切替", Menu(lambda: self._stream_menu_items())),
             MenuItem(lambda item: self._discord_label(), lambda: self._discord_action()),
@@ -342,6 +349,7 @@ class TrayApp:
         async def startup() -> None:
             await self.controller.sync_initial()
             asyncio.ensure_future(self.controller.update_check_loop())
+            asyncio.ensure_future(self.controller.stats_sync_loop())
             asyncio.ensure_future(self.controller.detector_loop())
             asyncio.ensure_future(self.controller.api_loop())
 
