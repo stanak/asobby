@@ -11,7 +11,7 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `GET /stats/me` | ログインユーザーの戦績集計（JSON） |
 | `GET /myip` | クライアントのグローバル IP を返す |
 | `GET /posts` | 募集一覧（公開フィールドのみ） |
-| `POST /posts` | 募集の新規作成。レスポンスで `owner_token` を発行 |
+| `POST /posts` | 募集の新規作成（Discord ログイン必須）。レスポンスで `owner_token` を発行 |
 | `POST /posts/update` | 募集の更新。`id` + `owner_token` が必須 |
 | `POST /posts/close` | 募集の削除。`id` + `owner_token` が必須 |
 | `POST /posts/result` | 対戦勝敗の報告。`id` + `owner_token` + `winner` (`host`/`guest`/`draw`) |
@@ -62,14 +62,13 @@ cd app
 DATABASE_URL=... ../bin/alembic revision --autogenerate -m "add xxx"
 ```
 
-## Discord ログイン（任意）
+## Discord ログイン（募集投稿に必須）
 
-クライアントはログインなしでも投稿できる。ログインすると投稿に Discord の
-表示名（`owner_name`）が載り、ロビーの User 列に表示される。
+募集の投稿には Discord ログインが必須（対戦相手の同定のため）。
+ログインすると投稿に Discord の表示名（`owner_name`）が載り、
+ロビーの User 列に表示される。
 
 **ロビー閲覧（`GET /posts`, `GET /sse/posts`）はログイン不要。**
-ランク付き募集 (E〜Ph) の投稿には Discord ログイン必須（対戦相手の同定が
-ランクマッチの前提のため）。無差別 (Any) はログイン不要。
 Web ページのログインはクッキーセッション（`asobby_session`、有効期限 30 日）。
 
 フローはデバイスコード方式:

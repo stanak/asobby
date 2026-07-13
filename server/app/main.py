@@ -108,6 +108,7 @@ class Post:
     addr: str = ""
     comment: str = ""
     updated_at: float = 0
+    created_at: float = 0
     stream_url: str = ""
     giuroll: bool = False
     autopunch: bool = False
@@ -433,12 +434,11 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
-def is_ranked(rank: str) -> bool:
-    return rank.strip().lower() not in ("", "any")
-
-
 def sorted_public_posts() -> list[dict[str, Any]]:
-    records = sorted(RECORDS.values(), key=lambda r: r.post.updated_at, reverse=True)
+    records = sorted(
+        RECORDS.values(),
+        key=lambda r: (-r.post.created_at, r.post.id),
+    )
     return [asdict(r.post) for r in records]
 
 
@@ -828,24 +828,13 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
 
     parse_ipv4_addr_or_raise(body.addr)
 
-    # Discord ログインは任意 (any 募集)。Bearer/クッキーがあれば resolve する。
-    # ヘッダがあるのに無効なら 401、ランク付き募集は有効セッション必須 (403)。
-    owner_name = ""
-    owner_avatar = ""
-    owner_user_id = ""
-    has_auth_header = bool(request.headers.get("authorization"))
     sess = await resolve_session(request)
-    if has_auth_header and sess is None:
-        raise HTTPException(status_code=401, detail="invalid or expired session")
-    if is_ranked(body.rank) and sess is None:
-        raise HTTPException(
-            status_code=403,
-            detail="discord login required for ranked recruitment",
-        )
-    if sess is not None:
-        owner_name = sess["name"]
-        owner_avatar = sess["avatar"]
-        owner_user_id = sess["id"]
+    if sess is None:
+        raise HTTPException(status_code=401, detail="discord login required")
+
+    owner_name = sess["name"]
+    owner_avatar = sess["avatar"]
+    owner_user_id = sess["id"]
 
     ip = client_ip(request)
     now = now_ts()
@@ -874,6 +863,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         owner_name=owner_name,
         owner_avatar=owner_avatar,
         updated_at=now,
+        created_at=now,
     )
     rec = PostRecord(
         post=post,
@@ -899,12 +889,6 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
 
     rec = get_record_or_raise(body.id, body.owner_token)
     p = rec.post
-
-    if is_ranked(body.rank) and rec.owner_user_id == "":
-        raise HTTPException(
-            status_code=403,
-            detail="discord login required for ranked recruitment",
-        )
 
     # 再ホスト等でアドレスが変わった場合のみ到達性を再確認する
     if body.addr != p.addr:

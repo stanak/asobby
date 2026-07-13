@@ -202,7 +202,11 @@ function render() {
   if (filterRank !== "all" && filterRank !== "any") {
     list = list.filter((p) => (p.rank || "any").toLowerCase() === filterRank);
   }
-  list.sort((a, b) => b.updated_at - a.updated_at);
+  list.sort((a, b) => {
+    const dc = (b.created_at || 0) - (a.created_at || 0);
+    if (dc !== 0) return dc;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
 
   rowsEl.textContent = "";
   for (const p of list) {

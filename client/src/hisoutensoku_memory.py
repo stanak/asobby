@@ -46,6 +46,9 @@ SCENE_BATTLEWATCH = 15
 
 NET_BATTLE_SCENES = {SCENE_BATTLESV, SCENE_BATTLECL, SCENE_BATTLEWATCH}
 NET_CHARSEL_SCENES = {SCENE_SELECTSV, SCENE_SELECTCL}
+NET_SIDE_HOST = {SCENE_SELECTSV, SCENE_LOADINGSV, SCENE_BATTLESV}
+NET_SIDE_CLIENT = {SCENE_SELECTCL, SCENE_LOADINGCL, SCENE_BATTLECL}
+NET_SIDE_WATCH = {SCENE_LOADINGWATCH, SCENE_BATTLEWATCH}
 # 相手プロフィール名が意味を持つのはネット対戦系シーンのみ
 NET_SCENES = {
     SCENE_SELECTSV, SCENE_SELECTCL,
@@ -414,6 +417,16 @@ def _decide_mode(server08: Optional[int], server09: Optional[int], scene_id: Opt
 # ========================
 
 
+def _derive_net_side(scene_id: Optional[int]) -> Optional[str]:
+    if scene_id in NET_SIDE_HOST:
+        return "host"
+    if scene_id in NET_SIDE_CLIENT:
+        return "client"
+    if scene_id in NET_SIDE_WATCH:
+        return "watch"
+    return None
+
+
 def read_detection_state() -> DetectionState:
     pid, giu, ap = _get_pid_and_tools()
     if not pid:
@@ -429,6 +442,7 @@ def read_detection_state() -> DetectionState:
             rchar_id=None,
             lchar_name="?",
             rchar_name="?",
+            net_side=None,
         )
 
     try:
@@ -449,6 +463,7 @@ def read_detection_state() -> DetectionState:
             rchar_id=None,
             lchar_name="?",
             rchar_name="?",
+            net_side=None,
         )
 
     try:
@@ -500,6 +515,7 @@ def read_detection_state() -> DetectionState:
             rchar_id=rcid,
             lchar_name=_char_name(lcid),
             rchar_name=_char_name(rcid),
+            net_side=_derive_net_side(scene_id),
             btl_mode=btl_mode,
             lwin=lwin,
             rwin=rwin,

@@ -86,7 +86,7 @@ class Controller:
         self.api.session_token = str(auth.get("session_token", ""))
         self.discord_user: str = str(auth.get("username", "")) if self.api.session_token else ""
         self._login_in_progress = False
-        self._notified_rank_login = False
+        self._notified_login_required = False
 
     # -----------------
     # basic helpers
@@ -176,17 +176,6 @@ class Controller:
         net_status: int,
     ) -> dict:
         rank = self.my_post.rank or "any"
-        if rank.strip().lower() not in ("", "any") and not self.is_logged_in():
-            if not self._notified_rank_login:
-                self._notified_rank_login = True
-                self.notify_sink(
-                    "ランク募集には Discord ログインが必要です。無差別 (Any) で募集します"
-                )
-                self.log_sink(
-                    "warn",
-                    "Ranked recruitment requires Discord login; falling back to any",
-                )
-            rank = "any"
         return {
             "rank": rank,
             "addr": addr,
@@ -341,7 +330,8 @@ class Controller:
         has_profile = bool((st.lprof or "").strip() or (st.rprof or "").strip())
 
         if is_battle or has_profile or is_recruiting:
-            self._last_keepalive_ts = now
+            if st.net_side != "client":
+                self._last_keepalive_ts = now
 
         match_status = self._build_match_status(
             st,
@@ -350,10 +340,22 @@ class Controller:
         )
 
         # -----------------
-        # 0) KO 確定 -> result (この周期では result を優先)
+        # 他ホストに凸ったら自分の募集を閉じる
         # -----------------
         if (
-            is_battle
+            self.has_active_post()
+            and self._stable_for("client_side", 1.0, seen=(st.net_side == "client"))
+            and not self._close_pending
+        ):
+            self._close_pending = True
+            return Action("close", {"reason": "joined_other_host"})
+
+        # -----------------
+        # 0) KO 確定 -> result (ホスト側のみ。ゲスト対戦は自分の募集に反映しない)
+        # -----------------
+        if (
+            st.net_side == "host"
+            and is_battle
             and self.has_active_post()
             and not self._result_reported
             and st.btl_mode == 5
@@ -389,7 +391,17 @@ class Controller:
             )
 
             if not self.has_active_post():
-                if not self._create_pending and now >= self._next_create_ts:
+                if not self.is_logged_in():
+                    if not self._notified_login_required:
+                        self._notified_login_required = True
+                        self.notify_sink(
+                            "募集には Discord ログインが必要です。トレイメニューからログインしてください"
+                        )
+                        self.log_sink(
+                            "warn",
+                            "Recruitment requires Discord login",
+                        )
+                elif not self._create_pending and now >= self._next_create_ts:
                     self._create_pending = True
                     self._last_sent_payload = payload
                     self.update_my_post(**payload)
@@ -401,9 +413,14 @@ class Controller:
                 return Action("update", payload)
 
         # -----------------
-        # 2) battle -> update
+        # 2) battle -> update (ホスト側のみ)
         # -----------------
-        if self.has_active_post() and self._seen_recruit_this_run and self._stable_for("battle", 2.0, seen=is_battle):
+        if (
+            st.net_side == "host"
+            and self.has_active_post()
+            and self._seen_recruit_this_run
+            and self._stable_for("battle", 2.0, seen=is_battle)
+        ):
             payload = self._build_payload(
                 addr=self.my_post.addr or "",
                 giuroll=st.giuroll,
@@ -474,13 +491,9 @@ class Controller:
             self._last_sent_payload = None
             self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
 
-            if code == 401:
-                # セッション切れ。破棄すれば次の create は匿名で通る。
+            if code in (401, 403):
                 self._clear_expired_session()
-                self._next_create_ts = 0.0
-            elif code == 403:
-                self.log_sink("error", "Ranked recruitment requires Discord login.")
-                self.notify_sink("ランク募集には Discord ログインが必要です")
+                self.notify_sink("セッションが切れました。Discord に再ログインしてください")
             elif code == 409:
                 self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
                 self.notify_sink("募集に失敗しました: ポート開放または autopunch を確認してください")
@@ -538,7 +551,7 @@ class Controller:
                         session_token=self.api.session_token,
                         username=self.discord_user,
                     )
-                    self._notified_rank_login = False
+                    self._notified_login_required = False
                     self.log_sink("info", f"Discord にログインしました: {self.discord_user}")
                     return
             self.log_sink("warn", "Discord ログインがタイムアウトしました")
