@@ -65,9 +65,10 @@ DATABASE_URL=... ../bin/alembic revision --autogenerate -m "add xxx"
 クライアントはログインなしでも投稿できる。ログインすると投稿に Discord の
 表示名（`owner_name`）が載り、ロビーの User 列に表示される。
 
-**ロビー閲覧（`GET /posts`, `GET /sse/posts`）はログイン必須。**
-Web ページ（`GET /`）は未ログインでも開けるが、一覧は Discord ログイン後に
-表示される。Web ログインはクッキーセッション（`asobby_session`、有効期限 30 日）。
+**ロビー閲覧（`GET /posts`, `GET /sse/posts`）はログイン不要。**
+ランク付き募集 (E〜Ph) の投稿には Discord ログイン必須（対戦相手の同定が
+ランクマッチの前提のため）。無差別 (Any) はログイン不要。
+Web ページのログインはクッキーセッション（`asobby_session`、有効期限 30 日）。
 
 フローはデバイスコード方式:
 クライアントが `POST /auth/device` → ユーザーがブラウザで `verify_url` を開いて

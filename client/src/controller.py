@@ -82,6 +82,7 @@ class Controller:
         self.api.session_token = str(auth.get("session_token", ""))
         self.discord_user: str = str(auth.get("username", "")) if self.api.session_token else ""
         self._login_in_progress = False
+        self._notified_rank_login = False
 
     # -----------------
     # basic helpers
@@ -165,8 +166,20 @@ class Controller:
         match_status: str,
         net_status: int,
     ) -> dict:
+        rank = self.my_post.rank or "any"
+        if rank.strip().lower() not in ("", "any") and not self.is_logged_in():
+            if not self._notified_rank_login:
+                self._notified_rank_login = True
+                self.notify_sink(
+                    "ランク募集には Discord ログインが必要です。無差別 (Any) で募集します"
+                )
+                self.log_sink(
+                    "warn",
+                    "Ranked recruitment requires Discord login; falling back to any",
+                )
+            rank = "any"
         return {
-            "rank": self.my_post.rank or "any",
+            "rank": rank,
             "addr": addr,
             "comment": self.my_post.comment or "",
             "stream_url": self.my_post.stream_url or "",
@@ -446,6 +459,9 @@ class Controller:
                 # セッション切れ。破棄すれば次の create は匿名で通る。
                 self._clear_expired_session()
                 self._next_create_ts = 0.0
+            elif code == 403:
+                self.log_sink("error", "Ranked recruitment requires Discord login.")
+                self.notify_sink("ランク募集には Discord ログインが必要です")
             elif code == 409:
                 self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
                 self.notify_sink("募集に失敗しました: ポート開放または autopunch を確認してください")
@@ -503,6 +519,7 @@ class Controller:
                         session_token=self.api.session_token,
                         username=self.discord_user,
                     )
+                    self._notified_rank_login = False
                     self.log_sink("info", f"Discord にログインしました: {self.discord_user}")
                     return
             self.log_sink("warn", "Discord ログインがタイムアウトしました")

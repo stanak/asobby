@@ -429,6 +429,10 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
+def is_ranked(rank: str) -> bool:
+    return rank.strip().lower() not in ("", "any")
+
+
 def sorted_public_posts() -> list[dict[str, Any]]:
     records = sorted(RECORDS.values(), key=lambda r: r.post.updated_at, reverse=True)
     return [asdict(r.post) for r in records]
@@ -665,9 +669,7 @@ async def auth_me(request: Request) -> dict[str, Any]:
 
 
 @app.get("/posts")
-async def list_posts(request: Request) -> list[dict[str, Any]]:
-    if await resolve_session(request) is None:
-        raise HTTPException(status_code=401, detail="login required")
+async def list_posts() -> list[dict[str, Any]]:
     return sorted_public_posts()
 
 
@@ -681,15 +683,21 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
 
     parse_ipv4_addr_or_raise(body.addr)
 
-    # Discord ログインは任意。ただしヘッダがあるのに無効なら 401 を返して
-    # クライアントに期限切れセッションを破棄させる。
+    # Discord ログインは任意 (any 募集)。Bearer/クッキーがあれば resolve する。
+    # ヘッダがあるのに無効なら 401、ランク付き募集は有効セッション必須 (403)。
     owner_name = ""
     owner_avatar = ""
     owner_user_id = ""
-    if request.headers.get("authorization"):
-        sess = await resolve_session(request)
-        if sess is None:
-            raise HTTPException(status_code=401, detail="invalid or expired session")
+    has_auth_header = bool(request.headers.get("authorization"))
+    sess = await resolve_session(request)
+    if has_auth_header and sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    if is_ranked(body.rank) and sess is None:
+        raise HTTPException(
+            status_code=403,
+            detail="discord login required for ranked recruitment",
+        )
+    if sess is not None:
         owner_name = sess["name"]
         owner_avatar = sess["avatar"]
         owner_user_id = sess["id"]
@@ -747,6 +755,12 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     rec = get_record_or_raise(body.id, body.owner_token)
     p = rec.post
 
+    if is_ranked(body.rank) and rec.owner_user_id == "":
+        raise HTTPException(
+            status_code=403,
+            detail="discord login required for ranked recruitment",
+        )
+
     # 再ホスト等でアドレスが変わった場合のみ到達性を再確認する
     if body.addr != p.addr:
         await verify_hostable_or_raise(body.addr, autopunch=body.autopunch)
@@ -794,8 +808,6 @@ async def legacy_upsert() -> None:
 
 @app.get("/sse/posts")
 async def sse_posts(request: Request):
-    if await resolve_session(request) is None:
-        raise HTTPException(status_code=401, detail="login required")
     q = await HUB.subscribe()
 
     async def gen():

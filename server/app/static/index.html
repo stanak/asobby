@@ -55,31 +55,6 @@
   #auth-info a:hover { text-decoration: underline; }
   #status.connected::before { content: "●"; color: var(--ok); margin-right: 6px; }
   #status.disconnected::before { content: "●"; color: var(--err); margin-right: 6px; }
-  #login-gate {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 80px 20px;
-    text-align: center;
-  }
-  #login-gate p {
-    color: var(--muted);
-    margin: 0 0 24px;
-    max-width: 420px;
-    line-height: 1.6;
-  }
-  a.discord-login {
-    display: inline-block;
-    background: #5865F2;
-    color: #fff;
-    text-decoration: none;
-    font-size: 16px;
-    font-weight: 600;
-    padding: 14px 32px;
-    border-radius: 8px;
-  }
-  a.discord-login:hover { background: #4752c4; }
   .toolbar {
     display: flex;
     align-items: center;
@@ -200,11 +175,6 @@
   <div id="empty" hidden>現在募集はありません</div>
 </main>
 
-<div id="login-gate" hidden>
-  <p>ロビーの募集一覧を見るには Discord でログインしてください。<br>投稿の作成はログインなしでも可能です（クライアントアプリから）。</p>
-  <a class="discord-login" href="/auth/discord/web">Discord でログインして一覧を見る</a>
-</div>
-
 <script>
 "use strict";
 
@@ -221,9 +191,6 @@ const emptyEl = document.getElementById("empty");
 const countEl = document.getElementById("count");
 const statusEl = document.getElementById("status");
 const authInfoEl = document.getElementById("auth-info");
-const toolbarEl = document.getElementById("toolbar");
-const mainEl = document.getElementById("main-content");
-const loginGateEl = document.getElementById("login-gate");
 
 document.getElementById("rank-filter").addEventListener("change", (e) => {
   filterRank = e.target.value;
@@ -356,28 +323,26 @@ function showLoggedIn(user) {
   logout.href = "/auth/logout";
   logout.textContent = "ログアウト";
   authInfoEl.appendChild(logout);
-
   statusEl.hidden = false;
-  toolbarEl.hidden = false;
-  mainEl.hidden = false;
-  loginGateEl.hidden = true;
 }
 
 function showLoginRequired() {
-  authInfoEl.hidden = true;
-  statusEl.hidden = true;
-  toolbarEl.hidden = true;
-  mainEl.hidden = true;
-  loginGateEl.hidden = false;
+  authInfoEl.hidden = false;
+  authInfoEl.textContent = "";
+  const login = document.createElement("a");
+  login.href = "/auth/discord/web";
+  login.textContent = "Discord でログイン";
+  authInfoEl.appendChild(login);
+  statusEl.hidden = false;
 }
 
 async function initAuth() {
+  connect();
   try {
     const res = await fetch("/auth/me");
     if (res.ok) {
       const user = await res.json();
       showLoggedIn(user);
-      connect();
       return;
     }
   } catch (_) {}
