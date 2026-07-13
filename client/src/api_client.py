@@ -70,6 +70,18 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    async def upload_replay(self, data: bytes) -> dict:
+        r = await self.http.post(
+            f"{self.base}/replays/upload",
+            content=data,
+            headers={
+                **self._auth_headers(),
+                "Content-Type": "application/octet-stream",
+            },
+        )
+        r.raise_for_status()
+        return r.json()
+
     async def auth_device_start(self) -> dict:
         """Discord ログインを開始する。{"device_code", "verify_url", "expires_in", "interval"}"""
         r = await self.http.post(f"{self.base}/auth/device")

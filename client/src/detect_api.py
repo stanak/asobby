@@ -33,3 +33,6 @@ class DetectionState:
     btl_mode: Optional[int] = None
     lwin: Optional[int] = None
     rwin: Optional[int] = None
+
+    # th123.exe のフルパス (リプレイ保存先の解決用)
+    exe_path: str = ""

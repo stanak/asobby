@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from dataclasses import dataclass, replace
-from typing import Dict, Optional, Literal, Any
+from pathlib import Path
+from typing import Dict, Optional, Literal, Any, Tuple
 from collections import defaultdict
 
 import httpx
@@ -25,6 +27,11 @@ UPDATE_CHECK_INTERVAL_SEC = 6 * 3600
 # KO 直後の btl_mode==5 は短時間しか観測できないため、AlwaysRecordable と
 # 同じ 50ms でポーリングする（1 秒だと勝敗確定を取りこぼす）。
 DETECT_INTERVAL_SEC = 0.05
+
+REPLAY_MAX_BYTES = 300 * 1024
+REPLAY_POLL_INTERVAL_SEC = 2.0
+REPLAY_POLL_TIMEOUT_SEC = 60.0
+REPLAY_MTIME_MARGIN_SEC = 10.0
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -88,6 +95,11 @@ class Controller:
         self._login_in_progress = False
         self._notified_login_required = False
         self._notified_casual_fallback = False
+
+        self._battle_start_ts = 0.0
+        self._replay_pending = False
+        self._uploaded_replays: set[str] = set()
+        self._pending_replay_upload: Optional[Tuple[float, str]] = None
 
     # -----------------
     # basic helpers
@@ -258,6 +270,10 @@ class Controller:
             act = self.on_detect(st, my_ip=my_ip)
             if act:
                 await self._action_q.put(act)
+            if self._pending_replay_upload is not None:
+                battle_start_ts, exe_path = self._pending_replay_upload
+                self._pending_replay_upload = None
+                asyncio.create_task(self._upload_replay(battle_start_ts, exe_path))
             await asyncio.sleep(DETECT_INTERVAL_SEC)
 
     async def api_loop(self) -> None:
@@ -398,6 +414,31 @@ class Controller:
             self._result_reported = False
 
         # -----------------
+        # リプレイ収集 (ホスト/ゲスト両方)
+        # -----------------
+        is_net_battle = is_battle and st.net_side in ("host", "client")
+
+        if is_net_battle and self._battle_start_ts == 0.0:
+            if self._stable_for("battle_enter", 0.5, seen=True):
+                self._battle_start_ts = now
+
+        if (
+            is_net_battle
+            and st.btl_mode == 5
+            and st.lwin is not None
+            and st.rwin is not None
+            and 0 <= st.lwin <= 2
+            and 0 <= st.rwin <= 2
+            and (st.lwin == 2 or st.rwin == 2)
+        ):
+            self._replay_pending = True
+
+        if self._replay_pending and not is_net_battle:
+            self._replay_pending = False
+            self._pending_replay_upload = (self._battle_start_ts, st.exe_path)
+            self._battle_start_ts = 0.0
+
+        # -----------------
         # 1) recruiting -> create / update
         # -----------------
         if self._stable_for("recruiting", 3.0, seen=is_recruiting):
@@ -483,6 +524,101 @@ class Controller:
                 return Action("close", {"reason": "recruit_end"})
 
         return None
+
+    def _replay_candidate_dirs(self, exe_path: str) -> list[Path]:
+        p = Path(exe_path)
+        dirs = [p.parent / "replay"]
+        local_app = os.environ.get("LOCALAPPDATA", "")
+        if local_app and len(exe_path) >= 3 and exe_path[1] == ":":
+            rel = exe_path[3:]
+            parent_rel = str(Path(rel).parent)
+            dirs.append(Path(local_app) / "VirtualStore" / parent_rel / "replay")
+        return dirs
+
+    def _find_latest_replay(
+        self, dirs: list[Path], battle_start_ts: float
+    ) -> Optional[Path]:
+        cutoff = battle_start_ts - REPLAY_MTIME_MARGIN_SEC
+        candidates: list[Path] = []
+        for d in dirs:
+            if not d.is_dir():
+                continue
+            try:
+                for rep in d.glob("*.rep"):
+                    if str(rep) in self._uploaded_replays:
+                        continue
+                    try:
+                        if rep.stat().st_mtime >= cutoff:
+                            candidates.append(rep)
+                    except OSError:
+                        continue
+            except OSError:
+                continue
+        if not candidates:
+            return None
+        return max(candidates, key=lambda p: p.stat().st_mtime)
+
+    async def _upload_replay(self, battle_start_ts: float, exe_path: str) -> None:
+        if not self.is_logged_in():
+            self.log_sink("info", "Replay upload skipped: not logged in")
+            return
+        if not exe_path:
+            self.log_sink("info", "Replay upload skipped: exe path unknown")
+            return
+
+        dirs = self._replay_candidate_dirs(exe_path)
+        deadline = time.time() + REPLAY_POLL_TIMEOUT_SEC
+        chosen: Optional[Path] = None
+
+        while time.time() < deadline:
+            chosen = self._find_latest_replay(dirs, battle_start_ts)
+            if chosen is not None:
+                break
+            await asyncio.sleep(REPLAY_POLL_INTERVAL_SEC)
+
+        if chosen is None:
+            self.log_sink("info", "Replay file not found after battle")
+            return
+
+        await asyncio.sleep(REPLAY_POLL_INTERVAL_SEC)
+        try:
+            size1 = chosen.stat().st_size
+            await asyncio.sleep(REPLAY_POLL_INTERVAL_SEC)
+            size2 = chosen.stat().st_size
+            if size1 != size2:
+                self.log_sink("info", "Replay file still being written; skipping")
+                return
+        except OSError as e:
+            self.log_sink("error", f"Replay stat failed: {e}")
+            return
+
+        if size2 > REPLAY_MAX_BYTES:
+            self.log_sink("warn", f"Replay too large ({size2} bytes); skipping upload")
+            return
+
+        try:
+            data = chosen.read_bytes()
+        except OSError as e:
+            self.log_sink("error", f"Replay read failed: {e}")
+            return
+
+        try:
+            resp = await self.api.upload_replay(data)
+        except httpx.HTTPError as e:
+            self.log_sink("error", f"Replay upload failed: {e}")
+            return
+
+        stored = bool(resp.get("stored"))
+        if stored:
+            self.log_sink(
+                "info",
+                f"Replay uploaded: {resp.get('filename', chosen.name)}",
+            )
+        else:
+            reason = resp.get("reason", "unknown")
+            self.log_sink("info", f"Replay not stored: {reason}")
+
+        self._uploaded_replays.add(str(chosen))
 
     # -----------------
     # result / error handling

@@ -5,12 +5,13 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, SmallInteger, String, select
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, SmallInteger, String, exists, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -378,3 +379,57 @@ async def fetch_ranked_matches_at_current_rank(
             q = q.where(Match.played_at >= user.rank_changed_at)
         res = await s.execute(q)
         return list(res.scalars().all())
+
+
+async def find_recent_match_for_user(
+    user_id: str, within_sec: int = 900, *, require_no_replay: bool = True
+) -> Optional[Match]:
+    """直近の対戦を 1 件返す (played_at 降順)。
+
+    require_no_replay=True なら replays 未紐付けの match のみ。
+    """
+    cutoff = utcnow() - timedelta(seconds=within_sec)
+    replay_exists = exists().where(Replay.match_id == Match.id)
+    async with session() as s:
+        q = (
+            select(Match)
+            .where(
+                ((Match.host_user_id == user_id) | (Match.guest_user_id == user_id))
+                & (Match.winner != "")
+                & Match.played_at.is_not(None)
+                & (Match.played_at >= cutoff)
+            )
+            .order_by(Match.played_at.desc())
+            .limit(1)
+        )
+        if require_no_replay:
+            q = q.where(~replay_exists)
+        res = await s.execute(q)
+        return res.scalar_one_or_none()
+
+
+async def insert_replay(match_id: str, filename: str, data: bytes) -> bool:
+    """リプレイを insert する。unique 制約違反時は False。"""
+    async with session() as s:
+        try:
+            replay = Replay(
+                match_id=match_id,
+                filename=filename,
+                size=len(data),
+                data=data,
+            )
+            s.add(replay)
+            await s.commit()
+            return True
+        except IntegrityError:
+            await s.rollback()
+            return False
+
+
+async def replay_count_for_match(match_id: str) -> int:
+    """テスト用: match に紐づくリプレイ件数。"""
+    async with session() as s:
+        res = await s.execute(
+            select(Replay).where(Replay.match_id == match_id)
+        )
+        return len(list(res.scalars().all()))

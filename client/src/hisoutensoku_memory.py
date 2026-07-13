@@ -23,6 +23,7 @@ psapi = ctypes.WinDLL("psapi", use_last_error=True)
 
 PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 TH32CS_SNAPPROCESS = 0x00000002
 
@@ -210,6 +211,34 @@ kernel32.ReadProcessMemory.argtypes = [
 ]
 kernel32.ReadProcessMemory.restype = wt.BOOL
 
+kernel32.QueryFullProcessImageNameW.argtypes = [
+    wt.HANDLE,
+    wt.DWORD,
+    wt.LPWSTR,
+    ctypes.POINTER(wt.DWORD),
+]
+kernel32.QueryFullProcessImageNameW.restype = wt.BOOL
+
+
+def _get_process_exe_path(h: wt.HANDLE) -> str:
+    """プロセスハンドルから exe フルパスを取得する。"""
+    buf = ctypes.create_unicode_buffer(1024)
+    size = wt.DWORD(1024)
+    ok = kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size))
+    if not ok:
+        return ""
+    return buf.value
+
+
+def _get_exe_path_for_pid(pid: int) -> str:
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return ""
+    try:
+        return _get_process_exe_path(h)
+    finally:
+        kernel32.CloseHandle(h)
+
 
 def _open_process(pid: int) -> wt.HANDLE:
     h = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
@@ -320,18 +349,20 @@ def detect_tools_from_loaded_modules(pid: int) -> tuple[bool, bool]:
 _PID_CACHE_TTL_SEC = 2.0
 _pid_cache: Optional[int] = None
 _tools_cache: Tuple[bool, bool] = (False, False)
+_exe_path_cache: str = ""
 _pid_cache_ts: float = 0.0
 
 
-def _get_pid_and_tools() -> Tuple[Optional[int], bool, bool]:
-    global _pid_cache, _tools_cache, _pid_cache_ts
+def _get_pid_and_tools() -> Tuple[Optional[int], bool, bool, str]:
+    global _pid_cache, _tools_cache, _exe_path_cache, _pid_cache_ts
     now = time.monotonic()
     if (now - _pid_cache_ts) < _PID_CACHE_TTL_SEC:
-        return _pid_cache, _tools_cache[0], _tools_cache[1]
+        return _pid_cache, _tools_cache[0], _tools_cache[1], _exe_path_cache
     pid = get_hisoutensoku_pid_by_process_name()
     tools = detect_tools_from_loaded_modules(pid) if pid else (False, False)
-    _pid_cache, _tools_cache, _pid_cache_ts = pid, tools, now
-    return pid, tools[0], tools[1]
+    exe_path = _get_exe_path_for_pid(pid) if pid else ""
+    _pid_cache, _tools_cache, _exe_path_cache, _pid_cache_ts = pid, tools, exe_path, now
+    return pid, tools[0], tools[1], exe_path
 
 
 def _invalidate_pid_cache() -> None:
@@ -428,7 +459,7 @@ def _derive_net_side(scene_id: Optional[int]) -> Optional[str]:
 
 
 def read_detection_state() -> DetectionState:
-    pid, giu, ap = _get_pid_and_tools()
+    pid, giu, ap, exe_path = _get_pid_and_tools()
     if not pid:
         return DetectionState(
             alive=False,
@@ -443,6 +474,7 @@ def read_detection_state() -> DetectionState:
             lchar_name="?",
             rchar_name="?",
             net_side=None,
+            exe_path="",
         )
 
     try:
@@ -464,6 +496,7 @@ def read_detection_state() -> DetectionState:
             lchar_name="?",
             rchar_name="?",
             net_side=None,
+            exe_path="",
         )
 
     try:
@@ -519,6 +552,7 @@ def read_detection_state() -> DetectionState:
             btl_mode=btl_mode,
             lwin=lwin,
             rwin=rwin,
+            exe_path=exe_path,
         )
     finally:
         kernel32.CloseHandle(h)

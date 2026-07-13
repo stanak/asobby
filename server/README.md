@@ -15,6 +15,7 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `POST /posts/update` | 募集の更新。`id` + `owner_token` が必須 |
 | `POST /posts/close` | 募集の削除。`id` + `owner_token` が必須 |
 | `POST /posts/result` | 対戦勝敗の報告。`id` + `owner_token` + `winner` (`host`/`guest`/`draw`) |
+| `POST /replays/upload` | リプレイ (.rep) のアップロード。`Authorization: Bearer` 必須。body は生バイト |
 | `GET /sse/posts` | SSE。接続直後に `snapshot`、以後 `upsert` / `close` |
 | `POST /auth/device` | Discord ログイン開始。`device_code` と `verify_url` を返す |
 | `GET /auth/discord/start` | (ブラウザ用) Discord の認可画面へリダイレクト |
@@ -109,6 +110,15 @@ KO 報告 (`POST /posts/result`) には使用キャラとプロファイル名�
   - Ph: 昇降格なし。Ph 同士のランクマ対戦で TrueSkill レートを更新（表示レート = mu - 3σ）
 - 募集は「カジュアル」か「ランクマ」の 2 種類。ランクマ募集は**同じランクのログインユーザーにのみ** Web ロビーで表示される
 - 1 回のゲスト接続セッションでは**最初の 3 戦だけ**ランクマ扱い（以降はカジュアル同様に記録のみ）
+
+### リプレイ収集
+
+- asobby クライアントはネット対戦終了後、非想天則が保存した `.rep` を自動アップロードする
+- 1 対戦 (match) に対して 1 ファイルのみ保存される（両側クライアントがアップロードしても先着 1 件のみ）
+- ファイル名形式: `{日時JST}_{host_profile}-{host_char}_vs_{guest_profile}-{guest_char}_{result}.rep`
+  - `result`: ホスト勝ち `ox`、ゲスト勝ち `xo`、引き分け `xx`
+  - プロファイル名はファイル名に使えない文字を `_` に置換
+- アップロード上限 300KB。直近 15 分以内の未リプレイ対戦に紐付く
 
 ### 設定手順
 

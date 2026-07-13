@@ -7,6 +7,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import secrets
 import struct
 import threading
@@ -14,6 +15,7 @@ import time
 import socket
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
+from datetime import timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 from uuid import uuid4
@@ -64,6 +66,37 @@ RANK_LADDER: dict[str, dict[str, Any]] = {
 # 作成レート制限（IP 単位）
 CREATE_MIN_INTERVAL_SEC = 2.0
 MAX_ACTIVE_POSTS_PER_IP = 2
+
+# リプレイアップロード上限 (非想天則の .rep は通常 100KB 程度)
+REPLAY_MAX_BYTES = 300 * 1024
+
+# キャラ名 (client/src/hisoutensoku_memory.py の CHAR_NAME と同一)
+CHAR_NAME: dict[int, str] = {
+    0: "Reimu",
+    1: "Marisa",
+    2: "Sakuya",
+    3: "Alice",
+    4: "Patchouli",
+    5: "Youmu",
+    6: "Remilia",
+    7: "Yuyuko",
+    8: "Yukari",
+    9: "Suica",
+    10: "Reisen",
+    11: "Aya",
+    12: "Komachi",
+    13: "Iku",
+    14: "Tenshi",
+    15: "Sanae",
+    16: "Cirno",
+    17: "Meiling",
+    18: "Utsuho",
+    19: "Suwako",
+    20: "Random",
+}
+
+JST = timezone(timedelta(hours=9))
+_FILENAME_UNSAFE_RE = re.compile(r"[\x00-\x1f\\/:\"*?<>|]")
 
 # ホスト到達性検証 (UDP プローブ) の有効/無効。
 # 外向き UDP が一切通らない環境では off にする。
@@ -1072,6 +1105,69 @@ async def close_post(body: ClosePostIn) -> dict[str, Any]:
     del RECORDS[body.id]
     await HUB.publish("close", {"id": body.id, "reason": body.reason, "ts": now_ts()})
     return {"ok": True, "id": body.id}
+
+
+def _sanitize_profile_for_filename(profile: str) -> str:
+    """ファイル名に使うプロファイル名をサニタイズする。"""
+    s = _FILENAME_UNSAFE_RE.sub("_", profile or "").strip()
+    if not s:
+        return "unknown"
+    return s[:32]
+
+
+def _char_label(char_id: Optional[int]) -> str:
+    if char_id is None:
+        return "Unknown"
+    return CHAR_NAME.get(char_id, "Unknown")
+
+
+def build_replay_filename(match: db.Match) -> str:
+    """リプレイファイル名を生成する。"""
+    played = match.played_at or db.utcnow()
+    ts = played.astimezone(JST).strftime("%Y%m%d%H%M%S")
+    host_char = _char_label(match.host_char)
+    guest_char = _char_label(match.guest_char)
+    host_profile = _sanitize_profile_for_filename(match.host_profile)
+    guest_profile = _sanitize_profile_for_filename(match.guest_profile)
+    if match.winner == "host":
+        result = "ox"
+    elif match.winner == "guest":
+        result = "xo"
+    else:
+        result = "xx"
+    return (
+        f"{ts}_{host_profile}-{host_char}_vs_"
+        f"{guest_profile}-{guest_char}_{result}.rep"
+    )
+
+
+@app.post("/replays/upload")
+async def upload_replay(request: Request) -> dict[str, Any]:
+    """ログインユーザーの直近対戦リプレイを受け取る。"""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=422, detail="empty body")
+    if len(data) > REPLAY_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="replay too large")
+
+    match = await db.find_recent_match_for_user(sess["id"])
+    if match is None:
+        recent = await db.find_recent_match_for_user(
+            sess["id"], require_no_replay=False
+        )
+        if recent is not None and await db.replay_count_for_match(recent.id) > 0:
+            return {"ok": True, "stored": False, "reason": "duplicate"}
+        return {"ok": True, "stored": False, "reason": "no_match"}
+
+    filename = build_replay_filename(match)
+    stored = await db.insert_replay(match.id, filename, data)
+    if not stored:
+        return {"ok": True, "stored": False, "reason": "duplicate"}
+    return {"ok": True, "stored": True, "filename": filename}
 
 
 @app.post("/posts/result")
