@@ -165,6 +165,16 @@
         <tbody id="opp-profile-rows"></tbody>
       </table>
     </div>
+    <div class="panel" id="import-panel">
+      <h2>天則観インポート</h2>
+      <p style="color:var(--muted);font-size:14px;margin:0 0 12px;line-height:1.5">
+        天則観 (tsk) の戦績DB (.db) をアップロードすると過去の対戦が取り込まれます。
+        同じファイルを再アップロードしても重複しません。
+      </p>
+      <input type="file" id="tsk-file" accept=".db,application/x-sqlite3,application/octet-stream">
+      <button id="tsk-upload" style="margin-left:8px;padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">アップロード</button>
+      <div id="tsk-result" style="margin-top:12px;font-size:14px"></div>
+    </div>
   </div>
 </main>
 
@@ -308,6 +318,58 @@ function render(data) {
   fillCharTable(document.getElementById("my-char-rows"), data.by_my_char);
   fillCharTable(document.getElementById("opp-char-rows"), data.by_opp_char);
   fillProfileTable(document.getElementById("opp-profile-rows"), data.by_opp_profile);
+  setupTskImport();
+}
+
+function setupTskImport() {
+  const btn = document.getElementById("tsk-upload");
+  const fileInput = document.getElementById("tsk-file");
+  const resultEl = document.getElementById("tsk-result");
+  if (!btn || btn.dataset.bound) return;
+  btn.dataset.bound = "1";
+
+  btn.addEventListener("click", async () => {
+    const file = fileInput.files[0];
+    resultEl.textContent = "";
+    if (!file) {
+      resultEl.style.color = "var(--err)";
+      resultEl.textContent = "ファイルを選択してください";
+      return;
+    }
+    btn.disabled = true;
+    try {
+      const res = await fetch("/import/tensokukan", {
+        method: "POST",
+        body: file,
+        credentials: "same-origin",
+      });
+      if (!res.ok) {
+        resultEl.style.color = "var(--err)";
+        let detail = "";
+        try {
+          const err = await res.json();
+          detail = err.detail || JSON.stringify(err);
+        } catch (_) {
+          detail = res.statusText;
+        }
+        resultEl.textContent = `エラー (${res.status}): ${detail}`;
+        return;
+      }
+      const data = await res.json();
+      resultEl.style.color = "var(--ok)";
+      resultEl.textContent =
+        `取り込み: ${data.imported} 件 / 重複スキップ: ${data.skipped_duplicate} 件 / 不正スキップ: ${data.skipped_invalid} 件（全 ${data.total} 行）`;
+      if (data.imported > 0) {
+        const statsRes = await fetch("/stats/me", { credentials: "same-origin" });
+        if (statsRes.ok) render(await statsRes.json());
+      }
+    } catch (_) {
+      resultEl.style.color = "var(--err)";
+      resultEl.textContent = "アップロードに失敗しました";
+    } finally {
+      btn.disabled = false;
+    }
+  });
 }
 
 async function init() {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import bisect
 import hashlib
 import hmac
 import ipaddress
@@ -9,13 +10,15 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import struct
+import tempfile
 import threading
 import time
 import socket
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
-from datetime import timezone, timedelta
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 from uuid import uuid4
@@ -69,6 +72,16 @@ MAX_ACTIVE_POSTS_PER_IP = 2
 
 # リプレイアップロード上限 (非想天則の .rep は通常 100KB 程度)
 REPLAY_MAX_BYTES = 300 * 1024
+
+# 天則観 (tsk) 戦績 DB インポート上限
+TSK_IMPORT_MAX_BYTES = 32 * 1024 * 1024
+TSK_IMPORT_MAX_ROWS = 200_000
+TSK_SQLITE_MAGIC = b"SQLite format 3\x00"
+# FILETIME 下限: 2004-01-01 00:00:00 JST 相当
+TSK_FILETIME_MIN = int(
+    (datetime(2004, 1, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp() + 11644473600)
+    * 10_000_000
+)
 
 # キャラ名 (client/src/hisoutensoku_memory.py の CHAR_NAME と同一)
 CHAR_NAME: dict[int, str] = {
@@ -754,6 +767,220 @@ def compute_user_stats(matches: list[db.Match], user_id: str) -> dict[str, Any]:
         "by_my_char": _group_by_char(matches, user_id, mine=True),
         "by_opp_char": _group_by_char(matches, user_id, mine=False),
         "by_opp_profile": _group_by_profile(matches, user_id),
+    }
+
+
+def _filetime_to_played_at(ft: int) -> datetime:
+    """天則観 FILETIME (JST 壁時計) を UTC の played_at に変換する。"""
+    unix_like = ft / 10_000_000 - 11644473600
+    jst_dt = datetime.fromtimestamp(unix_like, tz=timezone.utc).replace(tzinfo=JST)
+    return jst_dt.astimezone(timezone.utc)
+
+
+def _decode_tsk_name(raw: bytes | str | None) -> str:
+    """天則観の CP932 プロファイル名をデコードする。"""
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw[:64]
+    try:
+        return raw.decode("cp932", errors="replace")[:64]
+    except Exception:
+        return ""
+
+
+def _tsk_match_id(user_id: str, ft: int) -> str:
+    return hashlib.md5(f"tsk:{user_id}:{ft}".encode()).hexdigest()
+
+
+def _dt_ts(dt: datetime) -> float:
+    """datetime を UTC タイムスタンプに正規化する (naive は UTC 扱い)。"""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc).timestamp()
+    return dt.timestamp()
+
+
+def _is_near_existing(
+    played_at: datetime,
+    existing_ts: list[float],
+    *,
+    window_sec: int = 60,
+) -> bool:
+    """existing_ts (昇順) に ±window_sec 以内の時刻があるか bisect で判定する。"""
+    if not existing_ts:
+        return False
+    ts = _dt_ts(played_at)
+    lo = bisect.bisect_left(existing_ts, ts - window_sec)
+    hi = bisect.bisect_right(existing_ts, ts + window_sec)
+    for i in range(lo, hi):
+        if abs(existing_ts[i] - ts) <= window_sec:
+            return True
+    return False
+
+
+def _parse_tsk_db(
+    data: bytes,
+    user_id: str,
+    existing_ids: set[str],
+    existing_ts: list[float],
+    now_ft: int,
+) -> tuple[list[dict[str, Any]], int, int, int]:
+    """天則観 SQLite を解析し、(insert 行, skipped_duplicate, skipped_invalid, total) を返す。"""
+    skipped_duplicate = 0
+    skipped_invalid = 0
+    total = 0
+    to_insert: list[dict[str, Any]] = []
+    seen_ids: set[str] = set(existing_ids)
+
+    tmp_path: Optional[str] = None
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+
+        conn = sqlite3.connect(f"file:{tmp_path}?mode=ro", uri=True)
+        conn.text_factory = bytes
+        cur = conn.cursor()
+
+        try:
+            cur.execute("SELECT COUNT(*) FROM trackrecord123")
+            total = int(cur.fetchone()[0])
+        except sqlite3.Error as e:
+            raise HTTPException(status_code=422, detail=f"invalid tsk database: {e}") from e
+
+        if total > TSK_IMPORT_MAX_ROWS:
+            raise HTTPException(status_code=413, detail="too many rows in tsk database")
+
+        cur.execute(
+            "SELECT timestamp, p1name, p1id, p1win, p2name, p2id, p2win "
+            "FROM trackrecord123"
+        )
+        for row in cur.fetchall():
+            ft, p1name, p1id, p1win, p2name, p2id, p2win = row
+
+            if not isinstance(ft, int):
+                skipped_invalid += 1
+                continue
+            if ft < TSK_FILETIME_MIN or ft > now_ft:
+                skipped_invalid += 1
+                continue
+
+            try:
+                p1id = int(p1id)
+                p2id = int(p2id)
+                p1win = int(p1win)
+                p2win = int(p2win)
+            except (TypeError, ValueError):
+                skipped_invalid += 1
+                continue
+
+            if not (0 <= p1win <= 2 and 0 <= p2win <= 2):
+                skipped_invalid += 1
+                continue
+            if p1win != 2 and p2win != 2:
+                skipped_invalid += 1
+                continue
+            if not (0 <= p1id <= 19 and 0 <= p2id <= 19):
+                skipped_invalid += 1
+                continue
+
+            match_id = _tsk_match_id(user_id, ft)
+            if match_id in seen_ids:
+                skipped_duplicate += 1
+                continue
+
+            played_at = _filetime_to_played_at(ft)
+            if _is_near_existing(played_at, existing_ts):
+                skipped_duplicate += 1
+                continue
+
+            winner = "host" if p1win == 2 else "guest"
+            to_insert.append({
+                "id": match_id,
+                "host_user_id": user_id,
+                "guest_user_id": None,
+                "host_ip": "",
+                "guest_ip": "",
+                "winner": winner,
+                "host_char": p1id,
+                "guest_char": p2id,
+                "host_profile": _decode_tsk_name(p1name),
+                "guest_profile": _decode_tsk_name(p2name),
+                "ranked": False,
+                "source": "import",
+                "played_at": played_at,
+            })
+            seen_ids.add(match_id)
+            bisect.insort(existing_ts, _dt_ts(played_at))
+
+        return to_insert, skipped_duplicate, skipped_invalid, total
+    finally:
+        if conn is not None:
+            conn.close()
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+@app.post("/import/tensokukan")
+async def import_tensokukan(request: Request) -> dict[str, Any]:
+    """天則観 (tsk) の SQLite 戦績 DB をインポートする。"""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    if not db.is_configured():
+        return {"ok": True, "imported": 0}
+
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=422, detail="empty body")
+    if len(data) > TSK_IMPORT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="tsk database too large")
+    if not data.startswith(TSK_SQLITE_MAGIC):
+        raise HTTPException(status_code=422, detail="not a sqlite database")
+
+    user_id = sess["id"]
+    # 現在+1日を FILETIME 上限にする (JST 壁時計)
+    now_jst = datetime.now(JST)
+    now_unix_like = datetime(
+        now_jst.year, now_jst.month, now_jst.day,
+        now_jst.hour, now_jst.minute, now_jst.second,
+        tzinfo=timezone.utc,
+    ).timestamp() + 86400
+    now_ft = int((now_unix_like + 11644473600) * 10_000_000)
+
+    existing_times = await db.fetch_user_match_times(user_id, exclude_source="import")
+    existing_ts = [_dt_ts(t) for t in existing_times]
+
+    # 解析は CPU/IO を食うのでワーカースレッドで行う (イベントループを塞がない)
+    parsed, dup1, inv, total = await asyncio.to_thread(
+        _parse_tsk_db, data, user_id, set(), list(existing_ts), now_ft
+    )
+    skipped_duplicate = dup1
+    skipped_invalid = inv
+
+    if parsed:
+        candidate_ids = [r["id"] for r in parsed]
+        existing_ids = await db.filter_existing_match_ids(candidate_ids)
+        if existing_ids:
+            filtered: list[dict[str, Any]] = []
+            for row in parsed:
+                if row["id"] in existing_ids:
+                    skipped_duplicate += 1
+                else:
+                    filtered.append(row)
+            parsed = filtered
+
+    imported = await db.bulk_insert_matches(parsed)
+    return {
+        "ok": True,
+        "imported": imported,
+        "skipped_duplicate": skipped_duplicate,
+        "skipped_invalid": skipped_invalid,
+        "total": total,
     }
 
 

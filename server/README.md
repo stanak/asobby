@@ -17,6 +17,7 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `POST /posts/result` | 対戦勝敗の報告。`id` + `owner_token` + `winner` (`host`/`guest`/`draw`) |
 | `POST /matches/report` | ゲスト側クライアントからの対戦結果補完報告。`Authorization: Bearer` 必須 |
 | `POST /replays/upload` | リプレイ (.rep) のアップロード。`Authorization: Bearer` 必須。body は生バイト |
+| `POST /import/tensokukan` | 天則観 (tsk) 戦績 DB (.db) のインポート。`Authorization: Bearer` またはクッキー必須。body は生バイト |
 | `GET /sse/posts` | SSE。接続直後に `snapshot`、以後 `upsert` / `close` |
 | `POST /auth/device` | Discord ログイン開始。`device_code` と `verify_url` を返す |
 | `GET /auth/discord/start` | (ブラウザ用) Discord の認可画面へリダイレクト |
@@ -104,6 +105,9 @@ KO 報告 (`POST /posts/result`) には使用キャラとプロファイル名�
 `ranked=False` でランク評価・TrueSkill 更新の対象外となる。
 ログインユーザーは `/stats` で総合勝率、直近 30 / 50 / 100 戦の勝率、
 自キャラ別・対戦相手キャラ別・対戦相手プロファイル別の勝率を閲覧できる。
+天則観 (AlwaysRecordable/tsk) の SQLite 戦績 DB (.db) を `POST /import/tensokukan` で
+取り込める。天則観の p1 (自分) は asobby 側のホスト欄に格納され、カジュアル扱い
+(`ranked=False`) となる。同じ DB を再アップロードしても決定的 ID により重複しない。
 
 ### ランクマッチ
 

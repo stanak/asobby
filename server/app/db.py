@@ -508,3 +508,48 @@ async def replay_count_for_match(match_id: str) -> int:
             select(Replay).where(Replay.match_id == match_id)
         )
         return len(list(res.scalars().all()))
+
+
+async def filter_existing_match_ids(ids: list[str]) -> set[str]:
+    """matches に既に存在する id を一括取得する (IN 句は 1000 件ずつ)。"""
+    if not ids:
+        return set()
+    found: set[str] = set()
+    async with session() as s:
+        for i in range(0, len(ids), 1000):
+            chunk = ids[i : i + 1000]
+            res = await s.execute(select(Match.id).where(Match.id.in_(chunk)))
+            found.update(res.scalars().all())
+    return found
+
+
+async def fetch_user_match_times(
+    user_id: str, exclude_source: str = "import"
+) -> list[datetime]:
+    """ユーザーの確定済み対戦の played_at を昇順で返す (天則観インポートの重複判定用)。"""
+    async with session() as s:
+        res = await s.execute(
+            select(Match.played_at)
+            .where(
+                ((Match.host_user_id == user_id) | (Match.guest_user_id == user_id))
+                & (Match.winner != "")
+                & Match.played_at.is_not(None)
+                & (Match.source != exclude_source)
+            )
+            .order_by(Match.played_at.asc())
+        )
+        return [t for t in res.scalars().all() if t is not None]
+
+
+async def bulk_insert_matches(rows: list[dict]) -> int:
+    """matches を一括 insert する (500 件ずつ commit)。挿入件数を返す。"""
+    if not rows:
+        return 0
+    inserted = 0
+    async with session() as s:
+        for i in range(0, len(rows), 500):
+            chunk = rows[i : i + 500]
+            s.add_all(Match(**row) for row in chunk)
+            await s.commit()
+            inserted += len(chunk)
+    return inserted
