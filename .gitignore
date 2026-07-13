@@ -36,3 +36,6 @@ server/data/
 server/uploads/
 server/postgres_data/
 server/redis_data/
+
+# ローカル戦績 DB
+matches.db

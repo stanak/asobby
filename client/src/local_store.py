@@ -326,3 +326,7 @@ class LocalStore:
         if row.get("my_side") == "host":
             return str(row.get("guest_profile", "") or "")
         return str(row.get("host_profile", "") or "")
+
+    def fetch_all(self) -> list[dict]:
+        """全戦績を played_at 降順で返す（ビューアの一括読込用）。"""
+        return self.query()

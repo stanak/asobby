@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from local_store import LocalStore
 
@@ -30,7 +31,7 @@ CHAR_NAME: dict[int, str] = {
     19: "Suwako",
 }
 
-CHAR_OPTIONS = ["すべて"] + [CHAR_NAME[i] for i in range(20)]
+_ALL_IID = "__all__"
 
 _open_window: Any = None
 
@@ -41,40 +42,124 @@ def _char_label(cid: int | None) -> str:
     return CHAR_NAME.get(cid, f"CHAR_{cid}")
 
 
-def _char_id_from_label(label: str) -> int | None:
-    if label == "すべて":
-        return None
-    for cid, name in CHAR_NAME.items():
-        if name == label:
-            return cid
-    return None
-
-
 def _result_symbol(row: dict) -> str:
     if LocalStore.is_draw(row):
         return "△"
     return "○" if LocalStore.is_my_win(row) else "×"
 
 
-def _summary_text(rows: list[dict]) -> str:
-    total = len(rows)
+@dataclass
+class FilterState:
+    """ファセット絞り込み状態。"""
+
+    my_char: int | None = None
+    opp_char: int | None = None
+    opp_profile: str | None = None
+    ranked_only: bool = False
+    profile_search: str = ""
+
+
+@dataclass
+class MatchSummary:
+    total: int
+    wins: int
+    losses: int
+    draws: int
+    win_rate: float
+    recent_rates: dict[int, float] = field(default_factory=dict)
+
+
+@dataclass
+class AggRow:
+    key: Any
+    label: str
+    total: int
+    wins: int
+    losses: int
+    draws: int
+    win_rate: float
+
+
+def _count_results(rows: list[dict]) -> tuple[int, int, int]:
     wins = sum(1 for r in rows if LocalStore.is_my_win(r))
-    losses = sum(
-        1
-        for r in rows
-        if not LocalStore.is_my_win(r) and not LocalStore.is_draw(r)
-    )
     draws = sum(1 for r in rows if LocalStore.is_draw(r))
-    rate = (wins / total * 100) if total else 0.0
-    return f"{total} 戦 {wins} 勝 {losses} 敗 勝率 {rate:.1f}% (引分 {draws})"
+    losses = len(rows) - wins - draws
+    return wins, losses, draws
 
 
-def _aggregate_by_key(
+def _win_rate(wins: int, losses: int) -> float:
+    decided = wins + losses
+    return (wins / decided * 100) if decided else 0.0
+
+
+def apply_filter_state(
+    rows: list[dict],
+    state: FilterState,
+    *,
+    skip: frozenset[str] = frozenset(),
+) -> list[dict]:
+    """フィルタ状態を適用する。skip に指定した次元は無視（ファセット集計用）。"""
+    out = rows
+    if state.ranked_only:
+        out = [r for r in out if r.get("ranked")]
+    if state.profile_search and "profile_search" not in skip:
+        needle = state.profile_search.casefold()
+        out = [
+            r
+            for r in out
+            if needle in LocalStore.opp_profile(r).casefold()
+        ]
+    if state.my_char is not None and "my_char" not in skip:
+        out = [r for r in out if LocalStore.my_char_id(r) == state.my_char]
+    if state.opp_char is not None and "opp_char" not in skip:
+        out = [r for r in out if LocalStore.opp_char_id(r) == state.opp_char]
+    if state.opp_profile is not None and "opp_profile" not in skip:
+        out = [
+            r
+            for r in out
+            if LocalStore.opp_profile(r) == state.opp_profile
+        ]
+    return out
+
+
+def compute_summary(rows: list[dict], recent_sizes: tuple[int, ...] = (30, 50, 100)) -> MatchSummary:
+    """勝敗サマリと直近 N 戦の勝率を計算する。勝率分母は勝+負（引分除外）。"""
+    wins, losses, draws = _count_results(rows)
+    sorted_rows = sorted(rows, key=lambda r: r["played_at"], reverse=True)
+    recent_rates: dict[int, float] = {}
+    for n in recent_sizes:
+        chunk = sorted_rows[:n]
+        cw, cl, _ = _count_results(chunk)
+        recent_rates[n] = _win_rate(cw, cl)
+    return MatchSummary(
+        total=len(rows),
+        wins=wins,
+        losses=losses,
+        draws=draws,
+        win_rate=_win_rate(wins, losses),
+        recent_rates=recent_rates,
+    )
+
+
+def format_summary_text(summary: MatchSummary) -> str:
+    parts = [
+        f"{summary.total} 戦 {summary.wins} 勝 {summary.losses} 敗",
+        f"勝率 {summary.win_rate:.1f}% (引分 {summary.draws})",
+    ]
+    recent_parts = [
+        f"直近{n}: {summary.recent_rates.get(n, 0.0):.1f}%"
+        for n in (30, 50, 100)
+    ]
+    return "　".join([" ".join(parts), " / ".join(recent_parts)])
+
+
+def _aggregate_rows(
     rows: list[dict],
     key_fn: Callable[[dict], Any],
+    label_fn: Callable[[Any], str],
     *,
-    sort_key: Callable[[tuple], Any],
-) -> list[tuple]:
+    sort_key: Callable[[AggRow], Any],
+) -> list[AggRow]:
     stats: dict[Any, list[int]] = defaultdict(lambda: [0, 0, 0])
     for row in rows:
         key = key_fn(row)
@@ -83,13 +168,67 @@ def _aggregate_by_key(
             stats[key][2] += 1
         elif LocalStore.is_my_win(row):
             stats[key][1] += 1
-    out: list[tuple] = []
+    out: list[AggRow] = []
     for key, (total, wins, draws) in stats.items():
         losses = total - wins - draws
-        rate = (wins / total * 100) if total else 0.0
-        out.append((key, total, wins, losses, rate))
+        out.append(
+            AggRow(
+                key=key,
+                label=label_fn(key),
+                total=total,
+                wins=wins,
+                losses=losses,
+                draws=draws,
+                win_rate=_win_rate(wins, losses),
+            )
+        )
     out.sort(key=sort_key, reverse=True)
     return out
+
+
+def aggregate_by_my_char(rows: list[dict]) -> list[AggRow]:
+    return _aggregate_rows(
+        rows,
+        key_fn=lambda r: LocalStore.my_char_id(r),
+        label_fn=_char_label,
+        sort_key=lambda a: a.total,
+    )
+
+
+def aggregate_by_opp_char(rows: list[dict]) -> list[AggRow]:
+    return _aggregate_rows(
+        rows,
+        key_fn=lambda r: LocalStore.opp_char_id(r),
+        label_fn=_char_label,
+        sort_key=lambda a: a.total,
+    )
+
+
+def aggregate_by_opp_profile(rows: list[dict]) -> list[AggRow]:
+    return _aggregate_rows(
+        rows,
+        key_fn=lambda r: LocalStore.opp_profile(r) or "",
+        label_fn=lambda p: p or "(不明)",
+        sort_key=lambda a: a.total,
+    )
+
+
+def format_filter_label(state: FilterState) -> str:
+    parts: list[str] = []
+    if state.my_char is not None:
+        parts.append(f"自キャラ={_char_label(state.my_char)}")
+    if state.opp_char is not None:
+        parts.append(f"相手={_char_label(state.opp_char)}")
+    if state.opp_profile is not None:
+        label = state.opp_profile or "(不明)"
+        parts.append(f"相手プロファイル={label}")
+    if state.profile_search:
+        parts.append(f"プロファイル検索={state.profile_search}")
+    if state.ranked_only:
+        parts.append("ランクマのみ")
+    if not parts:
+        return "絞り込みなし"
+    return "絞り込み: " + " / ".join(parts)
 
 
 def open_stats_window(parent, local_store: LocalStore) -> None:
@@ -104,7 +243,9 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
             if _open_window.winfo_exists():
                 _open_window.lift()
                 _open_window.attributes("-topmost", True)
-                _open_window.after(100, lambda: _open_window.attributes("-topmost", False))
+                _open_window.after(
+                    100, lambda: _open_window.attributes("-topmost", False)
+                )
                 _open_window.focus_force()
                 return
         except tk.TclError:
@@ -112,58 +253,107 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
 
     win = tk.Toplevel(parent)
     win.title("asobby 戦績")
-    win.geometry("900x600")
+    win.geometry("1100x700")
     _open_window = win
 
-    my_char_var = tk.StringVar(value="すべて")
-    opp_char_var = tk.StringVar(value="すべて")
-    opp_profile_var = tk.StringVar(value="")
-    ranked_var = tk.BooleanVar(value=False)
+    all_rows: list[dict] = []
+    filter_state = FilterState()
+    _updating = False
+    _click_iid: dict[int, str | None] = {}
+
+    filter_label_var = tk.StringVar(value="絞り込みなし")
     summary_var = tk.StringVar(value="")
+    ranked_var = tk.BooleanVar(value=False)
+    profile_search_var = tk.StringVar(value="")
 
-    filter_frame = ttk.Frame(win, padding=(8, 8, 8, 4))
-    filter_frame.pack(fill="x")
+    # --- 上部バー ---
+    top_frame = ttk.Frame(win, padding=(8, 8, 8, 4))
+    top_frame.pack(fill="x")
 
-    ttk.Label(filter_frame, text="自キャラ:").grid(row=0, column=0, padx=(0, 4))
-    my_char_box = ttk.Combobox(
-        filter_frame,
-        textvariable=my_char_var,
-        values=CHAR_OPTIONS,
-        state="readonly",
-        width=12,
-    )
-    my_char_box.grid(row=0, column=1, padx=(0, 12))
+    ttk.Label(top_frame, textvariable=filter_label_var).pack(side="left", padx=(0, 12))
 
-    ttk.Label(filter_frame, text="相手キャラ:").grid(row=0, column=2, padx=(0, 4))
-    opp_char_box = ttk.Combobox(
-        filter_frame,
-        textvariable=opp_char_var,
-        values=CHAR_OPTIONS,
-        state="readonly",
-        width=12,
-    )
-    opp_char_box.grid(row=0, column=3, padx=(0, 12))
+    def clear_filters() -> None:
+        filter_state.my_char = None
+        filter_state.opp_char = None
+        filter_state.opp_profile = None
+        refresh_view()
 
-    ttk.Label(filter_frame, text="相手プロファイル:").grid(row=0, column=4, padx=(0, 4))
-    opp_profile_entry = ttk.Entry(filter_frame, textvariable=opp_profile_var, width=18)
-    opp_profile_entry.grid(row=0, column=5, padx=(0, 12))
+    ttk.Button(top_frame, text="クリア", command=clear_filters).pack(side="left", padx=(0, 8))
 
-    ranked_chk = ttk.Checkbutton(filter_frame, text="ランクマのみ", variable=ranked_var)
-    ranked_chk.grid(row=0, column=6, padx=(0, 8))
+    ranked_chk = ttk.Checkbutton(top_frame, text="ランクマのみ", variable=ranked_var)
+    ranked_chk.pack(side="left", padx=(0, 8))
 
+    ttk.Label(top_frame, text="プロファイル検索:").pack(side="left", padx=(8, 4))
+    profile_search_entry = ttk.Entry(top_frame, textvariable=profile_search_var, width=16)
+    profile_search_entry.pack(side="left", padx=(0, 8))
+
+    def apply_profile_search(_event=None) -> None:
+        filter_state.profile_search = profile_search_var.get().strip()
+        refresh_view()
+
+    profile_search_entry.bind("<Return>", apply_profile_search)
+
+    ttk.Button(top_frame, text="更新", command=lambda: reload_data()).pack(side="right")
+
+    # --- サマリ行 ---
     summary_label = ttk.Label(win, textvariable=summary_var, padding=(8, 4))
     summary_label.pack(fill="x")
 
-    notebook = ttk.Notebook(win)
-    notebook.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+    # --- 中段: ファセット ---
+    facet_pane = ttk.PanedWindow(win, orient="horizontal")
+    facet_pane.pack(fill="both", expand=True, padx=8, pady=(0, 4))
 
-    # --- 対戦履歴タブ ---
-    history_frame = ttk.Frame(notebook)
-    notebook.add(history_frame, text="対戦履歴")
+    stat_cols = ("label", "total", "wins", "losses", "rate")
+    stat_headings = ("キャラ", "対戦数", "勝", "負", "勝率")
+
+    def _make_facet_frame(title: str) -> tuple[ttk.Frame, ttk.Treeview]:
+        frame = ttk.LabelFrame(facet_pane, text=title, padding=4)
+        facet_pane.add(frame, weight=1)
+        tree = ttk.Treeview(frame, columns=stat_cols, show="headings", height=10)
+        for col, text in zip(stat_cols, stat_headings):
+            tree.heading(col, text=text)
+        tree.column("label", width=100, anchor="w")
+        tree.column("total", width=60, anchor="e")
+        tree.column("wins", width=40, anchor="e")
+        tree.column("losses", width=40, anchor="e")
+        tree.column("rate", width=60, anchor="e")
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        tree.tag_configure("high", foreground="#1a7f37")
+        tree.tag_configure("low", foreground="#cf222e")
+        return frame, tree
+
+    _, my_char_tree = _make_facet_frame("自キャラ別")
+    _, opp_char_tree = _make_facet_frame("相手キャラ別")
+
+    prof_frame = ttk.LabelFrame(facet_pane, text="相手プロファイル別", padding=4)
+    facet_pane.add(prof_frame, weight=1)
+    prof_cols = ("label", "total", "wins", "losses", "rate")
+    prof_headings = ("プロファイル", "対戦数", "勝", "負", "勝率")
+    opp_prof_tree = ttk.Treeview(prof_frame, columns=prof_cols, show="headings", height=10)
+    for col, text in zip(prof_cols, prof_headings):
+        opp_prof_tree.heading(col, text=text)
+    opp_prof_tree.column("label", width=140, anchor="w")
+    opp_prof_tree.column("total", width=60, anchor="e")
+    opp_prof_tree.column("wins", width=40, anchor="e")
+    opp_prof_tree.column("losses", width=40, anchor="e")
+    opp_prof_tree.column("rate", width=60, anchor="e")
+    prof_scroll = ttk.Scrollbar(prof_frame, orient="vertical", command=opp_prof_tree.yview)
+    opp_prof_tree.configure(yscrollcommand=prof_scroll.set)
+    opp_prof_tree.pack(side="left", fill="both", expand=True)
+    prof_scroll.pack(side="right", fill="y")
+    opp_prof_tree.tag_configure("high", foreground="#1a7f37")
+    opp_prof_tree.tag_configure("low", foreground="#cf222e")
+
+    # --- 下段: 対戦履歴 ---
+    history_frame = ttk.LabelFrame(win, text="対戦履歴", padding=4)
+    history_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
     history_cols = ("played_at", "my_char", "opp_char", "opp_profile", "result", "ranked")
     history_tree = ttk.Treeview(
-        history_frame, columns=history_cols, show="headings", height=20
+        history_frame, columns=history_cols, show="headings", height=12
     )
     history_tree.heading("played_at", text="日時")
     history_tree.heading("my_char", text="自キャラ")
@@ -171,142 +361,239 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
     history_tree.heading("opp_profile", text="相手プロファイル")
     history_tree.heading("result", text="勝敗")
     history_tree.heading("ranked", text="ランクマ")
-    history_tree.column("played_at", width=140, anchor="w")
-    history_tree.column("my_char", width=90, anchor="w")
-    history_tree.column("opp_char", width=90, anchor="w")
-    history_tree.column("opp_profile", width=200, anchor="w")
-    history_tree.column("result", width=50, anchor="center")
-    history_tree.column("ranked", width=60, anchor="center")
-
+    history_tree.column("played_at", width=90, anchor="w")
+    history_tree.column("my_char", width=80, anchor="w")
+    history_tree.column("opp_char", width=80, anchor="w")
+    history_tree.column("opp_profile", width=180, anchor="w")
+    history_tree.column("result", width=40, anchor="center")
+    history_tree.column("ranked", width=50, anchor="center")
     history_scroll = ttk.Scrollbar(history_frame, orient="vertical", command=history_tree.yview)
     history_tree.configure(yscrollcommand=history_scroll.set)
     history_tree.pack(side="left", fill="both", expand=True)
     history_scroll.pack(side="right", fill="y")
 
-    # --- 自キャラ別タブ ---
-    my_char_frame = ttk.Frame(notebook)
-    notebook.add(my_char_frame, text="自キャラ別")
-    my_char_cols = ("char", "total", "wins", "losses", "rate")
-    my_char_tree = ttk.Treeview(my_char_frame, columns=my_char_cols, show="headings")
-    for col, text in zip(my_char_cols, ("キャラ", "対戦数", "勝", "負", "勝率")):
-        my_char_tree.heading(col, text=text)
-    my_char_tree.column("char", width=120)
-    my_char_tree.column("total", width=80, anchor="e")
-    my_char_tree.column("wins", width=60, anchor="e")
-    my_char_tree.column("losses", width=60, anchor="e")
-    my_char_tree.column("rate", width=80, anchor="e")
-    my_char_scroll = ttk.Scrollbar(my_char_frame, orient="vertical", command=my_char_tree.yview)
-    my_char_tree.configure(yscrollcommand=my_char_scroll.set)
-    my_char_tree.pack(side="left", fill="both", expand=True)
-    my_char_scroll.pack(side="right", fill="y")
-
-    # --- 相手キャラ別タブ ---
-    opp_char_frame = ttk.Frame(notebook)
-    notebook.add(opp_char_frame, text="相手キャラ別")
-    opp_char_tree = ttk.Treeview(opp_char_frame, columns=my_char_cols, show="headings")
-    for col, text in zip(my_char_cols, ("キャラ", "対戦数", "勝", "負", "勝率")):
-        opp_char_tree.heading(col, text=text)
-    opp_char_tree.column("char", width=120)
-    opp_char_tree.column("total", width=80, anchor="e")
-    opp_char_tree.column("wins", width=60, anchor="e")
-    opp_char_tree.column("losses", width=60, anchor="e")
-    opp_char_tree.column("rate", width=80, anchor="e")
-    opp_char_scroll = ttk.Scrollbar(opp_char_frame, orient="vertical", command=opp_char_tree.yview)
-    opp_char_tree.configure(yscrollcommand=opp_char_scroll.set)
-    opp_char_tree.pack(side="left", fill="both", expand=True)
-    opp_char_scroll.pack(side="right", fill="y")
-
-    # --- 相手プロファイル別タブ ---
-    opp_prof_frame = ttk.Frame(notebook)
-    notebook.add(opp_prof_frame, text="相手プロファイル別")
-    opp_prof_cols = ("profile", "total", "wins", "losses", "rate")
-    opp_prof_tree = ttk.Treeview(opp_prof_frame, columns=opp_prof_cols, show="headings")
-    for col, text in zip(opp_prof_cols, ("プロファイル", "対戦数", "勝", "負", "勝率")):
-        opp_prof_tree.heading(col, text=text)
-    opp_prof_tree.column("profile", width=220)
-    opp_prof_tree.column("total", width=80, anchor="e")
-    opp_prof_tree.column("wins", width=60, anchor="e")
-    opp_prof_tree.column("losses", width=60, anchor="e")
-    opp_prof_tree.column("rate", width=80, anchor="e")
-    opp_prof_scroll = ttk.Scrollbar(opp_prof_frame, orient="vertical", command=opp_prof_tree.yview)
-    opp_prof_tree.configure(yscrollcommand=opp_prof_scroll.set)
-    opp_prof_tree.pack(side="left", fill="both", expand=True)
-    opp_prof_scroll.pack(side="right", fill="y")
-
     def _clear_tree(tree: ttk.Treeview) -> None:
         for item in tree.get_children():
             tree.delete(item)
 
-    def refresh() -> None:
-        rows = local_store.query(
-            my_char=_char_id_from_label(my_char_var.get()),
-            opp_char=_char_id_from_label(opp_char_var.get()),
-            opp_profile_like=opp_profile_var.get().strip(),
-            ranked_only=ranked_var.get(),
+    def _rate_tag(rate: float) -> tuple[str, ...]:
+        if rate >= 60:
+            return ("high",)
+        if rate <= 40:
+            return ("low",)
+        return ()
+
+    def _char_iid(cid: int | None) -> str:
+        return _ALL_IID if cid is None else f"char_{cid}"
+
+    def _prof_iid(profile_key: str) -> str:
+        return f"prof_{hash(profile_key) & 0xFFFFFFFF:08x}"
+
+    def _populate_facet_tree(
+        tree: ttk.Treeview,
+        agg_rows: list[AggRow],
+        *,
+        selected_key: Any,
+        key_to_iid: Callable[[Any], str],
+    ) -> None:
+        _clear_tree(tree)
+        tree.insert(
+            "",
+            "end",
+            iid=_ALL_IID,
+            values=("(すべて)", "", "", "", ""),
         )
-        summary_var.set(_summary_text(rows))
-
-        _clear_tree(history_tree)
-        for row in rows:
-            played = datetime.fromtimestamp(row["played_at"]).strftime("%Y-%m-%d %H:%M")
-            history_tree.insert(
+        select_iid = _ALL_IID
+        for agg in agg_rows:
+            iid = key_to_iid(agg.key)
+            tags = _rate_tag(agg.win_rate)
+            tree.insert(
                 "",
                 "end",
+                iid=iid,
                 values=(
-                    played,
-                    _char_label(LocalStore.my_char_id(row)),
-                    _char_label(LocalStore.opp_char_id(row)),
-                    LocalStore.opp_profile(row),
-                    _result_symbol(row),
-                    "o" if row.get("ranked") else "x",
+                    agg.label,
+                    agg.total,
+                    agg.wins,
+                    agg.losses,
+                    f"{agg.win_rate:.1f}%",
                 ),
+                tags=tags,
+            )
+            if agg.key == selected_key:
+                select_iid = iid
+        tree.selection_set(select_iid)
+        tree.focus(select_iid)
+        tree.see(select_iid)
+
+    def refresh_view() -> None:
+        nonlocal _updating
+        _updating = True
+        try:
+            filter_state.ranked_only = ranked_var.get()
+            filter_label_var.set(format_filter_label(filter_state))
+
+            filtered = apply_filter_state(all_rows, filter_state)
+            summary_var.set(format_summary_text(compute_summary(filtered)))
+
+            my_rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"my_char"}))
+            opp_rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"opp_char"}))
+            prof_rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"opp_profile"}))
+
+            _populate_facet_tree(
+                my_char_tree,
+                aggregate_by_my_char(my_rows),
+                selected_key=filter_state.my_char,
+                key_to_iid=lambda k: _char_iid(k),
+            )
+            _populate_facet_tree(
+                opp_char_tree,
+                aggregate_by_opp_char(opp_rows),
+                selected_key=filter_state.opp_char,
+                key_to_iid=lambda k: _char_iid(k),
+            )
+            _populate_facet_tree(
+                opp_prof_tree,
+                aggregate_by_opp_profile(prof_rows),
+                selected_key=filter_state.opp_profile,
+                key_to_iid=_prof_iid,
             )
 
-        _clear_tree(my_char_tree)
-        for key, total, wins, losses, rate in _aggregate_by_key(
-            rows,
-            lambda r: _char_label(LocalStore.my_char_id(r)),
-            sort_key=lambda x: x[4],
-        ):
-            my_char_tree.insert(
-                "",
-                "end",
-                values=(key, total, wins, losses, f"{rate:.1f}%"),
+            _clear_tree(history_tree)
+            history_sorted = sorted(filtered, key=lambda r: r["played_at"], reverse=True)
+            for row in history_sorted:
+                played = datetime.fromtimestamp(row["played_at"]).strftime("%m-%d %H:%M")
+                history_tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        played,
+                        _char_label(LocalStore.my_char_id(row)),
+                        _char_label(LocalStore.opp_char_id(row)),
+                        LocalStore.opp_profile(row),
+                        _result_symbol(row),
+                        "o" if row.get("ranked") else "x",
+                    ),
+                )
+        finally:
+            _updating = False
+
+    def reload_data() -> None:
+        nonlocal all_rows
+        all_rows = local_store.fetch_all()
+        refresh_view()
+
+    def _on_tree_button1(event: tk.Event) -> None:
+        tree = event.widget
+        iid = tree.identify_row(event.y)
+        _click_iid[id(tree)] = iid if iid else None
+
+    def _parse_char_iid(iid: str) -> int | None:
+        if iid == _ALL_IID:
+            return None
+        if iid.startswith("char_"):
+            return int(iid[5:])
+        return None
+
+    def _parse_prof_iid(iid: str, rows: list[AggRow]) -> str | None:
+        if iid == _ALL_IID:
+            return None
+        for agg in rows:
+            if _prof_iid(agg.key) == iid:
+                return agg.key
+        return None
+
+    def _handle_facet_select(
+        tree: ttk.Treeview,
+        *,
+        dimension: str,
+        get_current: Callable[[], Any],
+        set_value: Callable[[Any], None],
+        get_agg_rows: Callable[[], list[AggRow]],
+        parse_iid: Callable[[str], Any],
+    ) -> None:
+        if _updating:
+            return
+        sel = tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        clicked = _click_iid.get(id(tree))
+        current_iid = (
+            _char_iid(get_current())
+            if dimension in ("my_char", "opp_char")
+            else (
+                _ALL_IID
+                if get_current() is None
+                else _prof_iid(get_current())
             )
+        )
+        if iid == _ALL_IID or (iid == clicked and iid == current_iid):
+            set_value(None)
+        else:
+            set_value(parse_iid(iid))
+        refresh_view()
 
-        _clear_tree(opp_char_tree)
-        for key, total, wins, losses, rate in _aggregate_by_key(
-            rows,
-            lambda r: _char_label(LocalStore.opp_char_id(r)),
-            sort_key=lambda x: x[4],
-        ):
-            opp_char_tree.insert(
-                "",
-                "end",
-                values=(key, total, wins, losses, f"{rate:.1f}%"),
-            )
+    def _bind_facet_tree(
+        tree: ttk.Treeview,
+        *,
+        dimension: str,
+        get_current: Callable[[], Any],
+        set_value: Callable[[Any], None],
+        get_agg_rows: Callable[[], list[AggRow]],
+        parse_iid: Callable[[str], Any],
+    ) -> None:
+        tree.bind("<Button-1>", _on_tree_button1, add="+")
+        tree.bind(
+            "<<TreeviewSelect>>",
+            lambda _e: _handle_facet_select(
+                tree,
+                dimension=dimension,
+                get_current=get_current,
+                set_value=set_value,
+                get_agg_rows=get_agg_rows,
+                parse_iid=parse_iid,
+            ),
+        )
 
-        _clear_tree(opp_prof_tree)
-        for key, total, wins, losses, rate in _aggregate_by_key(
-            rows,
-            lambda r: LocalStore.opp_profile(r) or "(不明)",
-            sort_key=lambda x: x[1],
-        ):
-            opp_prof_tree.insert(
-                "",
-                "end",
-                values=(key, total, wins, losses, f"{rate:.1f}%"),
-            )
+    def _my_agg_rows() -> list[AggRow]:
+        rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"my_char"}))
+        return aggregate_by_my_char(rows)
 
-    def do_apply() -> None:
-        refresh()
+    def _opp_agg_rows() -> list[AggRow]:
+        rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"opp_char"}))
+        return aggregate_by_opp_char(rows)
 
-    apply_btn = ttk.Button(filter_frame, text="適用", command=do_apply)
-    apply_btn.grid(row=0, column=7)
+    def _prof_agg_rows() -> list[AggRow]:
+        rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"opp_profile"}))
+        return aggregate_by_opp_profile(rows)
 
-    my_char_box.bind("<<ComboboxSelected>>", lambda _e: refresh())
-    opp_char_box.bind("<<ComboboxSelected>>", lambda _e: refresh())
-    ranked_chk.configure(command=refresh)
+    _bind_facet_tree(
+        my_char_tree,
+        dimension="my_char",
+        get_current=lambda: filter_state.my_char,
+        set_value=lambda v: setattr(filter_state, "my_char", v),
+        get_agg_rows=_my_agg_rows,
+        parse_iid=_parse_char_iid,
+    )
+    _bind_facet_tree(
+        opp_char_tree,
+        dimension="opp_char",
+        get_current=lambda: filter_state.opp_char,
+        set_value=lambda v: setattr(filter_state, "opp_char", v),
+        get_agg_rows=_opp_agg_rows,
+        parse_iid=_parse_char_iid,
+    )
+    _bind_facet_tree(
+        opp_prof_tree,
+        dimension="opp_profile",
+        get_current=lambda: filter_state.opp_profile,
+        set_value=lambda v: setattr(filter_state, "opp_profile", v),
+        get_agg_rows=_prof_agg_rows,
+        parse_iid=lambda iid: _parse_prof_iid(iid, _prof_agg_rows()),
+    )
+
+    ranked_chk.configure(command=refresh_view)
 
     def on_close() -> None:
         global _open_window
@@ -315,4 +602,4 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
 
     win.protocol("WM_DELETE_WINDOW", on_close)
 
-    refresh()
+    reload_data()

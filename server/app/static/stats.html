@@ -14,6 +14,10 @@
     --accent: #6ab0f3;
     --ok: #57c07d;
     --err: #e06c75;
+    --wr-high: #6fcf97;
+    --wr-low: #e07a7a;
+    --row-hover: rgba(255,255,255,0.04);
+    --row-selected: rgba(106,176,243,0.15);
   }
   * { box-sizing: border-box; }
   body {
@@ -44,7 +48,7 @@
     text-decoration: none;
   }
   header nav a:hover { text-decoration: underline; }
-  main { padding: 8px 20px 32px; max-width: 960px; }
+  main { padding: 8px 20px 32px; max-width: 1280px; }
   .panel {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -74,39 +78,143 @@
   .user-name { font-size: 18px; font-weight: 600; }
   .summary { font-size: 16px; }
   .win-rate { color: var(--ok); font-weight: 600; }
-  .cards {
+  .filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: rgba(106,176,243,0.12);
+    border: 1px solid rgba(106,176,243,0.35);
+    border-radius: 16px;
+    font-size: 13px;
+  }
+  .filter-chip button {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 2px;
+  }
+  .filter-chip button:hover { color: var(--text); }
+  .filter-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+  }
+  .filter-actions label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .btn-clear {
+    padding: 4px 12px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .btn-clear:hover {
+    color: var(--text);
+    border-color: var(--muted);
+  }
+  .btn-more {
+    margin-top: 8px;
+    padding: 6px 14px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--accent);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .btn-more:hover { border-color: var(--accent); }
+  .summary-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 20px;
+  }
+  .summary-main { font-size: 16px; }
+  .summary-recent {
     display: flex;
     flex-wrap: wrap;
     gap: 12px;
+    font-size: 14px;
+    color: var(--muted);
   }
-  .card {
-    flex: 1 1 140px;
-    background: rgba(255,255,255,0.03);
+  .summary-recent span strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .facets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .facet {
+    flex: 1 1 280px;
+    min-width: 0;
+    background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 12px 14px;
+    padding: 14px 16px;
   }
-  .card .label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
-  .card .value { font-size: 18px; font-weight: 600; }
-  .card .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .facet h2 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    color: var(--muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .facet-scroll {
+    max-height: 420px;
+    overflow-y: auto;
+  }
   table {
     width: 100%;
     border-collapse: collapse;
   }
   th, td {
     text-align: left;
-    padding: 8px 10px;
+    padding: 7px 8px;
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
   }
   th {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    position: sticky;
+    top: 0;
+    background: var(--panel);
   }
   tr:last-child td { border-bottom: none; }
+  tr.facet-row { cursor: pointer; }
+  tr.facet-row:hover td { background: var(--row-hover); }
+  tr.facet-row.selected td { background: var(--row-selected); }
+  td.wr-high { color: var(--wr-high); font-weight: 600; }
+  td.wr-low { color: var(--wr-low); font-weight: 600; }
+  td.result-win { color: var(--ok); font-weight: 600; }
+  td.result-loss { color: var(--err); font-weight: 600; }
+  td.result-draw { color: var(--muted); }
   #gate {
     text-align: center;
     padding: 80px 20px;
@@ -119,6 +227,7 @@
   }
   #gate a:hover { text-decoration: underline; }
   #loading { text-align: center; padding: 60px; color: var(--muted); }
+  .history-scroll { overflow-x: auto; }
 </style>
 </head>
 <body>
@@ -140,40 +249,54 @@
       <h2>ランクマ</h2>
       <div id="ranked-summary"></div>
     </div>
-    <div class="panel">
-      <h2>直近勝率</h2>
-      <div class="cards" id="recent-cards"></div>
+    <div class="panel" id="filter-panel">
+      <h2>絞り込み</h2>
+      <div class="filter-bar" id="filter-bar"></div>
     </div>
-    <div class="panel">
-      <h2>自キャラ別</h2>
-      <table>
-        <thead><tr><th>キャラ</th><th>試合数</th><th>勝敗</th><th>勝率</th></tr></thead>
-        <tbody id="my-char-rows"></tbody>
-      </table>
+    <div class="panel" id="summary-panel">
+      <div class="summary-row" id="summary-row"></div>
     </div>
-    <div class="panel">
-      <h2>対キャラ別</h2>
-      <table>
-        <thead><tr><th>キャラ</th><th>試合数</th><th>勝敗</th><th>勝率</th></tr></thead>
-        <tbody id="opp-char-rows"></tbody>
-      </table>
+    <div class="facets" id="facets">
+      <div class="facet">
+        <h2>自キャラ別</h2>
+        <div class="facet-scroll">
+          <table>
+            <thead><tr><th>キャラ</th><th>対戦</th><th>勝</th><th>負</th><th>勝率</th></tr></thead>
+            <tbody id="facet-my-char"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="facet">
+        <h2>相手キャラ別</h2>
+        <div class="facet-scroll">
+          <table>
+            <thead><tr><th>キャラ</th><th>対戦</th><th>勝</th><th>負</th><th>勝率</th></tr></thead>
+            <tbody id="facet-opp-char"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="facet">
+        <h2>相手プロファイル別</h2>
+        <div class="facet-scroll">
+          <table>
+            <thead><tr><th>プロファイル</th><th>対戦</th><th>勝</th><th>負</th><th>勝率</th></tr></thead>
+            <tbody id="facet-opp-profile"></tbody>
+          </table>
+        </div>
+        <button type="button" class="btn-more" id="profile-more" hidden>もっと見る</button>
+      </div>
     </div>
-    <div class="panel">
-      <h2>対プロファイル別</h2>
-      <table>
-        <thead><tr><th>プロファイル</th><th>試合数</th><th>勝敗</th><th>勝率</th></tr></thead>
-        <tbody id="opp-profile-rows"></tbody>
-      </table>
-    </div>
-    <div class="panel" id="recent-matches-panel">
-      <h2>最近の対戦</h2>
-      <table>
-        <thead><tr>
-          <th>日時</th><th>自キャラ</th><th>相手キャラ</th><th>相手プロファイル</th>
-          <th>勝敗</th><th>ランクマ</th><th>リプレイ</th>
-        </tr></thead>
-        <tbody id="recent-match-rows"></tbody>
-      </table>
+    <div class="panel" id="history-panel">
+      <h2>対戦履歴</h2>
+      <div class="history-scroll">
+        <table>
+          <thead><tr>
+            <th>日時</th><th>自キャラ</th><th>相手キャラ</th><th>相手プロファイル</th>
+            <th>勝敗</th><th>ランクマ</th><th>リプレイ</th>
+          </tr></thead>
+          <tbody id="history-rows"></tbody>
+        </table>
+      </div>
     </div>
     <div class="panel" id="import-panel">
       <h2>天則観インポート</h2>
@@ -201,72 +324,27 @@ const RANK_LABEL = {
   easy: "E", normal: "N", ex: "Ex", hard: "H", luna: "L", ph: "Ph",
 };
 
+const MATCH_LIMIT = 1000;
+const PROFILE_TOP = 30;
+const HISTORY_LIMIT = 100;
+
+let allMatches = [];
+let statsData = null;
+let profileShowAll = false;
+
+const filter = {
+  myChar: null,
+  oppChar: null,
+  oppProfile: null,
+  rankedOnly: false,
+};
+
 function charName(id) {
   return CHAR_NAME[id] || `CHAR_${id}`;
 }
 
 function pct(rate) {
   return (rate * 100).toFixed(1) + "%";
-}
-
-function wl(d) {
-  return `${d.wins}-${d.losses}-${d.draws}`;
-}
-
-// プロファイル名は対戦相手のメモリ由来の任意文字列なので、
-// XSS を避けるため必ず textContent で描画する
-function appendRow(tbody, cells) {
-  const tr = document.createElement("tr");
-  for (const text of cells) {
-    const td = document.createElement("td");
-    td.textContent = text;
-    tr.appendChild(td);
-  }
-  tbody.appendChild(tr);
-}
-
-function appendEmptyRow(tbody) {
-  const tr = document.createElement("tr");
-  const td = document.createElement("td");
-  td.colSpan = 4;
-  td.style.color = "var(--muted)";
-  td.textContent = "データなし";
-  tr.appendChild(td);
-  tbody.appendChild(tr);
-}
-
-function fillCharTable(tbody, rows) {
-  tbody.textContent = "";
-  for (const r of rows) {
-    appendRow(tbody, [charName(r.char), String(r.games), wl(r), pct(r.win_rate)]);
-  }
-  if (!rows.length) appendEmptyRow(tbody);
-}
-
-function fillProfileTable(tbody, rows) {
-  tbody.textContent = "";
-  for (const r of rows) {
-    appendRow(tbody, [r.profile, String(r.games), wl(r), pct(r.win_rate)]);
-  }
-  if (!rows.length) appendEmptyRow(tbody);
-}
-
-function formatJst(unixSec) {
-  const d = new Date(unixSec * 1000);
-  const opts = {
-    timeZone: "Asia/Tokyo",
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
-    hour12: false,
-  };
-  return d.toLocaleString("ja-JP", opts);
-}
-
-function resultLabel(m) {
-  if (m.winner === "draw") return "引分";
-  const won = (m.my_side === "host" && m.winner === "host")
-    || (m.my_side === "guest" && m.winner === "guest");
-  return won ? "勝ち" : "負け";
 }
 
 function myChar(m) {
@@ -281,36 +359,363 @@ function oppProfile(m) {
   return m.my_side === "host" ? (m.guest_profile || "") : (m.host_profile || "");
 }
 
-function fillRecentMatches(rows) {
-  const tbody = document.getElementById("recent-match-rows");
-  tbody.textContent = "";
-  const sorted = rows.slice().sort((a, b) => b.played_at - a.played_at);
-  for (const m of sorted) {
+function matchWon(m) {
+  return (m.my_side === "host" && m.winner === "host")
+    || (m.my_side === "guest" && m.winner === "guest");
+}
+
+function matchLost(m) {
+  return m.winner !== "draw" && !matchWon(m);
+}
+
+function winRateClass(rate) {
+  if (rate >= 0.6) return "wr-high";
+  if (rate <= 0.4) return "wr-low";
+  return "";
+}
+
+function computeBucket(matches) {
+  let wins = 0;
+  let losses = 0;
+  let draws = 0;
+  for (const m of matches) {
+    if (m.winner === "draw") draws++;
+    else if (matchWon(m)) wins++;
+    else losses++;
+  }
+  const decisive = wins + losses;
+  return {
+    games: matches.length,
+    wins,
+    losses,
+    draws,
+    winRate: decisive > 0 ? wins / decisive : 0,
+  };
+}
+
+function applyFilter(matches, excludeDim) {
+  return matches.filter((m) => {
+    if (filter.rankedOnly && !m.ranked) return false;
+    if (excludeDim !== "myChar" && filter.myChar !== null && myChar(m) !== filter.myChar) return false;
+    if (excludeDim !== "oppChar" && filter.oppChar !== null && oppChar(m) !== filter.oppChar) return false;
+    if (excludeDim !== "oppProfile" && filter.oppProfile !== null && oppProfile(m) !== filter.oppProfile) return false;
+    return true;
+  });
+}
+
+function groupByChar(matches, pickChar) {
+  const map = new Map();
+  for (const m of matches) {
+    const cid = pickChar(m);
+    let row = map.get(cid);
+    if (!row) {
+      row = { char: cid, wins: 0, losses: 0, draws: 0, games: 0 };
+      map.set(cid, row);
+    }
+    row.games++;
+    if (m.winner === "draw") row.draws++;
+    else if (matchWon(m)) row.wins++;
+    else row.losses++;
+  }
+  const rows = [];
+  for (const row of map.values()) {
+    const decisive = row.wins + row.losses;
+    rows.push({
+      ...row,
+      winRate: decisive > 0 ? row.wins / decisive : 0,
+    });
+  }
+  rows.sort((a, b) => b.games - a.games || a.char - b.char);
+  return rows;
+}
+
+function groupByProfile(matches) {
+  const map = new Map();
+  for (const m of matches) {
+    const prof = oppProfile(m) || "(なし)";
+    let row = map.get(prof);
+    if (!row) {
+      row = { profile: prof, wins: 0, losses: 0, draws: 0, games: 0 };
+      map.set(prof, row);
+    }
+    row.games++;
+    if (m.winner === "draw") row.draws++;
+    else if (matchWon(m)) row.wins++;
+    else row.losses++;
+  }
+  const rows = [];
+  for (const row of map.values()) {
+    const decisive = row.wins + row.losses;
+    rows.push({
+      ...row,
+      winRate: decisive > 0 ? row.wins / decisive : 0,
+    });
+  }
+  rows.sort((a, b) => b.games - a.games || a.profile.localeCompare(b.profile, "ja"));
+  return rows;
+}
+
+function recentWinRates(matches, counts) {
+  const sorted = matches.slice().sort((a, b) => b.played_at - a.played_at);
+  const out = {};
+  for (const n of counts) {
+    const subset = sorted.slice(0, n);
+    const bucket = computeBucket(subset);
+    out[n] = {
+      games: bucket.games,
+      wins: bucket.wins,
+      winRate: bucket.winRate,
+    };
+  }
+  return out;
+}
+
+function formatJst(unixSec) {
+  const d = new Date(unixSec * 1000);
+  return d.toLocaleString("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false,
+  });
+}
+
+function resultSymbol(m) {
+  if (m.winner === "draw") return { text: "△", cls: "result-draw" };
+  return matchWon(m)
+    ? { text: "○", cls: "result-win" }
+    : { text: "×", cls: "result-loss" };
+}
+
+function appendTextCell(tr, text, cls) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  if (cls) td.className = cls;
+  tr.appendChild(td);
+}
+
+function appendWinRateCell(tr, rate, decisive) {
+  const td = document.createElement("td");
+  td.textContent = decisive > 0 ? pct(rate) : "-";
+  if (decisive > 0) {
+    const cls = winRateClass(rate);
+    if (cls) td.className = cls;
+  }
+  tr.appendChild(td);
+}
+
+function fillFacetCharTable(tbody, rows, dim, selected) {
+  const frag = document.createDocumentFragment();
+  for (const r of rows) {
     const tr = document.createElement("tr");
+    tr.className = "facet-row";
+    if (selected === r.char) tr.classList.add("selected");
+    tr.dataset.dim = dim;
+    tr.dataset.value = String(r.char);
+    appendTextCell(tr, charName(r.char));
+    appendTextCell(tr, String(r.games));
+    appendTextCell(tr, String(r.wins));
+    appendTextCell(tr, String(r.losses));
+    appendWinRateCell(tr, r.winRate, r.wins + r.losses);
+    frag.appendChild(tr);
+  }
+  if (!rows.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 5;
+    td.style.color = "var(--muted)";
+    td.textContent = "データなし";
+    tr.appendChild(td);
+    frag.appendChild(tr);
+  }
+  tbody.replaceChildren(frag);
+}
 
-    const tdTime = document.createElement("td");
-    tdTime.textContent = formatJst(m.played_at);
-    tr.appendChild(tdTime);
+function fillFacetProfileTable(tbody, rows, selected) {
+  const frag = document.createDocumentFragment();
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    tr.className = "facet-row";
+    const value = r.profile === "(なし)" ? "" : r.profile;
+    if (selected === value) tr.classList.add("selected");
+    tr.dataset.dim = "oppProfile";
+    tr.dataset.value = value;
+    appendTextCell(tr, r.profile);
+    appendTextCell(tr, String(r.games));
+    appendTextCell(tr, String(r.wins));
+    appendTextCell(tr, String(r.losses));
+    appendWinRateCell(tr, r.winRate, r.wins + r.losses);
+    frag.appendChild(tr);
+  }
+  if (!rows.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 5;
+    td.style.color = "var(--muted)";
+    td.textContent = "データなし";
+    tr.appendChild(td);
+    frag.appendChild(tr);
+  }
+  tbody.replaceChildren(frag);
+}
 
-    const tdMy = document.createElement("td");
-    tdMy.textContent = charName(myChar(m));
-    tr.appendChild(tdMy);
+function renderFilterBar() {
+  const bar = document.getElementById("filter-bar");
+  bar.textContent = "";
 
-    const tdOpp = document.createElement("td");
-    tdOpp.textContent = charName(oppChar(m));
-    tr.appendChild(tdOpp);
+  const chips = [];
+  if (filter.myChar !== null) {
+    chips.push({ key: "myChar", label: `自キャラ: ${charName(filter.myChar)}` });
+  }
+  if (filter.oppChar !== null) {
+    chips.push({ key: "oppChar", label: `相手: ${charName(filter.oppChar)}` });
+  }
+  if (filter.oppProfile !== null) {
+    const prof = filter.oppProfile || "(なし)";
+    chips.push({ key: "oppProfile", label: `相手プロファイル: ${prof}` });
+  }
 
-    const tdProf = document.createElement("td");
-    tdProf.textContent = oppProfile(m);
-    tr.appendChild(tdProf);
+  for (const chip of chips) {
+    const span = document.createElement("span");
+    span.className = "filter-chip";
+    const label = document.createElement("span");
+    label.textContent = chip.label;
+    span.appendChild(label);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "×";
+    btn.title = "解除";
+    btn.addEventListener("click", () => {
+      filter[chip.key] = null;
+      if (chip.key === "oppProfile") profileShowAll = false;
+      renderAll();
+    });
+    span.appendChild(btn);
+    bar.appendChild(span);
+  }
 
-    const tdRes = document.createElement("td");
-    tdRes.textContent = resultLabel(m);
-    tr.appendChild(tdRes);
+  if (!chips.length) {
+    const hint = document.createElement("span");
+    hint.style.color = "var(--muted)";
+    hint.style.fontSize = "13px";
+    hint.textContent = "ファセットをクリックして絞り込み";
+    bar.appendChild(hint);
+  }
 
-    const tdRanked = document.createElement("td");
-    tdRanked.textContent = m.ranked ? "o" : "x";
-    tr.appendChild(tdRanked);
+  const actions = document.createElement("div");
+  actions.className = "filter-actions";
+
+  const rankedLabel = document.createElement("label");
+  const rankedCb = document.createElement("input");
+  rankedCb.type = "checkbox";
+  rankedCb.checked = filter.rankedOnly;
+  rankedCb.addEventListener("change", () => {
+    filter.rankedOnly = rankedCb.checked;
+    profileShowAll = false;
+    renderAll();
+  });
+  rankedLabel.appendChild(rankedCb);
+  rankedLabel.appendChild(document.createTextNode("ランクマのみ"));
+  actions.appendChild(rankedLabel);
+
+  const clearBtn = document.createElement("button");
+  clearBtn.type = "button";
+  clearBtn.className = "btn-clear";
+  clearBtn.textContent = "すべてクリア";
+  clearBtn.addEventListener("click", () => {
+    filter.myChar = null;
+    filter.oppChar = null;
+    filter.oppProfile = null;
+    filter.rankedOnly = false;
+    profileShowAll = false;
+    renderAll();
+  });
+  actions.appendChild(clearBtn);
+
+  bar.appendChild(actions);
+}
+
+function renderSummary() {
+  const filtered = applyFilter(allMatches, null);
+  const bucket = computeBucket(filtered);
+  const recent = recentWinRates(filtered, [30, 50, 100]);
+  const el = document.getElementById("summary-row");
+  el.textContent = "";
+
+  const main = document.createElement("div");
+  main.className = "summary-main";
+  const decisive = bucket.wins + bucket.losses;
+  const rateText = decisive > 0 ? pct(bucket.winRate) : "-";
+  main.textContent =
+    `${bucket.games} 戦 ${bucket.wins} 勝 ${bucket.losses} 敗 勝率 ${rateText} (引分 ${bucket.draws})`;
+  el.appendChild(main);
+
+  const recentEl = document.createElement("div");
+  recentEl.className = "summary-recent";
+  for (const n of [30, 50, 100]) {
+    const r = recent[n];
+    const span = document.createElement("span");
+    const strong = document.createElement("strong");
+    strong.textContent = r.games > 0 ? pct(r.winRate) : "-";
+    span.appendChild(document.createTextNode(`直近${n}: `));
+    span.appendChild(strong);
+    if (r.games < n) {
+      span.appendChild(document.createTextNode(` (${r.games}戦)`));
+    }
+    recentEl.appendChild(span);
+  }
+  el.appendChild(recentEl);
+}
+
+function renderFacets() {
+  const myRows = groupByChar(applyFilter(allMatches, "myChar"), myChar);
+  const oppRows = groupByChar(applyFilter(allMatches, "oppChar"), oppChar);
+  const profRows = groupByProfile(applyFilter(allMatches, "oppProfile"));
+
+  fillFacetCharTable(
+    document.getElementById("facet-my-char"),
+    myRows,
+    "myChar",
+    filter.myChar,
+  );
+  fillFacetCharTable(
+    document.getElementById("facet-opp-char"),
+    oppRows,
+    "oppChar",
+    filter.oppChar,
+  );
+
+  const showAll = profileShowAll;
+  const visibleProf = showAll ? profRows : profRows.slice(0, PROFILE_TOP);
+  fillFacetProfileTable(
+    document.getElementById("facet-opp-profile"),
+    visibleProf,
+    filter.oppProfile,
+  );
+
+  const moreBtn = document.getElementById("profile-more");
+  moreBtn.hidden = profRows.length <= PROFILE_TOP || showAll;
+}
+
+function renderHistory() {
+  const tbody = document.getElementById("history-rows");
+  const filtered = applyFilter(allMatches, null)
+    .slice()
+    .sort((a, b) => b.played_at - a.played_at)
+    .slice(0, HISTORY_LIMIT);
+
+  const frag = document.createDocumentFragment();
+  for (const m of filtered) {
+    const tr = document.createElement("tr");
+    appendTextCell(tr, formatJst(m.played_at));
+    appendTextCell(tr, charName(myChar(m)));
+    appendTextCell(tr, charName(oppChar(m)));
+    appendTextCell(tr, oppProfile(m) || "(なし)");
+
+    const res = resultSymbol(m);
+    appendTextCell(tr, res.text, res.cls);
+
+    appendTextCell(tr, m.ranked ? "o" : "x");
 
     const tdReplay = document.createElement("td");
     if (m.has_replay) {
@@ -323,58 +728,53 @@ function fillRecentMatches(rows) {
     }
     tr.appendChild(tdReplay);
 
-    tbody.appendChild(tr);
+    frag.appendChild(tr);
   }
-  if (!sorted.length) {
+  if (!filtered.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
     td.colSpan = 7;
     td.style.color = "var(--muted)";
     td.textContent = "データなし";
     tr.appendChild(td);
-    tbody.appendChild(tr);
+    frag.appendChild(tr);
   }
+  tbody.replaceChildren(frag);
 }
 
-async function loadRecentMatches() {
-  try {
-    const res = await fetch("/stats/me/matches?limit=100", { credentials: "same-origin" });
-    if (!res.ok) return;
-    const data = await res.json();
-    fillRecentMatches(data.matches || []);
-  } catch (_) {
-    /* 一覧取得失敗は他パネル表示を妨げない */
-  }
-}
-
-function render(data) {
+function renderOverview() {
   const ov = document.getElementById("overview");
   ov.textContent = "";
+  const user = statsData.user;
   const row = document.createElement("div");
   row.className = "user-row";
-  if (data.user.avatar) {
+  if (user.avatar) {
     const img = document.createElement("img");
     img.className = "avatar";
-    img.src = data.user.avatar;
+    img.src = user.avatar;
     img.alt = "";
     img.referrerPolicy = "no-referrer";
     row.appendChild(img);
   }
   const name = document.createElement("span");
   name.className = "user-name";
-  name.textContent = data.user.name;
+  name.textContent = user.name;
   row.appendChild(name);
   ov.appendChild(row);
 
-  const t = data.total;
-  const sum = document.createElement("div");
-  sum.className = "summary";
-  sum.innerHTML = `総合成績: <strong>${wl(t)}</strong>　勝率: <span class="win-rate">${pct(t.win_rate)}</span>（${t.games} 戦）`;
-  ov.appendChild(sum);
+  const count = document.createElement("div");
+  count.className = "summary";
+  count.style.color = "var(--muted)";
+  count.style.fontSize = "14px";
+  count.textContent = `全 ${allMatches.length} 戦`;
+  ov.appendChild(count);
+}
 
-  const ranked = data.ranked || {};
+function renderRanked() {
+  const ranked = statsData.ranked || {};
   const rankedEl = document.getElementById("ranked-summary");
   rankedEl.textContent = "";
+
   const rRank = (ranked.rank || "easy").toLowerCase();
   let rankText = RANK_LABEL[rRank] || ranked.rank || "";
   if (rRank === "ph" && ranked.rating != null) {
@@ -390,42 +790,100 @@ function render(data) {
   const rTotal = document.createElement("div");
   rTotal.className = "summary";
   rTotal.style.marginBottom = "8px";
-  rTotal.innerHTML = `ランクマ総合成績: <strong>${wl(rt)}</strong>　勝率: <span class="win-rate">${pct(rt.win_rate)}</span>（${rt.games} 戦）`;
+  rTotal.innerHTML =
+    `ランクマ総合成績: <strong>${rt.wins}-${rt.losses}-${rt.draws}</strong>　勝率: <span class="win-rate">${pct(rt.win_rate)}</span>（${rt.games} 戦）`;
   rankedEl.appendChild(rTotal);
 
   const r50 = ranked.recent50 || { games: 0, wins: 0, win_rate: 0 };
   const rRecent = document.createElement("div");
   rRecent.className = "summary";
-  rRecent.innerHTML = `直近 50 戦: <span class="win-rate">${pct(r50.win_rate)}</span>（${r50.wins}勝 / ${r50.games}戦）`;
+  rRecent.innerHTML =
+    `直近 50 戦: <span class="win-rate">${pct(r50.win_rate)}</span>（${r50.wins}勝 / ${r50.games}戦）`;
   rankedEl.appendChild(rRecent);
+}
 
-  const recentEl = document.getElementById("recent-cards");
-  recentEl.textContent = "";
-  for (const n of ["30", "50", "100"]) {
-    const r = data.recent[n];
-    const card = document.createElement("div");
-    card.className = "card";
-    const label = document.createElement("div");
-    label.className = "label";
-    label.textContent = `直近 ${n} 戦`;
-    card.appendChild(label);
-    const val = document.createElement("div");
-    val.className = "value";
-    val.textContent = pct(r.win_rate);
-    card.appendChild(val);
-    const sub = document.createElement("div");
-    sub.className = "sub";
-    const suffix = r.games < Number(n) ? ` (${r.games}戦)` : "";
-    sub.textContent = `${r.wins}勝 / ${r.games}戦${suffix}`;
-    card.appendChild(sub);
-    recentEl.appendChild(card);
+function renderAll() {
+  renderFilterBar();
+  renderSummary();
+  renderFacets();
+  renderHistory();
+}
+
+function onFacetClick(dim, rawValue) {
+  let value;
+  if (dim === "myChar" || dim === "oppChar") {
+    value = Number(rawValue);
+  } else {
+    value = rawValue;
   }
 
-  fillCharTable(document.getElementById("my-char-rows"), data.by_my_char);
-  fillCharTable(document.getElementById("opp-char-rows"), data.by_opp_char);
-  fillProfileTable(document.getElementById("opp-profile-rows"), data.by_opp_profile);
-  setupTskImport();
-  loadRecentMatches();
+  if (filter[dim] === value) {
+    filter[dim] = null;
+  } else {
+    filter[dim] = value;
+  }
+  if (dim === "oppProfile") profileShowAll = false;
+  renderAll();
+}
+
+function setupFacetDelegation() {
+  const facets = document.getElementById("facets");
+  if (facets.dataset.bound) return;
+  facets.dataset.bound = "1";
+  facets.addEventListener("click", (ev) => {
+    const tr = ev.target.closest("tr.facet-row");
+    if (!tr) return;
+    onFacetClick(tr.dataset.dim, tr.dataset.value);
+  });
+}
+
+function setupProfileMore() {
+  const btn = document.getElementById("profile-more");
+  if (btn.dataset.bound) return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", () => {
+    profileShowAll = true;
+    renderFacets();
+  });
+}
+
+async function loadAllMatches() {
+  let since = 0;
+  const seen = new Set();
+  const all = [];
+  while (true) {
+    const res = await fetch(
+      `/stats/me/matches?since=${since}&limit=${MATCH_LIMIT}`,
+      { credentials: "same-origin" },
+    );
+    if (!res.ok) throw new Error("matches fetch failed");
+    const data = await res.json();
+    const batch = data.matches || [];
+    if (!batch.length) break;
+
+    let maxPlayedAt = since;
+    for (const m of batch) {
+      if (!seen.has(m.id)) {
+        seen.add(m.id);
+        all.push(m);
+      }
+      if (m.played_at > maxPlayedAt) maxPlayedAt = m.played_at;
+    }
+
+    if (batch.length < MATCH_LIMIT) break;
+    since = maxPlayedAt;
+  }
+  return all;
+}
+
+async function reloadData() {
+  allMatches = await loadAllMatches();
+  const statsRes = await fetch("/stats/me", { credentials: "same-origin" });
+  if (!statsRes.ok) throw new Error("stats fetch failed");
+  statsData = await statsRes.json();
+  renderOverview();
+  renderRanked();
+  renderAll();
 }
 
 function setupTskImport() {
@@ -467,8 +925,12 @@ function setupTskImport() {
       resultEl.textContent =
         `取り込み: ${data.imported} 件 / 重複スキップ: ${data.skipped_duplicate} 件 / 不正スキップ: ${data.skipped_invalid} 件（全 ${data.total} 行）`;
       if (data.imported > 0) {
-        const statsRes = await fetch("/stats/me", { credentials: "same-origin" });
-        if (statsRes.ok) render(await statsRes.json());
+        filter.myChar = null;
+        filter.oppChar = null;
+        filter.oppProfile = null;
+        filter.rankedOnly = false;
+        profileShowAll = false;
+        await reloadData();
       }
     } catch (_) {
       resultEl.style.color = "var(--err)";
@@ -484,19 +946,27 @@ async function init() {
   const gate = document.getElementById("gate");
   const content = document.getElementById("content");
   try {
-    const res = await fetch("/stats/me");
-    loading.hidden = true;
-    if (res.status === 401) {
+    const probe = await fetch("/stats/me", { credentials: "same-origin" });
+    if (probe.status === 401) {
+      loading.hidden = true;
       gate.hidden = false;
       return;
     }
-    if (!res.ok) {
-      loading.hidden = false;
+    if (!probe.ok) {
       loading.textContent = "読み込みに失敗しました";
       return;
     }
+    statsData = await probe.json();
+    loading.textContent = "対戦データを読み込み中...";
+    allMatches = await loadAllMatches();
+    loading.hidden = true;
     content.hidden = false;
-    render(await res.json());
+    renderOverview();
+    renderRanked();
+    setupFacetDelegation();
+    setupProfileMore();
+    renderAll();
+    setupTskImport();
   } catch (_) {
     loading.textContent = "読み込みに失敗しました";
   }
