@@ -22,6 +22,10 @@ HEARTBEAT_SEC = 5  # サーバー側 TTL (20s) の 1/4
 CREATE_RETRY_COOLDOWN_SEC = 10
 UPDATE_CHECK_INTERVAL_SEC = 6 * 3600
 
+# KO 直後の btl_mode==5 は短時間しか観測できないため、AlwaysRecordable と
+# 同じ 50ms でポーリングする（1 秒だと勝敗確定を取りこぼす）。
+DETECT_INTERVAL_SEC = 0.05
+
 
 def _parse_version(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in v.lstrip("v").split(".") if x.isdigit())
@@ -139,6 +143,11 @@ class Controller:
         else:
             self._stable_counts[key] = 0
         return self._stable_counts[key] >= need
+
+    def _stable_for(self, key: str, seconds: float, *, seen: bool) -> bool:
+        """seen が seconds 秒間連続したら True（ポーリング周期に依存しない）。"""
+        need = max(1, round(seconds / DETECT_INTERVAL_SEC))
+        return self._stable_key(key, need, seen=seen)
 
     def _build_match_status(self, st: DetectionState, *, is_recruiting: bool, is_battle: bool) -> str:
         lp = (st.lprof or "").strip()
@@ -259,7 +268,7 @@ class Controller:
             act = self.on_detect(st, my_ip=my_ip)
             if act:
                 await self._action_q.put(act)
-            await asyncio.sleep(1)
+            await asyncio.sleep(DETECT_INTERVAL_SEC)
 
     async def api_loop(self) -> None:
         while not self._stop.is_set():
@@ -360,7 +369,7 @@ class Controller:
         # -----------------
         # 1) recruiting -> create / update
         # -----------------
-        if self._stable_key("recruiting", need=3, seen=is_recruiting):
+        if self._stable_for("recruiting", 3.0, seen=is_recruiting):
             payload = self._build_payload(
                 addr=self._current_addr(my_ip, st.port),
                 giuroll=st.giuroll,
@@ -384,7 +393,7 @@ class Controller:
         # -----------------
         # 2) battle -> update
         # -----------------
-        if self.has_active_post() and self._seen_recruit_this_run and self._stable_key("battle", need=2, seen=is_battle):
+        if self.has_active_post() and self._seen_recruit_this_run and self._stable_for("battle", 2.0, seen=is_battle):
             payload = self._build_payload(
                 addr=self.my_post.addr or "",
                 giuroll=st.giuroll,
@@ -417,9 +426,9 @@ class Controller:
         # -----------------
         if self.has_active_post() and not self._close_pending:
             grace_ok = (now - self._last_keepalive_ts) >= self._close_grace_sec
-            quiet = self._stable_key(
+            quiet = self._stable_for(
                 "idle_or_other",
-                need=5,
+                5.0,
                 seen=(not is_recruiting and not has_profile and not is_battle),
             )
 
@@ -556,10 +565,11 @@ class Controller:
 
     def update_btn_labels(self, tool_name: str, is_active: bool) -> None:
         self.tool_mgr.set_active(tool_name, is_active)
-        self._tool_labels = {
-            **self._tool_labels,
-            tool_name: self.tool_mgr.button_label(tool_name),
-        }
+        label = self.tool_mgr.button_label(tool_name)
+        # 50ms ポーリングから毎回呼ばれるため、変化した時だけトレイに通知する
+        if self._tool_labels.get(tool_name) == label:
+            return
+        self._tool_labels = {**self._tool_labels, tool_name: label}
         self.btn_labels_sink(self._tool_labels)
 
     def lobby_url(self) -> str:

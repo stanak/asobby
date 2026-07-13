@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 import ctypes
 import ctypes.wintypes as wt
+import time
 
 from detect_api import DetectionState
 
@@ -308,6 +309,33 @@ def detect_tools_from_loaded_modules(pid: int) -> tuple[bool, bool]:
     return giu, ap
 
 
+# ========================
+# pid / module cache
+# ========================
+# 50ms ポーリングでプロセス列挙・モジュール列挙 (Toolhelp スナップショット) を
+# 毎回行うと重いため、結果を短時間キャッシュする。
+_PID_CACHE_TTL_SEC = 2.0
+_pid_cache: Optional[int] = None
+_tools_cache: Tuple[bool, bool] = (False, False)
+_pid_cache_ts: float = 0.0
+
+
+def _get_pid_and_tools() -> Tuple[Optional[int], bool, bool]:
+    global _pid_cache, _tools_cache, _pid_cache_ts
+    now = time.monotonic()
+    if (now - _pid_cache_ts) < _PID_CACHE_TTL_SEC:
+        return _pid_cache, _tools_cache[0], _tools_cache[1]
+    pid = get_hisoutensoku_pid_by_process_name()
+    tools = detect_tools_from_loaded_modules(pid) if pid else (False, False)
+    _pid_cache, _tools_cache, _pid_cache_ts = pid, tools, now
+    return pid, tools[0], tools[1]
+
+
+def _invalidate_pid_cache() -> None:
+    global _pid_cache_ts
+    _pid_cache_ts = 0.0
+
+
 def _sanitize_profile(name: str) -> str:
     """プロフィール名らしくない文字列 (未初期化メモリ等) を弾く。
 
@@ -387,7 +415,7 @@ def _decide_mode(server08: Optional[int], server09: Optional[int], scene_id: Opt
 
 
 def read_detection_state() -> DetectionState:
-    pid = get_hisoutensoku_pid_by_process_name()
+    pid, giu, ap = _get_pid_and_tools()
     if not pid:
         return DetectionState(
             alive=False,
@@ -406,6 +434,9 @@ def read_detection_state() -> DetectionState:
     try:
         h = _open_process(pid)
     except Exception:
+        # プロセスが終了した直後の可能性が高い。キャッシュを破棄して
+        # 次の周期で再列挙させる。
+        _invalidate_pid_cache()
         return DetectionState(
             alive=True,
             mode="idle",
@@ -421,8 +452,6 @@ def read_detection_state() -> DetectionState:
         )
 
     try:
-        giu, ap = detect_tools_from_loaded_modules(pid)
-
         scene_id = _read_u32le(h, SCENEID)
 
         pnet = _read_u32le(h, PNETOBJECT)
