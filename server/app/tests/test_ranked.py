@@ -46,7 +46,7 @@ async def create_user(
     *,
     name: str = "user",
     last_ip: str = "",
-    rank: str = "easy",
+    rank: str = "normal",
 ) -> None:
     async with db.session() as s:
         user = await s.get(db.User, user_id)
@@ -95,11 +95,11 @@ async def test_ranked_match_flow():
         await create_user("999", name="host", last_ip="1.2.3.4")
         await create_user("888", name="guest", last_ip="5.6.7.8")
 
-        # users.rank デフォルト easy
+        # users.rank デフォルト normal
         async with db.session() as s:
             host = await s.get(db.User, "999")
             assert host is not None
-            assert host.rank == "easy"
+            assert host.rank == "normal"
 
         token = bearer_token("999", "host")
         res = await client.post(
@@ -111,7 +111,7 @@ async def test_ranked_match_flow():
         body = res.json()
         post = body["post"]
         owner_token = body["owner_token"]
-        assert post["rank"] == "easy"
+        assert post["rank"] == "normal"
         assert post["post_type"] == "ranked"
 
         rec = main.RECORDS[post["id"]]
@@ -151,6 +151,12 @@ async def test_rank_promotion_and_demotion():
     async with app_client() as client:
         await create_user("999", name="host")
         await create_user("888", name="guest")
+
+        # easy からの昇格を検証するため明示的に easy を設定
+        async with db.session() as s:
+            host = await s.get(db.User, "999")
+            host.rank = "easy"
+            await s.commit()
 
         for _ in range(10):
             await insert_ranked_win("999", "888", winner="host")
@@ -254,7 +260,7 @@ async def test_auth_me_and_stats_me():
 @pytest.mark.asyncio
 async def test_different_rank_guest_not_ranked():
     async with app_client() as client:
-        await create_user("999", name="host", last_ip="1.2.3.4", rank="easy")
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
         await create_user("888", name="guest", last_ip="5.6.7.8", rank="hard")
 
         token = bearer_token("999", "host")

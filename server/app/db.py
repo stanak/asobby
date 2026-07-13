@@ -40,10 +40,12 @@ class User(Base):
     # 最後に確認したクライアント IP (echo パケットでの対戦相手照合に使う)
     last_ip: Mapped[str] = mapped_column(String(64), default="", index=True)
     # ランクマッチ: easy / normal / ex / hard / luna / ph
-    rank: Mapped[str] = mapped_column(String(8), default="easy", nullable=False)
+    rank: Mapped[str] = mapped_column(String(8), default="normal", nullable=False)
     rank_changed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # 初回開始ランク選択済み、またはランクマ 1 戦目以降は True
+    rank_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     ts_mu: Mapped[float] = mapped_column(Float, default=25.0, nullable=False)
     ts_sigma: Mapped[float] = mapped_column(Float, default=8.333333333333334, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -243,6 +245,29 @@ async def get_user_rank(user_id: str) -> tuple[str, float, float] | None:
         if user is None:
             return None
         return user.rank, user.ts_mu, user.ts_sigma
+
+
+async def choose_initial_rank(user_id: str, rank: str) -> bool:
+    """初回のみ開始ランクを設定する。rank_locked が False のときだけ成功。"""
+    async with session() as s:
+        user = await s.get(User, user_id)
+        if user is None or user.rank_locked:
+            return False
+        user.rank = rank
+        user.rank_changed_at = utcnow()
+        user.rank_locked = True
+        await s.commit()
+        return True
+
+
+async def lock_user_rank(user_id: str) -> None:
+    """開始ランク選択をロックする（冪等）。"""
+    async with session() as s:
+        user = await s.get(User, user_id)
+        if user is None:
+            return
+        user.rank_locked = True
+        await s.commit()
 
 
 async def set_user_rank(user_id: str, new_rank: str) -> None:

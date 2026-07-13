@@ -130,6 +130,58 @@
   }
   .gate a { color: var(--accent); text-decoration: none; }
   .gate a:hover { text-decoration: underline; }
+  #rank-choice-banner {
+    margin: 0 20px 12px;
+    padding: 14px 16px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  #rank-choice-banner h2 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  #rank-choice-banner .rank-choice-btns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  #rank-choice-banner .rank-choice-btn {
+    flex: 1 1 100px;
+    min-width: 90px;
+    padding: 10px 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    cursor: pointer;
+    text-align: center;
+    font-size: 14px;
+    font-family: inherit;
+  }
+  #rank-choice-banner .rank-choice-btn:hover {
+    border-color: var(--accent);
+    background: #1a1f27;
+  }
+  #rank-choice-banner .rank-choice-btn .rank-label {
+    display: block;
+    font-weight: 700;
+    font-size: 16px;
+    margin-bottom: 4px;
+  }
+  #rank-choice-banner .rank-choice-btn .rank-desc {
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.3;
+  }
+  #rank-choice-error {
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--err);
+  }
   .avatar {
     width: 22px;
     height: 22px;
@@ -146,6 +198,12 @@
   <span id="auth-info" hidden></span>
   <span id="status" class="disconnected" hidden>接続中...</span>
 </header>
+
+<div id="rank-choice-banner" hidden>
+  <h2>ランクマの開始ランクを選択できます（初回のみ・未選択なら N）</h2>
+  <div class="rank-choice-btns" id="rank-choice-btns"></div>
+  <div id="rank-choice-error" hidden></div>
+</div>
 
 <div class="section-title">ランクマ募集</div>
 <div id="ranked-gate" class="gate" hidden>
@@ -199,6 +257,13 @@ const NET_BATTLE = 4;
 const RANK_LABEL = {
   easy: "E", normal: "N", ex: "Ex", hard: "H", luna: "L", ph: "Ph",
 };
+const INITIAL_RANK_CHOICES = [
+  { rank: "easy", label: "E", desc: "初心者にお勧め" },
+  { rank: "normal", label: "N", desc: "通常のスタート地点・初級者以上" },
+  { rank: "ex", label: "Ex", desc: "中級者層" },
+  { rank: "hard", label: "H", desc: "中級者以上" },
+  { rank: "luna", label: "L", desc: "上級者以上" },
+];
 
 const posts = new Map();
 let myRank = null;
@@ -213,6 +278,9 @@ const rankedGateEl = document.getElementById("ranked-gate");
 const rankedSectionEl = document.getElementById("ranked-section");
 const statusEl = document.getElementById("status");
 const authInfoEl = document.getElementById("auth-info");
+const rankChoiceBannerEl = document.getElementById("rank-choice-banner");
+const rankChoiceBtnsEl = document.getElementById("rank-choice-btns");
+const rankChoiceErrorEl = document.getElementById("rank-choice-error");
 
 function rankLabel(p) {
   const key = (p.rank || "easy").toLowerCase();
@@ -369,8 +437,62 @@ function badge(text) {
   return el;
 }
 
+function showRankChoiceError(msg) {
+  rankChoiceErrorEl.textContent = msg;
+  rankChoiceErrorEl.hidden = !msg;
+}
+
+async function chooseInitialRank(rank, label) {
+  if (!confirm(`開始ランクを ${label} にします。この選択は一度だけです。よろしいですか？`)) {
+    return;
+  }
+  showRankChoiceError("");
+  try {
+    const res = await fetch("/rank/initial", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rank }),
+    });
+    if (res.ok) {
+      rankChoiceBannerEl.hidden = true;
+      location.reload();
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    showRankChoiceError(data.detail || `エラー (${res.status})`);
+  } catch (_) {
+    showRankChoiceError("通信に失敗しました");
+  }
+}
+
+function setupRankChoiceBanner(user) {
+  if (!user.can_choose_rank) {
+    rankChoiceBannerEl.hidden = true;
+    return;
+  }
+  rankChoiceBannerEl.hidden = false;
+  rankChoiceBtnsEl.textContent = "";
+  showRankChoiceError("");
+  for (const c of INITIAL_RANK_CHOICES) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "rank-choice-btn";
+    const lbl = document.createElement("span");
+    lbl.className = "rank-label";
+    lbl.textContent = c.label;
+    const desc = document.createElement("span");
+    desc.className = "rank-desc";
+    desc.textContent = c.desc;
+    btn.appendChild(lbl);
+    btn.appendChild(desc);
+    btn.addEventListener("click", () => chooseInitialRank(c.rank, c.label));
+    rankChoiceBtnsEl.appendChild(btn);
+  }
+}
+
 function showLoggedIn(user) {
-  myRank = (user.rank || "easy").toLowerCase();
+  myRank = (user.rank || "normal").toLowerCase();
+  setupRankChoiceBanner(user);
   authInfoEl.hidden = false;
   authInfoEl.textContent = "";
   authInfoEl.appendChild(document.createTextNode(`${user.name} でログイン中 (${RANK_LABEL[myRank] || myRank})`));
@@ -394,6 +516,7 @@ function showLoggedIn(user) {
 
 function showLoginRequired() {
   myRank = null;
+  rankChoiceBannerEl.hidden = true;
   authInfoEl.hidden = false;
   authInfoEl.textContent = "";
   const login = document.createElement("a");

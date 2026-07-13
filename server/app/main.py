@@ -121,7 +121,7 @@ class Post:
     """クライアントに公開してよいフィールドのみを持つ。"""
 
     id: str = field(default_factory=lambda: uuid4().hex)
-    rank: str = "easy"  # ホストの現在システムランク (作成時に設定)
+    rank: str = "normal"  # ホストの現在システムランク (作成時に設定)
     post_type: str = "casual"  # "casual" | "ranked"
     rating: Optional[float] = None  # ph のみ表示レート
     addr: str = ""
@@ -196,6 +196,10 @@ class ReportResultIn(BaseModel):
 
 class DevicePollIn(BaseModel):
     device_code: str = Field(max_length=128)
+
+
+class ChooseRankIn(BaseModel):
+    rank: Literal["easy", "normal", "ex", "hard", "luna"]
 
 
 # ----------------------------
@@ -284,6 +288,7 @@ async def resolve_session(request: Request) -> Optional[dict[str, Any]]:
         "avatar": discord_avatar_url(user.id, user.avatar),
         "rank": user.rank,
         "rating": rating,
+        "can_choose_rank": not user.rank_locked,
     }
 
 
@@ -579,7 +584,7 @@ async def host_rank_for_post(owner_user_id: str) -> tuple[str, Optional[float]]:
     """募集作成時に Post.rank / Post.rating を決める。"""
     rank_info = await db.get_user_rank(owner_user_id)
     if rank_info is None:
-        return "easy", None
+        return "normal", None
     rank, mu, sigma = rank_info
     rating = display_rating(mu, sigma) if rank == "ph" else None
     return rank, rating
@@ -949,6 +954,17 @@ async def auth_me(request: Request) -> dict[str, Any]:
     return sess
 
 
+@app.post("/rank/initial")
+async def choose_initial_rank(body: ChooseRankIn, request: Request) -> dict[str, Any]:
+    """初回のみ開始ランクを選択する。"""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    if not await db.choose_initial_rank(sess["id"], body.rank):
+        raise HTTPException(status_code=409, detail="rank already locked")
+    return {"ok": True, "rank": body.rank}
+
+
 @app.get("/posts")
 async def list_posts() -> list[dict[str, Any]]:
     return sorted_public_posts()
@@ -1084,6 +1100,10 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
     rec.session_games += 1
 
     if is_ranked:
+        if rec.owner_user_id:
+            await db.lock_user_rank(rec.owner_user_id)
+        if rec.guest_user_id:
+            await db.lock_user_rank(rec.guest_user_id)
         if rec.owner_user_id:
             await evaluate_rank(rec.owner_user_id)
         if rec.guest_user_id:
