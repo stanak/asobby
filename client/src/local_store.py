@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 import uuid
@@ -37,6 +38,26 @@ class LocalStore:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
         self._ensure_schema()
+
+    @classmethod
+    def open_with_fallback(cls, preferred: str | Path) -> "LocalStore":
+        """preferred に開けない場合 (UNC/WSL 共有パス等、SQLite のロックが
+        効かないファイルシステム) は LOCALAPPDATA 配下にフォールバックする。"""
+        candidates = [Path(preferred)]
+        local_app = os.environ.get("LOCALAPPDATA", "")
+        if local_app:
+            candidates.append(Path(local_app) / "asobby" / "matches.db")
+        else:
+            candidates.append(Path.home() / ".asobby" / "matches.db")
+
+        last_err: Exception | None = None
+        for p in candidates:
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                return cls(p)
+            except (sqlite3.Error, OSError) as e:
+                last_err = e
+        raise last_err  # type: ignore[misc]
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)

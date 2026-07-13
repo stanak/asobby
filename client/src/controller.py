@@ -61,8 +61,8 @@ class Controller:
         self.config_mgr = ConfigManager()
         self.config = self.config_mgr.get()
         self.tool_mgr = ToolManager(self.config_mgr)
-        db_path = self.config_mgr.path.parent / "matches.db"
-        self.local_store = LocalStore(db_path)
+        db_path = self.config_mgr.path.resolve().parent / "matches.db"
+        self.local_store = LocalStore.open_with_fallback(db_path)
 
         # 非想天則の対戦は IPv4 のみ。IPv6 でサーバーに接続すると /myip が
         # IPv6 を返して募集アドレスが壊れるため、通信を IPv4 に強制する。
