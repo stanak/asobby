@@ -70,6 +70,28 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    async def report_guest_match(
+        self,
+        winner: str,
+        host_char: int | None = None,
+        guest_char: int | None = None,
+        host_profile: str = "",
+        guest_profile: str = "",
+    ) -> dict:
+        r = await self.http.post(
+            f"{self.base}/matches/report",
+            json={
+                "winner": winner,
+                "host_char": host_char,
+                "guest_char": guest_char,
+                "host_profile": host_profile,
+                "guest_profile": guest_profile,
+            },
+            headers=self._auth_headers(),
+        )
+        r.raise_for_status()
+        return r.json()
+
     async def upload_replay(self, data: bytes) -> dict:
         r = await self.http.post(
             f"{self.base}/replays/upload",

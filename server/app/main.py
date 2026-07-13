@@ -227,6 +227,14 @@ class ReportResultIn(BaseModel):
     guest_profile: str = Field(default="", max_length=64)
 
 
+class GuestReportIn(BaseModel):
+    winner: Literal["host", "guest", "draw"]
+    host_char: Optional[int] = None
+    guest_char: Optional[int] = None
+    host_profile: str = Field(default="", max_length=64)
+    guest_profile: str = Field(default="", max_length=64)
+
+
 class DevicePollIn(BaseModel):
     device_code: str = Field(max_length=128)
 
@@ -1170,6 +1178,35 @@ async def upload_replay(request: Request) -> dict[str, Any]:
     return {"ok": True, "stored": True, "filename": filename}
 
 
+@app.post("/matches/report")
+async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str, Any]:
+    """ログイン済みゲストが自分のクライアントから対戦結果を補完報告する。"""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    if not db.is_configured():
+        return {"ok": True, "recorded": False}
+
+    uid = sess["id"]
+    if await db.find_recent_match_as_guest(uid) is not None:
+        return {"ok": True, "recorded": False, "reason": "duplicate"}
+
+    await db.insert_match_result(
+        host_user_id=None,
+        guest_user_id=uid,
+        host_ip="",
+        guest_ip=client_ip(request),
+        winner=body.winner,
+        host_char=body.host_char,
+        guest_char=body.guest_char,
+        host_profile=body.host_profile,
+        guest_profile=body.guest_profile,
+        ranked=False,
+        source="guest",
+    )
+    return {"ok": True, "recorded": True}
+
+
 @app.post("/posts/result")
 async def report_result(body: ReportResultIn) -> dict[str, Any]:
     rec = get_record_or_raise(body.id, body.owner_token)
@@ -1180,19 +1217,48 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
     is_ranked = post.ranked_active and rec.session_games < RANKED_SESSION_MAX_GAMES
     host_ip, _, _ = post.addr.partition(":")
 
-    await db.insert_match_result(
-        host_user_id=rec.owner_user_id,
-        # 匿名ゲストは NULL (空文字だと users への FK 違反になる)
-        guest_user_id=(rec.guest_user_id or None),
-        host_ip=host_ip,
-        guest_ip=rec.guest_ip,
-        winner=body.winner,
-        host_char=body.host_char,
-        guest_char=body.guest_char,
-        host_profile=body.host_profile,
-        guest_profile=body.guest_profile,
-        ranked=is_ranked,
-    )
+    if rec.guest_user_id:
+        guest_match = await db.find_recent_guest_reported_match(rec.guest_user_id)
+        if guest_match is not None:
+            await db.promote_guest_match(
+                guest_match.id,
+                host_user_id=rec.owner_user_id,
+                host_ip=host_ip,
+                winner=body.winner,
+                host_char=body.host_char,
+                guest_char=body.guest_char,
+                host_profile=body.host_profile,
+                guest_profile=body.guest_profile,
+                ranked=is_ranked,
+            )
+        else:
+            await db.insert_match_result(
+                host_user_id=rec.owner_user_id,
+                guest_user_id=rec.guest_user_id,
+                host_ip=host_ip,
+                guest_ip=rec.guest_ip,
+                winner=body.winner,
+                host_char=body.host_char,
+                guest_char=body.guest_char,
+                host_profile=body.host_profile,
+                guest_profile=body.guest_profile,
+                ranked=is_ranked,
+                source="host",
+            )
+    else:
+        await db.insert_match_result(
+            host_user_id=rec.owner_user_id,
+            guest_user_id=None,
+            host_ip=host_ip,
+            guest_ip=rec.guest_ip,
+            winner=body.winner,
+            host_char=body.host_char,
+            guest_char=body.guest_char,
+            host_profile=body.host_profile,
+            guest_profile=body.guest_profile,
+            ranked=is_ranked,
+            source="host",
+        )
     rec.session_games += 1
 
     if is_ranked:

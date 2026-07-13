@@ -15,6 +15,7 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `POST /posts/update` | 募集の更新。`id` + `owner_token` が必須 |
 | `POST /posts/close` | 募集の削除。`id` + `owner_token` が必須 |
 | `POST /posts/result` | 対戦勝敗の報告。`id` + `owner_token` + `winner` (`host`/`guest`/`draw`) |
+| `POST /matches/report` | ゲスト側クライアントからの対戦結果補完報告。`Authorization: Bearer` 必須 |
 | `POST /replays/upload` | リプレイ (.rep) のアップロード。`Authorization: Bearer` 必須。body は生バイト |
 | `GET /sse/posts` | SSE。接続直後に `snapshot`、以後 `upsert` / `close` |
 | `POST /auth/device` | Discord ログイン開始。`device_code` と `verify_url` を返す |
@@ -89,11 +90,18 @@ Discord で承認 → クライアントが `POST /auth/device/poll` で `sessio
 表示され、ホストがログイン済みなら `matches` テーブルに対戦記録が残る。
 ホストのクライアントが KO 検出時に `POST /posts/result` で勝敗を報告し、
 `matches.winner` に記録される。
+ホストが asobby を使っていない場合でも、ログイン済みゲストは自分のクライアントが
+`POST /matches/report` で戦績を補完できる（ランクマ扱いにはならない）。
+ホスト・ゲスト双方が asobby を導入している場合、KO 検出はほぼ同時に届くため、
+直近 60 秒以内の重複報告は排除する（ゲスト報告はスキップ、ホスト報告はゲスト報告行を
+昇格して上書きする）。
 `ASOBBY_HOSTCHECK=off` の場合はプローブ自体が無効になる。
 
 ### 戦績
 
 KO 報告 (`POST /posts/result`) には使用キャラとプロファイル名も含まれる。
+ホスト非導入時はゲスト報告 (`POST /matches/report`) でも戦績が残るが、
+`ranked=False` でランク評価・TrueSkill 更新の対象外となる。
 ログインユーザーは `/stats` で総合勝率、直近 30 / 50 / 100 戦の勝率、
 自キャラ別・対戦相手キャラ別・対戦相手プロファイル別の勝率を閲覧できる。
 

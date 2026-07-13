@@ -18,7 +18,7 @@ from config_manager import ConfigManager
 from tool_manager import ToolManager
 
 
-ActionType = Literal["create", "update", "close", "result"]
+ActionType = Literal["create", "update", "close", "result", "guest_result"]
 
 HEARTBEAT_SEC = 5  # サーバー側 TTL (20s) の 1/4
 CREATE_RETRY_COOLDOWN_SEC = 10
@@ -331,6 +331,28 @@ class Controller:
                     except httpx.HTTPError as e:
                         self.log_sink("error", f"Result report failed: {e}")
 
+                elif act.type == "guest_result":
+                    try:
+                        resp = await self.api.report_guest_match(
+                            act.payload["winner"],
+                            host_char=act.payload.get("host_char"),
+                            guest_char=act.payload.get("guest_char"),
+                            host_profile=act.payload.get("host_profile", ""),
+                            guest_profile=act.payload.get("guest_profile", ""),
+                        )
+                        if resp.get("recorded"):
+                            self.log_sink(
+                                "info",
+                                f"Guest match result reported: {act.payload['winner']}",
+                            )
+                        elif resp.get("reason") == "duplicate":
+                            self.log_sink(
+                                "info",
+                                "Guest match result duplicate (already recorded)",
+                            )
+                    except httpx.HTTPError as e:
+                        self.log_sink("error", f"Guest result report failed: {e}")
+
             except httpx.HTTPStatusError as e:
                 self._on_api_error(act, e)
             except httpx.HTTPError as e:
@@ -403,6 +425,29 @@ class Controller:
             self._result_reported = True
             winner = "host" if st.lwin == 2 else "guest"
             return Action("result", {
+                "winner": winner,
+                "host_char": st.lchar_id,
+                "guest_char": st.rchar_id,
+                "host_profile": (st.lprof or ""),
+                "guest_profile": (st.rprof or ""),
+            })
+
+        # ゲスト側: ホストが asobby 非導入でも戦績を補完報告する
+        if (
+            st.net_side == "client"
+            and is_battle
+            and not self._result_reported
+            and self.is_logged_in()
+            and st.btl_mode == 5
+            and st.lwin is not None
+            and st.rwin is not None
+            and 0 <= st.lwin <= 2
+            and 0 <= st.rwin <= 2
+            and (st.lwin == 2 or st.rwin == 2)
+        ):
+            self._result_reported = True
+            winner = "host" if st.lwin == 2 else "guest"
+            return Action("guest_result", {
                 "winner": winner,
                 "host_char": st.lchar_id,
                 "guest_char": st.rchar_id,

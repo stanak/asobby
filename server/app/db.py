@@ -66,8 +66,8 @@ class Match(Base):
     id: Mapped[str] = mapped_column(
         String(32), primary_key=True, default=lambda: uuid4().hex
     )
-    host_user_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("users.id"), nullable=False, index=True
+    host_user_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("users.id"), nullable=True, index=True
     )
     guest_user_id: Mapped[Optional[str]] = mapped_column(
         String(32), ForeignKey("users.id"), nullable=True, index=True
@@ -83,6 +83,8 @@ class Match(Base):
     host_profile: Mapped[str] = mapped_column(String(64), default="")
     guest_profile: Mapped[str] = mapped_column(String(64), default="")
     ranked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # "host" = ホスト報告 (正)、 "guest" = ゲスト補完報告
+    source: Mapped[str] = mapped_column(String(8), default="host", server_default="host")
     played_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -294,7 +296,7 @@ async def set_user_rating(user_id: str, mu: float, sigma: float) -> None:
 
 
 async def insert_match_result(
-    host_user_id: str,
+    host_user_id: Optional[str],
     guest_user_id: Optional[str],
     host_ip: str,
     guest_ip: str,
@@ -305,6 +307,7 @@ async def insert_match_result(
     host_profile: str = "",
     guest_profile: str = "",
     ranked: bool = False,
+    source: str = "host",
 ) -> str:
     """対戦結果を matches に新規 insert する。insert した行の id を返す。"""
     async with session() as s:
@@ -319,11 +322,83 @@ async def insert_match_result(
             host_profile=host_profile,
             guest_profile=guest_profile,
             ranked=ranked,
+            source=source,
             played_at=utcnow(),
         )
         s.add(match)
         await s.commit()
         return match.id
+
+
+async def find_recent_match_as_guest(
+    guest_user_id: str, within_sec: int = 60
+) -> Optional[Match]:
+    """guest_user_id 一致 & played_at が直近 within_sec 秒以内の match を 1 件返す。"""
+    cutoff = utcnow() - timedelta(seconds=within_sec)
+    async with session() as s:
+        res = await s.execute(
+            select(Match)
+            .where(
+                (Match.guest_user_id == guest_user_id)
+                & (Match.winner != "")
+                & Match.played_at.is_not(None)
+                & (Match.played_at >= cutoff)
+            )
+            .order_by(Match.played_at.desc())
+            .limit(1)
+        )
+        return res.scalar_one_or_none()
+
+
+async def find_recent_guest_reported_match(
+    guest_user_id: str, within_sec: int = 60
+) -> Optional[Match]:
+    """直近のゲスト報告 (source=='guest') match を 1 件返す。"""
+    cutoff = utcnow() - timedelta(seconds=within_sec)
+    async with session() as s:
+        res = await s.execute(
+            select(Match)
+            .where(
+                (Match.guest_user_id == guest_user_id)
+                & (Match.source == "guest")
+                & (Match.winner != "")
+                & Match.played_at.is_not(None)
+                & (Match.played_at >= cutoff)
+            )
+            .order_by(Match.played_at.desc())
+            .limit(1)
+        )
+        return res.scalar_one_or_none()
+
+
+async def promote_guest_match(
+    match_id: str,
+    *,
+    host_user_id: str,
+    host_ip: str,
+    winner: str,
+    host_char: Optional[int],
+    guest_char: Optional[int],
+    host_profile: str,
+    guest_profile: str,
+    ranked: bool,
+) -> Optional[Match]:
+    """ゲスト報告行をホスト報告に昇格する (delete+insert 禁止)。更新後の Match を返す。"""
+    async with session() as s:
+        match = await s.get(Match, match_id)
+        if match is None:
+            return None
+        match.host_user_id = host_user_id
+        match.host_ip = host_ip
+        match.winner = winner
+        match.host_char = host_char
+        match.guest_char = guest_char
+        match.host_profile = host_profile
+        match.guest_profile = guest_profile
+        match.ranked = ranked
+        match.source = "host"
+        await s.commit()
+        return match
 
 
 async def fetch_user_matches(user_id: str, limit: int = 1000) -> list[Match]:
