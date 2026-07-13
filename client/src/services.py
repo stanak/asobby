@@ -5,16 +5,24 @@ from dataclasses import dataclass
 
 __version__ = "0.3.0"
 
-MODE_OPTIONS = [
-    ("All", "all"),
-    ("Any", "any"),
-    ("E", "easy"),
-    ("N", "normal"),
-    ("Ex", "ex"),
-    ("H", "hard"),
-    ("L", "luna"),
-    ("Ph", "ph"),
+POST_TYPE_OPTIONS = [
+    ("カジュアル", "casual"),
+    ("ランクマ", "ranked"),
 ]
+
+POST_TYPE_LABEL = {
+    "casual": "カジュアル",
+    "ranked": "ランクマ",
+}
+
+RANK_LABEL = {
+    "easy": "E",
+    "normal": "N",
+    "ex": "Ex",
+    "hard": "H",
+    "luna": "L",
+    "ph": "Ph",
+}
 
 NET_UNKNOWN = 0
 NET_DEAD = 1
@@ -23,10 +31,17 @@ NET_ALIVE = 3
 NET_BATTLE = 4
 
 
+def format_system_rank(rank: str, rating: float | None = None) -> str:
+    label = RANK_LABEL.get(rank, rank or "?")
+    if rank == "ph" and rating is not None:
+        return f"Ph ({rating})"
+    return label
+
+
 @dataclass
 class Post:
     id: str = ""
-    rank: str = "any"
+    post_type: str = "casual"
     addr: str = ""
     comment: str = ""
     updated_at: float = 0
@@ -40,7 +55,7 @@ class Post:
 def edit_post_settings(parent, current: dict, on_ok) -> None:
     """投稿設定を編集する Toplevel ダイアログ。tk メインスレッドで呼ぶこと。
 
-    OK 時に on_ok({"rank", "stream_url", "stream_url_presets", "comment", "comment_presets"}) を呼ぶ。
+    OK 時に on_ok({"post_type", "stream_url", "stream_url_presets", "comment", "comment_presets"}) を呼ぶ。
     comment_presets / stream_url_presets はテキスト欄の 1 行 1 件。
     comment / stream_url (現在有効な値) はプリセットに残っていればそのまま、
     消えていれば先頭のプリセットになる。
@@ -48,16 +63,16 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
     import tkinter as tk
     from tkinter import ttk
 
-    # "All" はフィルタ専用なので募集ランクの選択肢から除外する
-    rank_options = MODE_OPTIONS[1:]
-    label_by_value = {v: label for label, v in rank_options}
+    label_by_value = {v: label for label, v in POST_TYPE_OPTIONS}
 
     win = tk.Toplevel(parent)
     win.title("asobby 投稿設定")
     win.attributes("-topmost", True)
     win.resizable(False, False)
 
-    rank_var = tk.StringVar(value=label_by_value.get(current.get("rank", "any"), "Any"))
+    post_type_var = tk.StringVar(
+        value=label_by_value.get(current.get("post_type", "casual"), "カジュアル")
+    )
 
     presets = [str(x) for x in current.get("comment_presets", []) if str(x).strip()]
     active_comment = str(current.get("comment", ""))
@@ -74,15 +89,15 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
     frame = ttk.Frame(win, padding=12)
     frame.grid(sticky="nsew")
 
-    ttk.Label(frame, text="Post Rank:").grid(row=0, column=0, sticky="e", pady=4, padx=(0, 8))
-    rank_box = ttk.Combobox(
+    ttk.Label(frame, text="募集モード:").grid(row=0, column=0, sticky="e", pady=4, padx=(0, 8))
+    post_type_box = ttk.Combobox(
         frame,
-        textvariable=rank_var,
-        values=[label for label, _ in rank_options],
+        textvariable=post_type_var,
+        values=[label for label, _ in POST_TYPE_OPTIONS],
         state="readonly",
         width=12,
     )
-    rank_box.grid(row=0, column=1, sticky="w", pady=4)
+    post_type_box.grid(row=0, column=1, sticky="w", pady=4)
 
     ttk.Label(frame, text="配信URL候補\n(1行1件):", justify="right").grid(
         row=1, column=0, sticky="ne", pady=4, padx=(0, 8)
@@ -108,7 +123,7 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
     hint.grid(row=3, column=1, sticky="w")
 
     def do_ok() -> None:
-        value_by_label = {label: v for label, v in rank_options}
+        value_by_label = {label: v for label, v in POST_TYPE_OPTIONS}
         comment_lines = [l.strip() for l in comment_text.get("1.0", "end").splitlines() if l.strip()]
         if active_comment in comment_lines:
             comment = active_comment
@@ -120,7 +135,7 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
         else:
             stream_url = stream_lines[0] if stream_lines else ""
         result = {
-            "rank": value_by_label.get(rank_var.get(), "any"),
+            "post_type": value_by_label.get(post_type_var.get(), "casual"),
             "stream_url": stream_url,
             "stream_url_presets": stream_lines,
             "comment": comment,

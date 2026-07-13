@@ -136,6 +136,10 @@
   </div>
   <div id="content" hidden>
     <div class="panel" id="overview"></div>
+    <div class="panel" id="ranked-panel">
+      <h2>ランクマ</h2>
+      <div id="ranked-summary"></div>
+    </div>
     <div class="panel">
       <h2>直近勝率</h2>
       <div class="cards" id="recent-cards"></div>
@@ -171,6 +175,10 @@ const CHAR_NAME = {
   10: "Reisen", 11: "Aya", 12: "Komachi", 13: "Iku", 14: "Tenshi",
   15: "Sanae", 16: "Cirno", 17: "Meiling", 18: "Utsuho", 19: "Suwako",
   20: "Random",
+};
+
+const RANK_LABEL = {
+  easy: "E", normal: "N", ex: "Ex", hard: "H", luna: "L", ph: "Ph",
 };
 
 function charName(id) {
@@ -247,6 +255,33 @@ function render(data) {
   sum.className = "summary";
   sum.innerHTML = `総合成績: <strong>${wl(t)}</strong>　勝率: <span class="win-rate">${pct(t.win_rate)}</span>（${t.games} 戦）`;
   ov.appendChild(sum);
+
+  const ranked = data.ranked || {};
+  const rankedEl = document.getElementById("ranked-summary");
+  rankedEl.textContent = "";
+  const rRank = (ranked.rank || "easy").toLowerCase();
+  let rankText = RANK_LABEL[rRank] || ranked.rank || "";
+  if (rRank === "ph" && ranked.rating != null) {
+    rankText += ` (${ranked.rating})`;
+  }
+  const rankLine = document.createElement("div");
+  rankLine.className = "summary";
+  rankLine.style.marginBottom = "10px";
+  rankLine.textContent = `現在ランク: ${rankText}`;
+  rankedEl.appendChild(rankLine);
+
+  const rt = ranked.total || { games: 0, wins: 0, losses: 0, draws: 0, win_rate: 0 };
+  const rTotal = document.createElement("div");
+  rTotal.className = "summary";
+  rTotal.style.marginBottom = "8px";
+  rTotal.innerHTML = `ランクマ総合成績: <strong>${wl(rt)}</strong>　勝率: <span class="win-rate">${pct(rt.win_rate)}</span>（${rt.games} 戦）`;
+  rankedEl.appendChild(rTotal);
+
+  const r50 = ranked.recent50 || { games: 0, wins: 0, win_rate: 0 };
+  const rRecent = document.createElement("div");
+  rRecent.className = "summary";
+  rRecent.innerHTML = `直近 50 戦: <span class="win-rate">${pct(r50.win_rate)}</span>（${r50.wins}勝 / ${r50.games}戦）`;
+  rankedEl.appendChild(rRecent);
 
   const recentEl = document.getElementById("recent-cards");
   recentEl.textContent = "";

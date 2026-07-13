@@ -55,22 +55,15 @@
   #auth-info a:hover { text-decoration: underline; }
   #status.connected::before { content: "●"; color: var(--ok); margin-right: 6px; }
   #status.disconnected::before { content: "●"; color: var(--err); margin-right: 6px; }
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 20px;
-  }
-  .toolbar label { color: var(--muted); font-size: 13px; }
-  select {
-    background: var(--panel);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 4px 8px;
+  .section-title {
+    padding: 12px 20px 6px;
     font-size: 14px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
-  #count { color: var(--muted); font-size: 13px; }
+  .count { color: var(--muted); font-size: 13px; padding: 0 20px 6px; }
   main { padding: 0 20px 32px; }
   table {
     width: 100%;
@@ -79,6 +72,7 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     overflow: hidden;
+    margin-bottom: 20px;
   }
   th, td {
     text-align: left;
@@ -120,11 +114,22 @@
   }
   button.copy:hover { border-color: var(--accent); }
   button.copy.copied { color: var(--ok); border-color: var(--ok); }
-  #empty {
-    padding: 40px 0;
+  .empty {
+    padding: 24px 0;
     text-align: center;
     color: var(--muted);
   }
+  .gate {
+    padding: 24px 20px;
+    text-align: center;
+    color: var(--muted);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 20px;
+  }
+  .gate a { color: var(--accent); text-decoration: none; }
+  .gate a:hover { text-decoration: underline; }
   .avatar {
     width: 22px;
     height: 22px;
@@ -142,22 +147,34 @@
   <span id="status" class="disconnected" hidden>接続中...</span>
 </header>
 
-<div class="toolbar" id="toolbar">
-  <label for="rank-filter">Rank:</label>
-  <select id="rank-filter">
-    <option value="all">All</option>
-    <option value="any">Any</option>
-    <option value="easy">E</option>
-    <option value="normal">N</option>
-    <option value="ex">Ex</option>
-    <option value="hard">H</option>
-    <option value="luna">L</option>
-    <option value="ph">Ph</option>
-  </select>
-  <span id="count"></span>
+<div class="section-title">ランクマ募集</div>
+<div id="ranked-gate" class="gate" hidden>
+  ランクマ募集を見るには <a href="/auth/discord/web">Discord ログイン</a> が必要です
+</div>
+<div id="ranked-section" hidden>
+  <div class="count" id="ranked-count"></div>
+  <main>
+    <table>
+      <thead>
+        <tr>
+          <th>Match</th>
+          <th>User</th>
+          <th>Rank</th>
+          <th>Cap</th>
+          <th>Stream</th>
+          <th>Comment</th>
+          <th>Addr</th>
+        </tr>
+      </thead>
+      <tbody id="ranked-rows"></tbody>
+    </table>
+    <div id="ranked-empty" class="empty" hidden>現在ランクマ募集はありません</div>
+  </main>
 </div>
 
-<main id="main-content">
+<div class="section-title">カジュアル募集</div>
+<div class="count" id="casual-count"></div>
+<main>
   <table>
     <thead>
       <tr>
@@ -170,9 +187,9 @@
         <th>Addr</th>
       </tr>
     </thead>
-    <tbody id="rows"></tbody>
+    <tbody id="casual-rows"></tbody>
   </table>
-  <div id="empty" hidden>現在募集はありません</div>
+  <div id="casual-empty" class="empty" hidden>現在カジュアル募集はありません</div>
 </main>
 
 <script>
@@ -180,127 +197,163 @@
 
 const NET_BATTLE = 4;
 const RANK_LABEL = {
-  any: "Any", easy: "E", normal: "N", ex: "Ex", hard: "H", luna: "L", ph: "Ph",
+  easy: "E", normal: "N", ex: "Ex", hard: "H", luna: "L", ph: "Ph",
 };
 
 const posts = new Map();
-let filterRank = "all";
+let myRank = null;
 
-const rowsEl = document.getElementById("rows");
-const emptyEl = document.getElementById("empty");
-const countEl = document.getElementById("count");
+const rankedRowsEl = document.getElementById("ranked-rows");
+const casualRowsEl = document.getElementById("casual-rows");
+const rankedEmptyEl = document.getElementById("ranked-empty");
+const casualEmptyEl = document.getElementById("casual-empty");
+const rankedCountEl = document.getElementById("ranked-count");
+const casualCountEl = document.getElementById("casual-count");
+const rankedGateEl = document.getElementById("ranked-gate");
+const rankedSectionEl = document.getElementById("ranked-section");
 const statusEl = document.getElementById("status");
 const authInfoEl = document.getElementById("auth-info");
 
-document.getElementById("rank-filter").addEventListener("change", (e) => {
-  filterRank = e.target.value;
-  render();
-});
-
-function render() {
-  let list = [...posts.values()];
-  if (filterRank !== "all" && filterRank !== "any") {
-    list = list.filter((p) => (p.rank || "any").toLowerCase() === filterRank);
+function rankLabel(p) {
+  const key = (p.rank || "easy").toLowerCase();
+  const label = RANK_LABEL[key] || p.rank || "";
+  if (key === "ph" && p.rating != null) {
+    return `${label} (${p.rating})`;
   }
+  return label;
+}
+
+function sortPosts(list) {
   list.sort((a, b) => {
     const dc = (b.created_at || 0) - (a.created_at || 0);
     if (dc !== 0) return dc;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
+  return list;
+}
 
-  rowsEl.textContent = "";
-  for (const p of list) {
-    const tr = document.createElement("tr");
-    if (p.net_status === NET_BATTLE) tr.classList.add("battle");
+function buildRow(p) {
+  const tr = document.createElement("tr");
+  if (p.net_status === NET_BATTLE) tr.classList.add("battle");
 
-    tr.appendChild(td(p.match_status || ""));
+  tr.appendChild(td(p.match_status || ""));
 
-    const userCell = document.createElement("td");
-    if (p.owner_avatar) {
-      const img = document.createElement("img");
-      img.className = "avatar";
-      img.src = p.owner_avatar;
-      img.loading = "lazy";
-      img.referrerPolicy = "no-referrer";
-      img.alt = "";
-      userCell.appendChild(img);
-    }
+  const userCell = document.createElement("td");
+  if (p.owner_avatar) {
+    const img = document.createElement("img");
+    img.className = "avatar";
+    img.src = p.owner_avatar;
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    img.alt = "";
+    userCell.appendChild(img);
+  }
+  if (p.owner_name) {
+    userCell.appendChild(document.createTextNode(p.owner_name));
+  }
+  if (p.guest_name) {
     if (p.owner_name) {
-      userCell.appendChild(document.createTextNode(p.owner_name));
+      userCell.appendChild(document.createTextNode(" vs "));
+    } else {
+      userCell.appendChild(document.createTextNode("vs "));
     }
-    if (p.guest_name) {
-      if (p.owner_name) {
-        userCell.appendChild(document.createTextNode(" vs "));
-      } else {
-        userCell.appendChild(document.createTextNode("vs "));
-      }
-      if (p.guest_avatar) {
-        const gimg = document.createElement("img");
-        gimg.className = "avatar";
-        gimg.src = p.guest_avatar;
-        gimg.loading = "lazy";
-        gimg.referrerPolicy = "no-referrer";
-        gimg.alt = "";
-        userCell.appendChild(gimg);
-      }
-      userCell.appendChild(document.createTextNode(p.guest_name));
+    if (p.guest_avatar) {
+      const gimg = document.createElement("img");
+      gimg.className = "avatar";
+      gimg.src = p.guest_avatar;
+      gimg.loading = "lazy";
+      gimg.referrerPolicy = "no-referrer";
+      gimg.alt = "";
+      userCell.appendChild(gimg);
     }
-    tr.appendChild(userCell);
-    tr.appendChild(td(RANK_LABEL[(p.rank || "any").toLowerCase()] || p.rank || ""));
+    userCell.appendChild(document.createTextNode(p.guest_name));
+  }
+  tr.appendChild(userCell);
+  tr.appendChild(td(rankLabel(p)));
 
-    const cap = document.createElement("td");
-    if (p.autopunch) cap.appendChild(badge("A"));
-    if (p.giuroll) cap.appendChild(badge("G"));
-    tr.appendChild(cap);
+  const cap = document.createElement("td");
+  if (p.autopunch) cap.appendChild(badge("A"));
+  if (p.giuroll) cap.appendChild(badge("G"));
+  tr.appendChild(cap);
 
-    const stream = document.createElement("td");
-    if ((p.stream_url || "").trim()) {
-      const a = document.createElement("a");
-      a.className = "stream";
-      a.href = p.stream_url;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      a.textContent = "▶ 配信";
-      stream.appendChild(a);
+  const stream = document.createElement("td");
+  if ((p.stream_url || "").trim()) {
+    const a = document.createElement("a");
+    a.className = "stream";
+    a.href = p.stream_url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = "▶ 配信";
+    stream.appendChild(a);
+  }
+  tr.appendChild(stream);
+
+  const comment = td(p.comment || "");
+  comment.className = "comment";
+  tr.appendChild(comment);
+
+  const addr = document.createElement("td");
+  const btn = document.createElement("button");
+  btn.className = "copy";
+  btn.textContent = p.addr;
+  btn.title = "クリックでコピー";
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(p.addr);
+    } catch (_) {
+      const ta = document.createElement("textarea");
+      ta.value = p.addr;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
     }
-    tr.appendChild(stream);
+    btn.classList.add("copied");
+    const orig = btn.textContent;
+    btn.textContent = "コピーしました";
+    setTimeout(() => {
+      btn.classList.remove("copied");
+      btn.textContent = orig;
+    }, 1200);
+  });
+  addr.appendChild(btn);
+  tr.appendChild(addr);
 
-    const comment = td(p.comment || "");
-    comment.className = "comment";
-    tr.appendChild(comment);
+  return tr;
+}
 
-    const addr = document.createElement("td");
-    const btn = document.createElement("button");
-    btn.className = "copy";
-    btn.textContent = p.addr;
-    btn.title = "クリックでコピー";
-    btn.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(p.addr);
-      } catch (_) {
-        const ta = document.createElement("textarea");
-        ta.value = p.addr;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        ta.remove();
-      }
-      btn.classList.add("copied");
-      const orig = btn.textContent;
-      btn.textContent = "コピーしました";
-      setTimeout(() => {
-        btn.classList.remove("copied");
-        btn.textContent = orig;
-      }, 1200);
-    });
-    addr.appendChild(btn);
-    tr.appendChild(addr);
+function fillTable(tbody, list) {
+  tbody.textContent = "";
+  for (const p of list) {
+    tbody.appendChild(buildRow(p));
+  }
+}
 
-    rowsEl.appendChild(tr);
+function render() {
+  const all = [...posts.values()];
+  let ranked = all.filter((p) => (p.post_type || "casual") === "ranked");
+  const casual = all.filter((p) => (p.post_type || "casual") !== "ranked");
+
+  if (myRank) {
+    ranked = ranked.filter((p) => (p.rank || "easy").toLowerCase() === myRank);
+    rankedGateEl.hidden = true;
+    rankedSectionEl.hidden = false;
+  } else {
+    rankedGateEl.hidden = false;
+    rankedSectionEl.hidden = true;
+    ranked = [];
   }
 
-  emptyEl.hidden = list.length > 0;
-  countEl.textContent = `${list.length} 件`;
+  sortPosts(ranked);
+  sortPosts(casual);
+
+  fillTable(rankedRowsEl, ranked);
+  fillTable(casualRowsEl, casual);
+
+  rankedEmptyEl.hidden = ranked.length > 0 || !myRank;
+  casualEmptyEl.hidden = casual.length > 0;
+  rankedCountEl.textContent = `${ranked.length} 件`;
+  casualCountEl.textContent = `${casual.length} 件`;
 }
 
 function td(text) {
@@ -317,9 +370,10 @@ function badge(text) {
 }
 
 function showLoggedIn(user) {
+  myRank = (user.rank || "easy").toLowerCase();
   authInfoEl.hidden = false;
   authInfoEl.textContent = "";
-  authInfoEl.appendChild(document.createTextNode(`${user.name} でログイン中`));
+  authInfoEl.appendChild(document.createTextNode(`${user.name} でログイン中 (${RANK_LABEL[myRank] || myRank})`));
   const sep = document.createElement("span");
   sep.textContent = " / ";
   authInfoEl.appendChild(sep);
@@ -335,9 +389,11 @@ function showLoggedIn(user) {
   logout.textContent = "ログアウト";
   authInfoEl.appendChild(logout);
   statusEl.hidden = false;
+  render();
 }
 
 function showLoginRequired() {
+  myRank = null;
   authInfoEl.hidden = false;
   authInfoEl.textContent = "";
   const login = document.createElement("a");
@@ -345,6 +401,7 @@ function showLoginRequired() {
   login.textContent = "Discord でログイン";
   authInfoEl.appendChild(login);
   statusEl.hidden = false;
+  render();
 }
 
 async function initAuth() {
@@ -352,8 +409,7 @@ async function initAuth() {
   try {
     const res = await fetch("/auth/me");
     if (res.ok) {
-      const user = await res.json();
-      showLoggedIn(user);
+      showLoggedIn(await res.json());
       return;
     }
   } catch (_) {}
@@ -389,7 +445,6 @@ function connect() {
   es.addEventListener("error", () => {
     statusEl.className = "disconnected";
     statusEl.textContent = "再接続中...";
-    // EventSource は自動再接続する。再接続時に snapshot が届いて全同期される。
   });
 }
 

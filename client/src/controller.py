@@ -11,7 +11,7 @@ import httpx
 from api_client import ApiClient
 from detect_api import DetectionState
 from hisoutensoku_memory import read_detection_state
-from services import Post, NET_ALIVE, NET_BATTLE, __version__
+from services import Post, NET_ALIVE, NET_BATTLE, POST_TYPE_LABEL, __version__, format_system_rank
 from config_manager import ConfigManager
 from tool_manager import ToolManager
 
@@ -87,6 +87,7 @@ class Controller:
         self.discord_user: str = str(auth.get("username", "")) if self.api.session_token else ""
         self._login_in_progress = False
         self._notified_login_required = False
+        self._notified_casual_fallback = False
 
     # -----------------
     # basic helpers
@@ -94,7 +95,7 @@ class Controller:
     def _default_post_params(self) -> Dict[str, Any]:
         # post_defaults には comment_presets 等 Post に無いキーも入るので絞る
         d = self.config_mgr.get_post_defaults()
-        return {k: d[k] for k in ("rank", "comment", "stream_url") if k in d}
+        return {k: d[k] for k in ("post_type", "comment", "stream_url") if k in d}
 
     def comment_presets(self) -> list[str]:
         v = self.config_mgr.get_value("post_defaults", "comment_presets", [])
@@ -123,6 +124,7 @@ class Controller:
         self._create_pending = False
         self._close_pending = False
         self._result_reported = False
+        self._notified_casual_fallback = False
         self.my_post = replace(
             self.my_post,
             id="",
@@ -175,9 +177,8 @@ class Controller:
         match_status: str,
         net_status: int,
     ) -> dict:
-        rank = self.my_post.rank or "any"
         return {
-            "rank": rank,
+            "post_type": self.my_post.post_type or "casual",
             "addr": addr,
             "comment": self.my_post.comment or "",
             "stream_url": self.my_post.stream_url or "",
@@ -268,7 +269,25 @@ class Controller:
                     self._on_create_result(res, giuroll=bool(act.payload.get("giuroll")))
 
                 elif act.type == "update":
-                    await self.api.update(self.my_post.id, self.owner_token, act.payload)
+                    resp = await self.api.update(
+                        self.my_post.id, self.owner_token, act.payload
+                    )
+                    guest_connected = resp.get("guest_connected")
+                    if not guest_connected:
+                        self._notified_casual_fallback = False
+                    elif (
+                        self.my_post.post_type == "ranked"
+                        and guest_connected
+                        and not resp.get("ranked_active")
+                        and not self._notified_casual_fallback
+                    ):
+                        msg = (
+                            "異なるランク帯またはログインしていない相手とのマッチングのため、"
+                            "この対戦はカジュアル扱いになります"
+                        )
+                        self.notify_sink(msg)
+                        self.log_sink("info", msg)
+                        self._notified_casual_fallback = True
 
                 elif act.type == "close":
                     await self.api.close(
@@ -481,7 +500,17 @@ class Controller:
         self._seen_recruit_this_run = True
         self.my_post = replace(self.my_post, id=str(rid))
         self.my_post_sink(self.my_post)
-        self.log_sink("info", f"Post created: {self.my_post.addr}")
+
+        post_type = str(post.get("post_type", "casual"))
+        type_label = POST_TYPE_LABEL.get(post_type, post_type)
+        rank_display = format_system_rank(
+            str(post.get("rank", "")),
+            post.get("rating"),
+        )
+        self.log_sink(
+            "info",
+            f"Post created: {self.my_post.addr} [{type_label}] ({rank_display})",
+        )
 
     def _on_api_error(self, act: Action, e: httpx.HTTPStatusError) -> None:
         code = e.response.status_code

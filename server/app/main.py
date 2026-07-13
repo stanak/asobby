@@ -20,6 +20,7 @@ from uuid import uuid4
 from urllib.parse import urlencode, urlparse
 
 import httpx
+import trueskill
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -43,6 +44,22 @@ POST_TTL_SEC = 20
 CLEANUP_INTERVAL_SEC = 5
 GUEST_PROBE_INTERVAL_SEC = 10
 SSE_PING_INTERVAL_SEC = 15
+
+# ランクマッチ: 昇降格判定に必要な最低試合数
+RANKED_EVAL_MIN_GAMES = 10
+# 1 セッション (ゲスト接続) でランクマ扱いになるのは最初の 3 戦まで
+RANKED_SESSION_MAX_GAMES = 3
+
+# 昇降格ルール (rank -> promote_at, demote_at, promote_to, demote_to)
+# promote_at / demote_at は None なら該当方向の判定なし
+RANK_LADDER: dict[str, dict[str, Any]] = {
+    "easy": {"promote_at": 0.5, "demote_at": None, "promote_to": "normal", "demote_to": None},
+    "normal": {"promote_at": 0.5, "demote_at": None, "promote_to": "ex", "demote_to": None},
+    "ex": {"promote_at": 0.6, "demote_at": 0.2, "promote_to": "hard", "demote_to": "normal"},
+    "hard": {"promote_at": 0.6, "demote_at": 0.2, "promote_to": "luna", "demote_to": "ex"},
+    "luna": {"promote_at": 0.6, "demote_at": 0.2, "promote_to": "ph", "demote_to": "hard"},
+    "ph": {"promote_at": None, "demote_at": None, "promote_to": None, "demote_to": None},
+}
 
 # 作成レート制限（IP 単位）
 CREATE_MIN_INTERVAL_SEC = 2.0
@@ -104,7 +121,9 @@ class Post:
     """クライアントに公開してよいフィールドのみを持つ。"""
 
     id: str = field(default_factory=lambda: uuid4().hex)
-    rank: str = "any"
+    rank: str = "easy"  # ホストの現在システムランク (作成時に設定)
+    post_type: str = "casual"  # "casual" | "ranked"
+    rating: Optional[float] = None  # ph のみ表示レート
     addr: str = ""
     comment: str = ""
     updated_at: float = 0
@@ -118,6 +137,8 @@ class Post:
     owner_avatar: str = ""
     guest_name: str = ""  # 対戦中ゲストが Discord ログイン済みなら表示名
     guest_avatar: str = ""
+    guest_connected: bool = False  # プローブでゲスト検出中
+    ranked_active: bool = False  # 現在のゲストとのセッションがランクマ扱いか
 
 
 @dataclass
@@ -129,7 +150,9 @@ class PostRecord:
     creator_ip: str
     owner_user_id: str = ""  # 作成者がログイン済みなら Discord ID
     guest_ip: str = ""  # 現在対戦中のゲスト IP（空なら対戦中でない）
-    match_id: str = ""  # 対戦記録 (matches.id)。ゲスト検出時に設定
+    guest_user_id: str = ""  # 同定済みゲストの Discord ID
+    guest_rank: str = ""  # 同定済みゲストのランク
+    session_games: int = 0  # 現在ゲストとの対戦報告回数
 
 
 def now_ts() -> float:
@@ -140,7 +163,7 @@ def now_ts() -> float:
 # API schemas
 # ----------------------------
 class CreatePostIn(BaseModel):
-    rank: str = Field(default="any", max_length=16)
+    post_type: Literal["casual", "ranked"] = "casual"
     addr: str = Field(max_length=64)
     comment: str = Field(default="", max_length=200)
     stream_url: str = Field(default="", max_length=300)
@@ -239,9 +262,14 @@ def discord_avatar_url(user_id: str, avatar_hash: str) -> str:
     return f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=64"
 
 
+def display_rating(mu: float, sigma: float) -> float:
+    """TrueSkill 表示レート = mu - 3 * sigma"""
+    return round(mu - 3 * sigma, 1)
+
+
 async def resolve_session(request: Request) -> Optional[dict[str, Any]]:
     """Bearer トークンを検証し、DB の token_version と突合する。
-    有効なら {"id", "name", "avatar"} を返し、last_seen / last_ip も最新化する。"""
+    有効なら {"id", "name", "avatar", "rank", "rating"} を返し、last_seen / last_ip も最新化する。"""
     sess = session_from_request(request)
     if sess is None or not db.is_configured():
         return None
@@ -249,10 +277,13 @@ async def resolve_session(request: Request) -> Optional[dict[str, Any]]:
     if user is None:
         return None
     await db.touch_user(user.id, client_ip(request))
+    rating = display_rating(user.ts_mu, user.ts_sigma) if user.rank == "ph" else None
     return {
         "id": user.id,
         "name": user.name,
         "avatar": discord_avatar_url(user.id, user.avatar),
+        "rank": user.rank,
+        "rating": rating,
     }
 
 
@@ -459,6 +490,101 @@ async def stats_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "stats.html")
 
 
+def _match_is_win(match: db.Match, user_id: str) -> bool:
+    if match.host_user_id == user_id:
+        return match.winner == "host"
+    return match.winner == "guest"
+
+
+async def evaluate_rank(user_id: str) -> Optional[str]:
+    """現ランクでの直近ランクマ勝率に基づき昇降格する。変更があれば新ランクを返す。"""
+    rank_info = await db.get_user_rank(user_id)
+    if rank_info is None:
+        return None
+    rank, _mu, _sigma = rank_info
+    if rank == "ph":
+        return None
+
+    rules = RANK_LADDER.get(rank)
+    if rules is None:
+        return None
+
+    matches = await db.fetch_ranked_matches_at_current_rank(user_id, limit=50)
+    games = len(matches)
+    if games < RANKED_EVAL_MIN_GAMES:
+        return None
+
+    wins = sum(1 for m in matches if _match_is_win(m, user_id))
+    win_rate = wins / games
+
+    new_rank: Optional[str] = None
+    demote_at = rules.get("demote_at")
+    if demote_at is not None and win_rate < demote_at:
+        new_rank = rules.get("demote_to")
+    else:
+        promote_at = rules.get("promote_at")
+        if promote_at is not None and win_rate >= promote_at:
+            new_rank = rules.get("promote_to")
+
+    if new_rank and new_rank != rank:
+        await db.set_user_rank(user_id, new_rank)
+        print(f"rank change: user={user_id} {rank} -> {new_rank} (win_rate={win_rate:.3f}, games={games})")
+        return new_rank
+    return None
+
+
+async def update_trueskill_ratings(
+    host_user_id: str,
+    guest_user_id: str,
+    winner: str,
+) -> None:
+    """ph 同士のランクマ対戦確定時に TrueSkill レートを更新する。"""
+    host_info = await db.get_user_rank(host_user_id)
+    guest_info = await db.get_user_rank(guest_user_id)
+    if host_info is None or guest_info is None:
+        return
+    host_rank, host_mu, host_sigma = host_info
+    guest_rank, guest_mu, guest_sigma = guest_info
+    if host_rank != "ph" or guest_rank != "ph":
+        return
+
+    host_rating = trueskill.Rating(mu=host_mu, sigma=host_sigma)
+    guest_rating = trueskill.Rating(mu=guest_mu, sigma=guest_sigma)
+
+    if winner == "draw":
+        new_host, new_guest = trueskill.rate_1vs1(host_rating, guest_rating, drawn=True)
+    elif winner == "host":
+        new_host, new_guest = trueskill.rate_1vs1(host_rating, guest_rating)
+    else:
+        new_guest, new_host = trueskill.rate_1vs1(guest_rating, host_rating)
+
+    await db.set_user_rating(host_user_id, new_host.mu, new_host.sigma)
+    await db.set_user_rating(guest_user_id, new_guest.mu, new_guest.sigma)
+
+
+def compute_ranked_stats(matches: list[db.Match], user_id: str) -> dict[str, Any]:
+    total = _bucket_stats(matches, user_id)
+    recent50 = _bucket_stats(matches[:50], user_id)
+    return {
+        "total": total,
+        "recent50": {
+            "games": recent50["games"],
+            "wins": recent50["wins"],
+            "win_rate": recent50["win_rate"],
+        },
+    }
+
+
+async def host_rank_for_post(owner_user_id: str) -> tuple[str, Optional[float]]:
+    """募集作成時に Post.rank / Post.rating を決める。"""
+    rank_info = await db.get_user_rank(owner_user_id)
+    if rank_info is None:
+        return "easy", None
+    rank, mu, sigma = rank_info
+    rating = display_rating(mu, sigma) if rank == "ph" else None
+    return rank, rating
+
+
 def _match_user_view(
     match: db.Match, user_id: str
 ) -> tuple[Optional[int], Optional[int], str, bool, bool, bool]:
@@ -592,7 +718,17 @@ async def stats_me(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=401, detail="invalid or expired session")
     matches = await db.fetch_user_matches(sess["id"])
     stats = compute_user_stats(matches, sess["id"])
-    return {"user": sess, **stats}
+    ranked_matches = await db.fetch_user_ranked_matches(sess["id"])
+    ranked_stats = compute_ranked_stats(ranked_matches, sess["id"])
+    return {
+        "user": sess,
+        **stats,
+        "ranked": {
+            "rank": sess["rank"],
+            "rating": sess["rating"],
+            **ranked_stats,
+        },
+    }
 
 
 @app.get("/")
@@ -851,8 +987,12 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
 
     LAST_CREATE_AT[ip] = now
 
+    host_rank, host_rating = await host_rank_for_post(owner_user_id)
+
     post = Post(
-        rank=body.rank,
+        rank=host_rank,
+        post_type=body.post_type,
+        rating=host_rating,
         addr=body.addr,
         comment=body.comment,
         stream_url=body.stream_url,
@@ -894,7 +1034,7 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     if body.addr != p.addr:
         await verify_hostable_or_raise(body.addr, autopunch=body.autopunch)
 
-    p.rank = body.rank
+    p.post_type = body.post_type
     p.addr = body.addr
     p.comment = body.comment
     p.stream_url = body.stream_url
@@ -921,17 +1061,41 @@ async def close_post(body: ClosePostIn) -> dict[str, Any]:
 @app.post("/posts/result")
 async def report_result(body: ReportResultIn) -> dict[str, Any]:
     rec = get_record_or_raise(body.id, body.owner_token)
-    if not rec.match_id or not db.is_configured():
+    if not rec.guest_ip or not db.is_configured():
         return {"ok": True, "recorded": False}
-    recorded = await db.set_match_result(
-        rec.match_id,
-        body.winner,
+
+    post = rec.post
+    is_ranked = post.ranked_active and rec.session_games < RANKED_SESSION_MAX_GAMES
+    host_ip, _, _ = post.addr.partition(":")
+
+    await db.insert_match_result(
+        host_user_id=rec.owner_user_id,
+        # 匿名ゲストは NULL (空文字だと users への FK 違反になる)
+        guest_user_id=(rec.guest_user_id or None),
+        host_ip=host_ip,
+        guest_ip=rec.guest_ip,
+        winner=body.winner,
         host_char=body.host_char,
         guest_char=body.guest_char,
         host_profile=body.host_profile,
         guest_profile=body.guest_profile,
+        ranked=is_ranked,
     )
-    return {"ok": True, "recorded": recorded}
+    rec.session_games += 1
+
+    if is_ranked:
+        if rec.owner_user_id:
+            await evaluate_rank(rec.owner_user_id)
+        if rec.guest_user_id:
+            await evaluate_rank(rec.guest_user_id)
+        if rec.guest_user_id:
+            await update_trueskill_ratings(
+                rec.owner_user_id,
+                rec.guest_user_id,
+                body.winner,
+            )
+
+    return {"ok": True, "recorded": True, "ranked": is_ranked}
 
 
 @app.post("/posts/upsert")
@@ -1071,7 +1235,7 @@ def probe_post_status(host: str, port: int, autopunch: bool) -> Optional[bytes]:
 
 
 async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
-    """プローブ応答を PostRecord に反映し、必要なら SSE / matches を更新する。"""
+    """プローブ応答を PostRecord に反映し、必要なら SSE を更新する。"""
     if reply is None:
         return
 
@@ -1081,9 +1245,13 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
     if matched is None:
         if len(reply) >= 1 and reply[0] == 0x07 and rec.guest_ip:
             rec.guest_ip = ""
-            rec.match_id = ""
+            rec.guest_user_id = ""
+            rec.guest_rank = ""
+            rec.session_games = 0
             post.guest_name = ""
             post.guest_avatar = ""
+            post.guest_connected = False
+            post.ranked_active = False
             await HUB.publish("upsert", asdict(post))
         return
 
@@ -1092,28 +1260,30 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
         return
 
     rec.guest_ip = ip
-    rec.match_id = ""
+    rec.guest_user_id = ""
+    rec.guest_rank = ""
+    rec.session_games = 0
     user = None
     if db.is_configured():
         user = await db.find_user_by_ip(ip)
 
     if user is not None:
+        rec.guest_user_id = user.id
+        rec.guest_rank = user.rank
         post.guest_name = user.name
         post.guest_avatar = discord_avatar_url(user.id, user.avatar)
     else:
         post.guest_name = ""
         post.guest_avatar = ""
 
-    await HUB.publish("upsert", asdict(post))
+    post.guest_connected = True
+    post.ranked_active = (
+        post.post_type == "ranked"
+        and bool(rec.guest_user_id)
+        and rec.guest_rank == post.rank
+    )
 
-    if db.is_configured() and rec.owner_user_id:
-        host_ip, _, _ = post.addr.partition(":")
-        rec.match_id = await db.record_match(
-            host_user_id=rec.owner_user_id,
-            guest_user_id=(user.id if user else None),
-            host_ip=host_ip,
-            guest_ip=ip,
-        )
+    await HUB.publish("upsert", asdict(post))
 
 
 _probe_bind_addr_cache: Optional[str] = None

@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw
 from pystray import Menu, MenuItem
 
 from controller import Controller
-from services import Post, edit_post_settings, NET_BATTLE, __version__
+from services import Post, POST_TYPE_LABEL, edit_post_settings, NET_BATTLE, __version__
 
 LOG_PATH = Path("asobby.log")
 LOG_MAX_BYTES = 256 * 1024
@@ -103,12 +103,16 @@ class TrayApp:
     # -----------------
     # icon state
     # -----------------
+    def _post_type_label(self) -> str:
+        return POST_TYPE_LABEL.get(self.post.post_type, "カジュアル")
+
     def _status_text(self) -> str:
         if not self.post.id:
             return "待機中 - ホストを立てると自動投稿"
+        mode = self._post_type_label()
         if self.post.net_status == NET_BATTLE:
-            return f"対戦中: {self.post.match_status or self.post.addr}"
-        return f"募集中: {self.post.addr}"
+            return f"対戦中 ({mode}): {self.post.match_status or self.post.addr}"
+        return f"募集中 ({mode}): {self.post.addr}"
 
     def _refresh_icon(self) -> None:
         if not self.icon:
@@ -141,7 +145,7 @@ class TrayApp:
             for key, value in result.items():
                 self.controller.config_mgr.set_post_default(key, value)
             self.controller.update_my_post(
-                rank=result["rank"],
+                post_type=result["post_type"],
                 comment=result["comment"],
                 stream_url=result["stream_url"],
             )

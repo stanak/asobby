@@ -26,7 +26,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "comment_presets": [],
         "stream_url": "",
         "stream_url_presets": [],
-        "rank": "any",
+        "post_type": "casual",
     },
 }
 
@@ -154,7 +154,9 @@ class ConfigManager:
     # convenience helpers
     # -----------------
     def get_post_defaults(self) -> dict[str, Any]:
-        return self.get_section("post_defaults")
+        d = self.get_section("post_defaults")
+        # 旧設定の rank キーは読み込み時に無視する
+        return {k: v for k, v in d.items() if k != "rank"}
 
     def set_post_default(self, key: str, value: Any) -> None:
         self.set_value("post_defaults", key, value)
