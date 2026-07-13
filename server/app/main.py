@@ -164,6 +164,10 @@ class ReportResultIn(BaseModel):
     id: str = Field(max_length=64)
     owner_token: str = Field(max_length=128)
     winner: Literal["host", "guest", "draw"]
+    host_char: Optional[int] = None
+    guest_char: Optional[int] = None
+    host_profile: str = Field(default="", max_length=64)
+    guest_profile: str = Field(default="", max_length=64)
 
 
 class DevicePollIn(BaseModel):
@@ -450,6 +454,147 @@ def get_record_or_raise(post_id: str, owner_token: str) -> PostRecord:
 # ----------------------------
 # Routes
 # ----------------------------
+@app.get("/stats")
+async def stats_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "stats.html")
+
+
+def _match_user_view(
+    match: db.Match, user_id: str
+) -> tuple[Optional[int], Optional[int], str, bool, bool, bool]:
+    """視点変換: (自キャラ, 相手キャラ, 相手プロファイル, 勝ち, 負け, 分)"""
+    if match.host_user_id == user_id:
+        return (
+            match.host_char,
+            match.guest_char,
+            match.guest_profile or "",
+            match.winner == "host",
+            match.winner == "guest",
+            match.winner == "draw",
+        )
+    return (
+        match.guest_char,
+        match.host_char,
+        match.host_profile or "",
+        match.winner == "guest",
+        match.winner == "host",
+        match.winner == "draw",
+    )
+
+
+def _bucket_stats(matches: list[db.Match], user_id: str) -> dict[str, Any]:
+    games = len(matches)
+    wins = losses = draws = 0
+    for m in matches:
+        _, _, _, is_win, is_loss, is_draw = _match_user_view(m, user_id)
+        if is_win:
+            wins += 1
+        elif is_loss:
+            losses += 1
+        elif is_draw:
+            draws += 1
+    win_rate = round(wins / games, 4) if games else 0.0
+    return {
+        "games": games,
+        "wins": wins,
+        "losses": losses,
+        "draws": draws,
+        "win_rate": win_rate,
+    }
+
+
+def _group_by_char(
+    matches: list[db.Match], user_id: str, *, mine: bool
+) -> list[dict[str, Any]]:
+    buckets: dict[int, dict[str, int]] = {}
+    for m in matches:
+        my_char, opp_char, _, is_win, is_loss, is_draw = _match_user_view(m, user_id)
+        char = my_char if mine else opp_char
+        if char is None:
+            continue
+        b = buckets.setdefault(char, {"games": 0, "wins": 0, "losses": 0, "draws": 0})
+        b["games"] += 1
+        if is_win:
+            b["wins"] += 1
+        elif is_loss:
+            b["losses"] += 1
+        elif is_draw:
+            b["draws"] += 1
+    out = []
+    for char, b in buckets.items():
+        out.append({
+            "char": char,
+            "games": b["games"],
+            "wins": b["wins"],
+            "losses": b["losses"],
+            "draws": b["draws"],
+            "win_rate": round(b["wins"] / b["games"], 4) if b["games"] else 0.0,
+        })
+    out.sort(key=lambda x: x["games"], reverse=True)
+    return out
+
+
+def _group_by_profile(
+    matches: list[db.Match], user_id: str
+) -> list[dict[str, Any]]:
+    buckets: dict[str, dict[str, int]] = {}
+    for m in matches:
+        _, _, opp_profile, is_win, is_loss, is_draw = _match_user_view(m, user_id)
+        if not opp_profile:
+            continue
+        b = buckets.setdefault(opp_profile, {"games": 0, "wins": 0, "losses": 0, "draws": 0})
+        b["games"] += 1
+        if is_win:
+            b["wins"] += 1
+        elif is_loss:
+            b["losses"] += 1
+        elif is_draw:
+            b["draws"] += 1
+    out = []
+    for profile, b in buckets.items():
+        out.append({
+            "profile": profile,
+            "games": b["games"],
+            "wins": b["wins"],
+            "losses": b["losses"],
+            "draws": b["draws"],
+            "win_rate": round(b["wins"] / b["games"], 4) if b["games"] else 0.0,
+        })
+    out.sort(key=lambda x: x["games"], reverse=True)
+    return out
+
+
+def compute_user_stats(matches: list[db.Match], user_id: str) -> dict[str, Any]:
+    total = _bucket_stats(matches, user_id)
+    recent: dict[str, dict[str, Any]] = {}
+    for n in (30, 50, 100):
+        subset = matches[:n]
+        g = len(subset)
+        w = sum(1 for m in subset if _match_user_view(m, user_id)[3])
+        recent[str(n)] = {
+            "games": g,
+            "wins": w,
+            "win_rate": round(w / g, 4) if g else 0.0,
+        }
+    return {
+        "total": total,
+        "recent": recent,
+        "by_my_char": _group_by_char(matches, user_id, mine=True),
+        "by_opp_char": _group_by_char(matches, user_id, mine=False),
+        "by_opp_profile": _group_by_profile(matches, user_id),
+    }
+
+
+@app.get("/stats/me")
+async def stats_me(request: Request) -> dict[str, Any]:
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    matches = await db.fetch_user_matches(sess["id"])
+    stats = compute_user_stats(matches, sess["id"])
+    return {"user": sess, **stats}
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -794,7 +939,14 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
     rec = get_record_or_raise(body.id, body.owner_token)
     if not rec.match_id or not db.is_configured():
         return {"ok": True, "recorded": False}
-    recorded = await db.set_match_winner(rec.match_id, body.winner)
+    recorded = await db.set_match_result(
+        rec.match_id,
+        body.winner,
+        host_char=body.host_char,
+        guest_char=body.guest_char,
+        host_profile=body.host_profile,
+        guest_profile=body.guest_profile,
+    )
     return {"ok": True, "recorded": recorded}
 
 

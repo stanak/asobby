@@ -7,6 +7,8 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | Method/Path | 説明 |
 | --- | --- |
 | `GET /` | 閲覧用 Web ページ（SSE でリアルタイム更新） |
+| `GET /stats` | 戦績閲覧用 Web ページ |
+| `GET /stats/me` | ログインユーザーの戦績集計（JSON） |
 | `GET /myip` | クライアントのグローバル IP を返す |
 | `GET /posts` | 募集一覧（公開フィールドのみ） |
 | `POST /posts` | 募集の新規作成。レスポンスで `owner_token` を発行 |
@@ -88,6 +90,12 @@ Discord で承認 → クライアントが `POST /auth/device/poll` で `sessio
 ホストのクライアントが KO 検出時に `POST /posts/result` で勝敗を報告し、
 `matches.winner` に記録される。
 `ASOBBY_HOSTCHECK=off` の場合はプローブ自体が無効になる。
+
+### 戦績
+
+KO 報告 (`POST /posts/result`) には使用キャラとプロファイル名も含まれる。
+ログインユーザーは `/stats` で総合勝率、直近 30 / 50 / 100 戦の勝率、
+自キャラ別・対戦相手キャラ別・対戦相手プロファイル別の勝率を閲覧できる。
 
 ### 設定手順
 

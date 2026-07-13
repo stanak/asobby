@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>asobby - 戦績</title>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1c2129;
+    --border: #2c3440;
+    --text: #d8dee9;
+    --muted: #7b8794;
+    --accent: #6ab0f3;
+    --ok: #57c07d;
+    --err: #e06c75;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 15px;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 16px 20px 8px;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 20px;
+    letter-spacing: 1px;
+  }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header nav {
+    margin-left: auto;
+    font-size: 13px;
+  }
+  header nav a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  header nav a:hover { text-decoration: underline; }
+  main { padding: 8px 20px 32px; max-width: 960px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .panel h2 {
+    margin: 0 0 12px;
+    font-size: 15px;
+    color: var(--muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .user-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+  }
+  .user-name { font-size: 18px; font-weight: 600; }
+  .summary { font-size: 16px; }
+  .win-rate { color: var(--ok); font-weight: 600; }
+  .cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .card {
+    flex: 1 1 140px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .card .label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  .card .value { font-size: 18px; font-weight: 600; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  th {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  tr:last-child td { border-bottom: none; }
+  #gate {
+    text-align: center;
+    padding: 80px 20px;
+    color: var(--muted);
+  }
+  #gate a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 16px;
+  }
+  #gate a:hover { text-decoration: underline; }
+  #loading { text-align: center; padding: 60px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>asobby 戦績</h1>
+  <span class="sub">非想天則 対戦記録</span>
+  <nav><a href="/">← ロビーへ戻る</a></nav>
+</header>
+
+<main>
+  <div id="loading">読み込み中...</div>
+  <div id="gate" hidden>
+    <p>戦績を見るには Discord ログインが必要です</p>
+    <p><a href="/auth/discord/web">Discord でログイン</a></p>
+  </div>
+  <div id="content" hidden>
+    <div class="panel" id="overview"></div>
+    <div class="panel">
+      <h2>直近勝率</h2>
+      <div class="cards" id="recent-cards"></div>
+    </div>
+    <div class="panel">
+      <h2>自キャラ別</h2>
+      <table>
+        <thead><tr><th>キャラ</th><th>試合数</th><th>勝敗</th><th>勝率</th></tr></thead>
+        <tbody id="my-char-rows"></tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>対キャラ別</h2>
+      <table>
+        <thead><tr><th>キャラ</th><th>試合数</th><th>勝敗</th><th>勝率</th></tr></thead>
+        <tbody id="opp-char-rows"></tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>対プロファイル別</h2>
+      <table>
+        <thead><tr><th>プロファイル</th><th>試合数</th><th>勝敗</th><th>勝率</th></tr></thead>
+        <tbody id="opp-profile-rows"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script>
+const CHAR_NAME = {
+  0: "Reimu", 1: "Marisa", 2: "Sakuya", 3: "Alice", 4: "Patchouli",
+  5: "Youmu", 6: "Remilia", 7: "Yuyuko", 8: "Yukari", 9: "Suica",
+  10: "Reisen", 11: "Aya", 12: "Komachi", 13: "Iku", 14: "Tenshi",
+  15: "Sanae", 16: "Cirno", 17: "Meiling", 18: "Utsuho", 19: "Suwako",
+  20: "Random",
+};
+
+function charName(id) {
+  return CHAR_NAME[id] || `CHAR_${id}`;
+}
+
+function pct(rate) {
+  return (rate * 100).toFixed(1) + "%";
+}
+
+function wl(d) {
+  return `${d.wins}-${d.losses}-${d.draws}`;
+}
+
+// プロファイル名は対戦相手のメモリ由来の任意文字列なので、
+// XSS を避けるため必ず textContent で描画する
+function appendRow(tbody, cells) {
+  const tr = document.createElement("tr");
+  for (const text of cells) {
+    const td = document.createElement("td");
+    td.textContent = text;
+    tr.appendChild(td);
+  }
+  tbody.appendChild(tr);
+}
+
+function appendEmptyRow(tbody) {
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.colSpan = 4;
+  td.style.color = "var(--muted)";
+  td.textContent = "データなし";
+  tr.appendChild(td);
+  tbody.appendChild(tr);
+}
+
+function fillCharTable(tbody, rows) {
+  tbody.textContent = "";
+  for (const r of rows) {
+    appendRow(tbody, [charName(r.char), String(r.games), wl(r), pct(r.win_rate)]);
+  }
+  if (!rows.length) appendEmptyRow(tbody);
+}
+
+function fillProfileTable(tbody, rows) {
+  tbody.textContent = "";
+  for (const r of rows) {
+    appendRow(tbody, [r.profile, String(r.games), wl(r), pct(r.win_rate)]);
+  }
+  if (!rows.length) appendEmptyRow(tbody);
+}
+
+function render(data) {
+  const ov = document.getElementById("overview");
+  ov.textContent = "";
+  const row = document.createElement("div");
+  row.className = "user-row";
+  if (data.user.avatar) {
+    const img = document.createElement("img");
+    img.className = "avatar";
+    img.src = data.user.avatar;
+    img.alt = "";
+    img.referrerPolicy = "no-referrer";
+    row.appendChild(img);
+  }
+  const name = document.createElement("span");
+  name.className = "user-name";
+  name.textContent = data.user.name;
+  row.appendChild(name);
+  ov.appendChild(row);
+
+  const t = data.total;
+  const sum = document.createElement("div");
+  sum.className = "summary";
+  sum.innerHTML = `総合成績: <strong>${wl(t)}</strong>　勝率: <span class="win-rate">${pct(t.win_rate)}</span>（${t.games} 戦）`;
+  ov.appendChild(sum);
+
+  const recentEl = document.getElementById("recent-cards");
+  recentEl.textContent = "";
+  for (const n of ["30", "50", "100"]) {
+    const r = data.recent[n];
+    const card = document.createElement("div");
+    card.className = "card";
+    const label = document.createElement("div");
+    label.className = "label";
+    label.textContent = `直近 ${n} 戦`;
+    card.appendChild(label);
+    const val = document.createElement("div");
+    val.className = "value";
+    val.textContent = pct(r.win_rate);
+    card.appendChild(val);
+    const sub = document.createElement("div");
+    sub.className = "sub";
+    const suffix = r.games < Number(n) ? ` (${r.games}戦)` : "";
+    sub.textContent = `${r.wins}勝 / ${r.games}戦${suffix}`;
+    card.appendChild(sub);
+    recentEl.appendChild(card);
+  }
+
+  fillCharTable(document.getElementById("my-char-rows"), data.by_my_char);
+  fillCharTable(document.getElementById("opp-char-rows"), data.by_opp_char);
+  fillProfileTable(document.getElementById("opp-profile-rows"), data.by_opp_profile);
+}
+
+async function init() {
+  const loading = document.getElementById("loading");
+  const gate = document.getElementById("gate");
+  const content = document.getElementById("content");
+  try {
+    const res = await fetch("/stats/me");
+    loading.hidden = true;
+    if (res.status === 401) {
+      gate.hidden = false;
+      return;
+    }
+    if (!res.ok) {
+      loading.hidden = false;
+      loading.textContent = "読み込みに失敗しました";
+      return;
+    }
+    content.hidden = false;
+    render(await res.json());
+  } catch (_) {
+    loading.textContent = "読み込みに失敗しました";
+  }
+}
+
+init();
+</script>
+</body>
+</html>

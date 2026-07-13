@@ -45,10 +45,27 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
-    async def report_result(self, post_id: str, owner_token: str, winner: str) -> dict:
+    async def report_result(
+        self,
+        post_id: str,
+        owner_token: str,
+        winner: str,
+        host_char: int | None = None,
+        guest_char: int | None = None,
+        host_profile: str = "",
+        guest_profile: str = "",
+    ) -> dict:
         r = await self.http.post(
             f"{self.base}/posts/result",
-            json={"id": post_id, "owner_token": owner_token, "winner": winner},
+            json={
+                "id": post_id,
+                "owner_token": owner_token,
+                "winner": winner,
+                "host_char": host_char,
+                "guest_char": guest_char,
+                "host_profile": host_profile,
+                "guest_profile": guest_profile,
+            },
         )
         r.raise_for_status()
         return r.json()

@@ -11,7 +11,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, select
+from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, SmallInteger, String, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -69,6 +69,10 @@ class Match(Base):
     guest_ip: Mapped[str] = mapped_column(String(64), default="")
     # "host" / "guest" / "draw" / ""(未確定)
     winner: Mapped[str] = mapped_column(String(8), default="")
+    host_char: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    guest_char: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    host_profile: Mapped[str] = mapped_column(String(64), default="")
+    guest_profile: Mapped[str] = mapped_column(String(64), default="")
     played_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -245,12 +249,38 @@ async def record_match(
         return match.id
 
 
-async def set_match_winner(match_id: str, winner: str) -> bool:
-    """該当 Match の winner が空のときだけセットする。二重報告は無視。"""
+async def set_match_result(
+    match_id: str,
+    winner: str,
+    host_char: Optional[int] = None,
+    guest_char: Optional[int] = None,
+    host_profile: str = "",
+    guest_profile: str = "",
+) -> bool:
+    """該当 Match の winner が空のときだけ結果をセットする。二重報告は無視。"""
     async with session() as s:
         match = await s.get(Match, match_id)
         if match is None or match.winner:
             return False
         match.winner = winner
+        match.host_char = host_char
+        match.guest_char = guest_char
+        match.host_profile = host_profile
+        match.guest_profile = guest_profile
         await s.commit()
         return True
+
+
+async def fetch_user_matches(user_id: str, limit: int = 1000) -> list[Match]:
+    """ユーザーの確定済み対戦を played_at 降順で返す。"""
+    async with session() as s:
+        res = await s.execute(
+            select(Match)
+            .where(
+                ((Match.host_user_id == user_id) | (Match.guest_user_id == user_id))
+                & (Match.winner != "")
+            )
+            .order_by(Match.played_at.desc())
+            .limit(limit)
+        )
+        return list(res.scalars().all())

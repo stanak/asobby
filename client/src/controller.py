@@ -295,6 +295,10 @@ class Controller:
                             self.my_post.id,
                             self.owner_token,
                             act.payload["winner"],
+                            host_char=act.payload.get("host_char"),
+                            guest_char=act.payload.get("guest_char"),
+                            host_profile=act.payload.get("host_profile", ""),
+                            guest_profile=act.payload.get("guest_profile", ""),
                         )
                         self.log_sink(
                             "info",
@@ -361,7 +365,13 @@ class Controller:
         ):
             self._result_reported = True
             winner = "host" if st.lwin == 2 else "guest"
-            return Action("result", {"winner": winner})
+            return Action("result", {
+                "winner": winner,
+                "host_char": st.lchar_id,
+                "guest_char": st.rchar_id,
+                "host_profile": (st.lprof or ""),
+                "guest_profile": (st.rprof or ""),
+            })
 
         if not is_battle:
             self._result_reported = False

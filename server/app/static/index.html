@@ -319,6 +319,13 @@ function showLoggedIn(user) {
   const sep = document.createElement("span");
   sep.textContent = " / ";
   authInfoEl.appendChild(sep);
+  const stats = document.createElement("a");
+  stats.href = "/stats";
+  stats.textContent = "戦績";
+  authInfoEl.appendChild(stats);
+  const sep2 = document.createElement("span");
+  sep2.textContent = " / ";
+  authInfoEl.appendChild(sep2);
   const logout = document.createElement("a");
   logout.href = "/auth/logout";
   logout.textContent = "ログアウト";
