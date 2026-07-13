@@ -324,13 +324,15 @@ const RANK_LABEL = {
   easy: "E", normal: "N", ex: "Ex", hard: "H", luna: "L", ph: "Ph",
 };
 
-const MATCH_LIMIT = 1000;
+const MATCH_LIMIT = 5000;
 const PROFILE_TOP = 30;
 const HISTORY_LIMIT = 100;
+const CACHE_VERSION = 1;
 
 let allMatches = [];
 let statsData = null;
 let profileShowAll = false;
+let lastKnownTotal = null;
 
 const filter = {
   myChar: null,
@@ -847,10 +849,32 @@ function setupProfileMore() {
   });
 }
 
-async function loadAllMatches() {
-  let since = 0;
-  const seen = new Set();
-  const all = [];
+function cacheKey() {
+  return `asobby_matches_v${CACHE_VERSION}_${statsData.user.id}`;
+}
+
+function readCache() {
+  try {
+    const raw = localStorage.getItem(cacheKey());
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeCache(rows) {
+  try {
+    localStorage.setItem(cacheKey(), JSON.stringify(rows));
+  } catch (_) {
+    // 容量超過等。キャッシュなしでも動作に支障はない
+    try { localStorage.removeItem(cacheKey()); } catch (_) {}
+  }
+}
+
+async function fetchMatchesSince(since) {
+  const out = [];
   while (true) {
     const res = await fetch(
       `/stats/me/matches?since=${since}&limit=${MATCH_LIMIT}`,
@@ -858,26 +882,41 @@ async function loadAllMatches() {
     );
     if (!res.ok) throw new Error("matches fetch failed");
     const data = await res.json();
+    if (typeof data.total === "number") lastKnownTotal = data.total;
     const batch = data.matches || [];
     if (!batch.length) break;
-
-    let maxPlayedAt = since;
     for (const m of batch) {
-      if (!seen.has(m.id)) {
-        seen.add(m.id);
-        all.push(m);
-      }
-      if (m.played_at > maxPlayedAt) maxPlayedAt = m.played_at;
+      out.push(m);
+      if (m.played_at > since) since = m.played_at;
     }
-
     if (batch.length < MATCH_LIMIT) break;
-    since = maxPlayedAt;
   }
-  return all;
+  return out;
 }
 
-async function reloadData() {
-  allMatches = await loadAllMatches();
+async function loadAllMatches(forceFull) {
+  const cached = forceFull ? null : readCache();
+  const map = new Map();
+  let since = 0;
+  if (cached) {
+    for (const m of cached) {
+      map.set(m.id, m);
+      if (m.played_at > since) since = m.played_at;
+    }
+  }
+  const fresh = await fetchMatchesSince(since);
+  for (const m of fresh) map.set(m.id, m);
+  const rows = Array.from(map.values());
+  // サーバー総数と食い違う場合 (過去日時のインポートや同期でキャッシュに穴) は全再取得
+  if (!forceFull && lastKnownTotal !== null && rows.length !== lastKnownTotal) {
+    return loadAllMatches(true);
+  }
+  writeCache(rows);
+  return rows;
+}
+
+async function reloadData(forceFull) {
+  allMatches = await loadAllMatches(forceFull);
   const statsRes = await fetch("/stats/me", { credentials: "same-origin" });
   if (!statsRes.ok) throw new Error("stats fetch failed");
   statsData = await statsRes.json();
@@ -930,7 +969,7 @@ function setupTskImport() {
         filter.oppProfile = null;
         filter.rankedOnly = false;
         profileShowAll = false;
-        await reloadData();
+        await reloadData(true);
       }
     } catch (_) {
       resultEl.style.color = "var(--err)";

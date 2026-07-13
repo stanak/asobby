@@ -1153,10 +1153,11 @@ async def stats_me_matches(
     if not db.is_configured():
         return {"ok": True, "matches": []}
 
-    limit = min(max(1, limit), 1000)
+    limit = min(max(1, limit), 5000)
     rows = await db.fetch_user_matches_since(sess["id"], since_ts=since, limit=limit)
     matches = [_match_to_stats_item(m, sess["id"], has_replay) for m, has_replay in rows]
-    return {"ok": True, "matches": matches}
+    total = await db.count_user_matches(sess["id"])
+    return {"ok": True, "matches": matches, "total": total}
 
 
 @app.get("/replays/{match_id}")

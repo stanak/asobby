@@ -33,6 +33,10 @@ CHAR_NAME: dict[int, str] = {
 
 _ALL_IID = "__all__"
 
+# Treeview への大量 insert は非常に遅いため表示件数を制限する
+HISTORY_PAGE = 200
+PROFILE_FACET_LIMIT = 150
+
 _open_window: Any = None
 
 
@@ -260,6 +264,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
     filter_state = FilterState()
     _updating = False
     _click_iid: dict[int, str | None] = {}
+    history_limit = [HISTORY_PAGE]  # 「さらに表示」で増える表示上限
 
     filter_label_var = tk.StringVar(value="絞り込みなし")
     summary_var = tk.StringVar(value="")
@@ -276,6 +281,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         filter_state.my_char = None
         filter_state.opp_char = None
         filter_state.opp_profile = None
+        history_limit[0] = HISTORY_PAGE
         refresh_view()
 
     ttk.Button(top_frame, text="クリア", command=clear_filters).pack(side="left", padx=(0, 8))
@@ -289,6 +295,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
 
     def apply_profile_search(_event=None) -> None:
         filter_state.profile_search = profile_search_var.get().strip()
+        history_limit[0] = HISTORY_PAGE
         refresh_view()
 
     profile_search_entry.bind("<Return>", apply_profile_search)
@@ -351,9 +358,19 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
     history_frame = ttk.LabelFrame(win, text="対戦履歴", padding=4)
     history_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
+    history_bar = ttk.Frame(history_frame)
+    history_bar.pack(fill="x", pady=(0, 4))
+    history_count_var = tk.StringVar(value="")
+    ttk.Label(history_bar, textvariable=history_count_var).pack(side="left")
+    more_btn = ttk.Button(history_bar, text="さらに表示")
+    more_btn.pack(side="right")
+
+    history_body = ttk.Frame(history_frame)
+    history_body.pack(fill="both", expand=True)
+
     history_cols = ("played_at", "my_char", "opp_char", "opp_profile", "result", "ranked")
     history_tree = ttk.Treeview(
-        history_frame, columns=history_cols, show="headings", height=12
+        history_body, columns=history_cols, show="headings", height=12
     )
     history_tree.heading("played_at", text="日時")
     history_tree.heading("my_char", text="自キャラ")
@@ -367,7 +384,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
     history_tree.column("opp_profile", width=180, anchor="w")
     history_tree.column("result", width=40, anchor="center")
     history_tree.column("ranked", width=50, anchor="center")
-    history_scroll = ttk.Scrollbar(history_frame, orient="vertical", command=history_tree.yview)
+    history_scroll = ttk.Scrollbar(history_body, orient="vertical", command=history_tree.yview)
     history_tree.configure(yscrollcommand=history_scroll.set)
     history_tree.pack(side="left", fill="both", expand=True)
     history_scroll.pack(side="right", fill="y")
@@ -452,16 +469,26 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
                 selected_key=filter_state.opp_char,
                 key_to_iid=lambda k: _char_iid(k),
             )
+            prof_aggs = aggregate_by_opp_profile(prof_rows)
+            # 選択中のプロファイルは上限で切られても行として残す
+            visible_prof = prof_aggs[:PROFILE_FACET_LIMIT]
+            if filter_state.opp_profile is not None and all(
+                a.key != filter_state.opp_profile for a in visible_prof
+            ):
+                visible_prof = visible_prof + [
+                    a for a in prof_aggs if a.key == filter_state.opp_profile
+                ]
             _populate_facet_tree(
                 opp_prof_tree,
-                aggregate_by_opp_profile(prof_rows),
+                visible_prof,
                 selected_key=filter_state.opp_profile,
                 key_to_iid=_prof_iid,
             )
 
             _clear_tree(history_tree)
             history_sorted = sorted(filtered, key=lambda r: r["played_at"], reverse=True)
-            for row in history_sorted:
+            limit = history_limit[0]
+            for row in history_sorted[:limit]:
                 played = datetime.fromtimestamp(row["played_at"]).strftime("%m-%d %H:%M")
                 history_tree.insert(
                     "",
@@ -475,13 +502,49 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
                         "o" if row.get("ranked") else "x",
                     ),
                 )
+            shown = min(limit, len(history_sorted))
+            history_count_var.set(f"{shown} / {len(history_sorted)} 件を表示")
+            if len(history_sorted) > limit:
+                more_btn.state(["!disabled"])
+            else:
+                more_btn.state(["disabled"])
         finally:
             _updating = False
 
-    def reload_data() -> None:
-        nonlocal all_rows
-        all_rows = local_store.fetch_all()
+    def show_more_history() -> None:
+        history_limit[0] += HISTORY_PAGE
         refresh_view()
+
+    more_btn.configure(command=show_more_history)
+
+    def reload_data() -> None:
+        """DB 読み込みをワーカースレッドで行い、UI を固めない。"""
+        import threading
+
+        summary_var.set("読み込み中...")
+        result: list[list[dict]] = []
+
+        def worker() -> None:
+            try:
+                result.append(local_store.fetch_all())
+            except Exception:
+                result.append([])
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        def check_loaded() -> None:
+            nonlocal all_rows
+            if not result:
+                try:
+                    win.after(50, check_loaded)
+                except tk.TclError:
+                    pass  # ウィンドウが閉じられた
+                return
+            all_rows = result[0]
+            history_limit[0] = HISTORY_PAGE
+            refresh_view()
+
+        win.after(50, check_loaded)
 
     def _on_tree_button1(event: tk.Event) -> None:
         tree = event.widget
@@ -532,6 +595,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
             set_value(None)
         else:
             set_value(parse_iid(iid))
+        history_limit[0] = HISTORY_PAGE
         refresh_view()
 
     def _bind_facet_tree(
@@ -593,7 +657,11 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         parse_iid=lambda iid: _parse_prof_iid(iid, _prof_agg_rows()),
     )
 
-    ranked_chk.configure(command=refresh_view)
+    def on_ranked_toggle() -> None:
+        history_limit[0] = HISTORY_PAGE
+        refresh_view()
+
+    ranked_chk.configure(command=on_ranked_toggle)
 
     def on_close() -> None:
         global _open_window

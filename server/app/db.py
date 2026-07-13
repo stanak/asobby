@@ -578,6 +578,23 @@ async def fetch_user_matches_since(
         return [(row[0], bool(row[1])) for row in res.all()]
 
 
+async def count_user_matches(user_id: str) -> int:
+    """ユーザーの確定済み対戦数 (キャッシュ整合性チェック用)。"""
+    from sqlalchemy import func
+
+    async with session() as s:
+        res = await s.execute(
+            select(func.count())
+            .select_from(Match)
+            .where(
+                ((Match.host_user_id == user_id) | (Match.guest_user_id == user_id))
+                & (Match.winner != "")
+                & Match.played_at.is_not(None)
+            )
+        )
+        return int(res.scalar_one())
+
+
 async def get_match_by_id(match_id: str) -> Optional[Match]:
     """match id で 1 件取得する。"""
     async with session() as s:
