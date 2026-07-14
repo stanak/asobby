@@ -34,6 +34,11 @@ PNETOBJECT = 0x008986A0
 COMMMODE = 0x00898690
 SCENEID = 0x008A0044
 
+# COMMMODE の値 (天則観 SWRSAddrDef.h 準拠)
+COMM_SERVER = 4
+COMM_CLIENT = 5
+COMM_WATCH = 6
+
 # SWRSSCENE (SokuLib Scenes.hpp 準拠)。シーン遷移は giuroll が
 # 差し替えないため、MOD 有無に依存しない対戦判定に使える。
 SCENE_SELECTSV = 8
@@ -448,7 +453,22 @@ def _decide_mode(server08: Optional[int], server09: Optional[int], scene_id: Opt
 # ========================
 
 
-def _derive_net_side(scene_id: Optional[int]) -> Optional[str]:
+def _derive_net_side(
+    scene_id: Optional[int], comm_mode: Optional[int]
+) -> Optional[str]:
+    """ネット対戦での自分の役割を返す。
+
+    COMMMODE (天則観と同じ判定) を優先する。ホスト同士が凸り合った場合など、
+    シーン ID の SV/CL が実際のネットワーク上の役割と食い違うことがあり、
+    シーンだけに頼ると my_side が反転して「自分対自分」の戦績になる。
+    """
+    if scene_id in NET_SCENES:
+        if comm_mode == COMM_SERVER:
+            return "host"
+        if comm_mode == COMM_CLIENT:
+            return "client"
+        if comm_mode == COMM_WATCH:
+            return "watch"
     if scene_id in NET_SIDE_HOST:
         return "host"
     if scene_id in NET_SIDE_CLIENT:
@@ -501,6 +521,7 @@ def read_detection_state() -> DetectionState:
 
     try:
         scene_id = _read_u32le(h, SCENEID)
+        comm_mode = _read_u32le(h, COMMMODE)
 
         pnet = _read_u32le(h, PNETOBJECT)
         lprof = rprof = ""
@@ -548,7 +569,7 @@ def read_detection_state() -> DetectionState:
             rchar_id=rcid,
             lchar_name=_char_name(lcid),
             rchar_name=_char_name(rcid),
-            net_side=_derive_net_side(scene_id),
+            net_side=_derive_net_side(scene_id, comm_mode),
             btl_mode=btl_mode,
             lwin=lwin,
             rwin=rwin,

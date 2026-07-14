@@ -1446,6 +1446,25 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
             })
             continue
 
+        # user_id で照合できない相手側報告 (ゲスト未同定の host 報告など)
+        # ともプロファイルで照合する
+        if item.my_side == "host":
+            hp, gp = item.my_profile, item.opp_profile
+        else:
+            hp, gp = item.opp_profile, item.my_profile
+        near_match = await db.find_near_match_by_profiles(
+            played_at, item.winner, hp, gp
+        )
+        if near_match is not None:
+            # 既存行に自分の側が未同定で残っていれば紐付ける
+            await db.claim_match_side(near_match.id, item.my_side, user_id)
+            results.append({
+                "client_id": item.client_id,
+                "server_id": near_match.id,
+                "status": "duplicate",
+            })
+            continue
+
         row = _sync_row_from_item(user_id, item, match_id, played_at)
         to_insert.append(row)
         existing_ids.add(match_id)
@@ -2039,6 +2058,14 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
     if await db.find_recent_match_as_guest(uid) is not None:
         return {"ok": True, "recorded": False, "reason": "duplicate"}
 
+    # ゲスト未同定の host 報告と重複しないようプロファイルでも照合する
+    near = await db.find_near_match_by_profiles(
+        db.utcnow(), body.winner, body.host_profile, body.guest_profile
+    )
+    if near is not None:
+        await db.claim_match_side(near.id, "guest", uid)
+        return {"ok": True, "recorded": False, "reason": "duplicate"}
+
     await db.insert_match_result(
         host_user_id=None,
         guest_user_id=uid,
@@ -2065,6 +2092,14 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
     is_ranked = post.ranked_active and rec.session_games < RANKED_SESSION_MAX_GAMES
     match_rank = post.rank if is_ranked else None
     host_ip, _, _ = post.addr.partition(":")
+
+    # 接続時点で同定できなかったゲストを再試行する
+    # (対戦中にゲストがログインして last_ip が付いた場合など)
+    if not rec.guest_user_id and rec.guest_ip:
+        user = await db.find_user_by_ip(rec.guest_ip)
+        if user is not None and user.id != rec.owner_user_id:
+            rec.guest_user_id = user.id
+            rec.guest_rank = user.rank
 
     if rec.guest_user_id:
         guest_match = await db.find_recent_guest_reported_match(rec.guest_user_id)
@@ -2097,20 +2132,43 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 source="host",
             )
     else:
-        await db.insert_match_result(
-            host_user_id=rec.owner_user_id,
-            guest_user_id=None,
-            host_ip=host_ip,
-            guest_ip=rec.guest_ip,
-            winner=body.winner,
-            host_char=body.host_char,
-            guest_char=body.guest_char,
-            host_profile=body.host_profile,
-            guest_profile=body.guest_profile,
-            ranked=is_ranked,
-            match_rank=match_rank,
-            source="host",
+        # ゲストを同定できなくても、先行するゲスト報告 (source=='guest')
+        # がプロファイル一致で見つかればそれを昇格して二重登録を防ぐ
+        near = await db.find_near_match_by_profiles(
+            db.utcnow(), body.winner, body.host_profile, body.guest_profile
         )
+        if (
+            near is not None
+            and near.source == "guest"
+            and near.guest_user_id != rec.owner_user_id
+        ):
+            await db.promote_guest_match(
+                near.id,
+                host_user_id=rec.owner_user_id,
+                host_ip=host_ip,
+                winner=body.winner,
+                host_char=body.host_char,
+                guest_char=body.guest_char,
+                host_profile=body.host_profile,
+                guest_profile=body.guest_profile,
+                ranked=is_ranked,
+                match_rank=match_rank,
+            )
+        else:
+            await db.insert_match_result(
+                host_user_id=rec.owner_user_id,
+                guest_user_id=None,
+                host_ip=host_ip,
+                guest_ip=rec.guest_ip,
+                winner=body.winner,
+                host_char=body.host_char,
+                guest_char=body.guest_char,
+                host_profile=body.host_profile,
+                guest_profile=body.guest_profile,
+                ranked=is_ranked,
+                match_rank=match_rank,
+                source="host",
+            )
     rec.session_games += 1
 
     if is_ranked:
@@ -2300,6 +2358,10 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
     user = None
     if db.is_configured():
         user = await db.find_user_by_ip(ip)
+    if user is not None and user.id == rec.owner_user_id:
+        # 同一 IP (同一 NAT 内など) でホスト自身に同定された場合は
+        # 「自分対自分」を避けるため未同定として扱う
+        user = None
 
     if user is not None:
         rec.guest_user_id = user.id

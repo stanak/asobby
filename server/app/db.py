@@ -374,6 +374,60 @@ async def find_recent_match_as_guest(
         return res.scalar_one_or_none()
 
 
+async def find_near_match_by_profiles(
+    played_at: datetime,
+    winner: str,
+    host_profile: str,
+    guest_profile: str,
+    window_sec: int = 90,
+) -> Optional[Match]:
+    """勝敗・両プロファイル・時刻 (±window_sec) が一致する match を 1 件返す。
+
+    ゲストが echo プローブで同定できなかった場合、host 報告にはゲストの
+    user_id が付かず、user_id ベースの重複排除をすり抜けて同一対戦が
+    二重登録される。その保険としてプロファイルで照合する。"""
+    if not host_profile or not guest_profile:
+        return None
+    lo = played_at - timedelta(seconds=window_sec)
+    hi = played_at + timedelta(seconds=window_sec)
+    async with session() as s:
+        res = await s.execute(
+            select(Match)
+            .where(
+                (Match.winner == winner)
+                & (Match.host_profile == host_profile)
+                & (Match.guest_profile == guest_profile)
+                & Match.played_at.is_not(None)
+                & (Match.played_at >= lo)
+                & (Match.played_at <= hi)
+            )
+            .order_by(Match.played_at.desc())
+            .limit(1)
+        )
+        return res.scalar_one_or_none()
+
+
+async def claim_match_side(match_id: str, side: str, user_id: str) -> bool:
+    """match の host/guest が未同定なら user_id を紐付ける。
+
+    プロファイル照合で重複と判定した場合、相手側報告 (ゲスト未同定など)
+    に自分の user_id を補完して戦績ページに反映させる。"""
+    async with session() as s:
+        match = await s.get(Match, match_id)
+        if match is None:
+            return False
+        if side == "host":
+            if match.host_user_id or match.guest_user_id == user_id:
+                return False
+            match.host_user_id = user_id
+        else:
+            if match.guest_user_id or match.host_user_id == user_id:
+                return False
+            match.guest_user_id = user_id
+        await s.commit()
+        return True
+
+
 async def find_recent_guest_reported_match(
     guest_user_id: str, within_sec: int = 60
 ) -> Optional[Match]:
