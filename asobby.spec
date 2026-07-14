@@ -1,13 +1,26 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_all
+
+datas = []
+binaries = []
+hiddenimports = ['pystray._win32']
+
+try:
+    tmp = collect_all('windows_toasts')
+    datas += tmp[0]
+    binaries += tmp[1]
+    hiddenimports += tmp[2]
+except Exception:
+    pass
 
 a = Analysis(
     ['client\\src\\main.py'],
     pathex=[],
-    binaries=[],
-    datas=[],
+    binaries=binaries,
+    datas=datas,
     # pystray はバックエンドを動的 import するため明示する
-    hiddenimports=['pystray._win32'],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

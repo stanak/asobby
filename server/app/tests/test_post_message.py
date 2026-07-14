@@ -251,3 +251,217 @@ async def test_message_not_found_and_own_post():
             headers={"Authorization": f"Bearer {host_token}"},
         )
         assert res.status_code == 400
+
+
+def parse_sse_payload(raw: str) -> tuple[str, dict]:
+    """format_sse の出力から (event, data) を取り出す。"""
+    event = ""
+    data = {}
+    for line in raw.splitlines():
+        if line.startswith("event: "):
+            event = line[7:]
+        elif line.startswith("data: "):
+            import json
+            data = json.loads(line[6:])
+    return event, data
+
+
+@pytest.mark.asyncio
+async def test_message_id_in_update_response():
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        await create_user("viewer1", name="viewer")
+        post, owner_token = await create_post(client, giuroll=False)
+        viewer_token = bearer_token("viewer1", "viewer")
+
+        res = await client.post(
+            f"/posts/{post['id']}/message",
+            json={"type": "giuroll_request"},
+            headers={"Authorization": f"Bearer {viewer_token}"},
+        )
+        assert res.status_code == 200
+
+        upd = await client.post(
+            "/posts/update",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "post_type": "casual",
+                "addr": "1.2.3.4:10800",
+            },
+        )
+        assert upd.status_code == 200
+        messages = upd.json()["messages"]
+        assert len(messages) == 1
+        assert messages[0]["id"]
+        assert messages[0]["from_user_id"] == "viewer1"
+
+
+@pytest.mark.asyncio
+async def test_reply_accept_publishes_message_reply():
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        await create_user("viewer1", name="viewer")
+        post, owner_token = await create_post(client, giuroll=False)
+        viewer_token = bearer_token("viewer1", "viewer")
+
+        await client.post(
+            f"/posts/{post['id']}/message",
+            json={"type": "giuroll_request"},
+            headers={"Authorization": f"Bearer {viewer_token}"},
+        )
+        upd = await client.post(
+            "/posts/update",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "post_type": "casual",
+                "addr": "1.2.3.4:10800",
+            },
+        )
+        message_id = upd.json()["messages"][0]["id"]
+
+        q = await main.HUB.subscribe()
+        try:
+            res = await client.post(
+                "/posts/reply",
+                json={
+                    "id": post["id"],
+                    "owner_token": owner_token,
+                    "message_id": message_id,
+                    "reply": "accept",
+                },
+            )
+            assert res.status_code == 200
+            assert res.json() == {"ok": True}
+
+            import asyncio
+            raw = await asyncio.wait_for(q.get(), timeout=1.0)
+            event, data = parse_sse_payload(raw)
+            assert event == "message_reply"
+            assert data["to_user_id"] == "viewer1"
+            assert data["req_type"] == "giuroll_request"
+            assert data["reply"] == "accept"
+            assert data["from_name"] == "host"
+        finally:
+            await main.HUB.unsubscribe(q)
+
+
+@pytest.mark.asyncio
+async def test_reply_duplicate_conflict():
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        await create_user("viewer1", name="viewer")
+        post, owner_token = await create_post(client, giuroll=False)
+        viewer_token = bearer_token("viewer1", "viewer")
+
+        await client.post(
+            f"/posts/{post['id']}/message",
+            json={"type": "giuroll_request"},
+            headers={"Authorization": f"Bearer {viewer_token}"},
+        )
+        upd = await client.post(
+            "/posts/update",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "post_type": "casual",
+                "addr": "1.2.3.4:10800",
+            },
+        )
+        message_id = upd.json()["messages"][0]["id"]
+
+        body = {
+            "id": post["id"],
+            "owner_token": owner_token,
+            "message_id": message_id,
+            "reply": "accept",
+        }
+        assert (await client.post("/posts/reply", json=body)).status_code == 200
+        res = await client.post("/posts/reply", json=body)
+        assert res.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_reply_auth_and_not_found():
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        await create_user("viewer1", name="viewer")
+        post, owner_token = await create_post(client, giuroll=False)
+        viewer_token = bearer_token("viewer1", "viewer")
+
+        await client.post(
+            f"/posts/{post['id']}/message",
+            json={"type": "giuroll_request"},
+            headers={"Authorization": f"Bearer {viewer_token}"},
+        )
+        upd = await client.post(
+            "/posts/update",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "post_type": "casual",
+                "addr": "1.2.3.4:10800",
+            },
+        )
+        message_id = upd.json()["messages"][0]["id"]
+
+        bad_token = await client.post(
+            "/posts/reply",
+            json={
+                "id": post["id"],
+                "owner_token": "wrong",
+                "message_id": message_id,
+                "reply": "decline",
+            },
+        )
+        assert bad_token.status_code == 403
+
+        unknown = await client.post(
+            "/posts/reply",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "message_id": "nonexistent",
+                "reply": "decline",
+            },
+        )
+        assert unknown.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_thanks_not_replyable():
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        await create_user("viewer1", name="viewer")
+        post, owner_token = await create_post(client)
+        viewer_token = bearer_token("viewer1", "viewer")
+
+        await client.post(
+            f"/posts/{post['id']}/message",
+            json={"type": "thanks"},
+            headers={"Authorization": f"Bearer {viewer_token}"},
+        )
+        upd = await client.post(
+            "/posts/update",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "post_type": "casual",
+                "addr": "1.2.3.4:10800",
+            },
+        )
+        message_id = upd.json()["messages"][0]["id"]
+        rec = main.RECORDS[post["id"]]
+        assert message_id not in rec.sent_log
+
+        res = await client.post(
+            "/posts/reply",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "message_id": message_id,
+                "reply": "accept",
+            },
+        )
+        assert res.status_code == 404

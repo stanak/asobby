@@ -37,6 +37,25 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    async def reply_message(
+        self,
+        post_id: str,
+        owner_token: str,
+        message_id: str,
+        reply: str,
+    ) -> dict:
+        r = await self.http.post(
+            f"{self.base}/posts/reply",
+            json={
+                "id": post_id,
+                "owner_token": owner_token,
+                "message_id": message_id,
+                "reply": reply,
+            },
+        )
+        r.raise_for_status()
+        return r.json()
+
     async def close(self, post_id: str, owner_token: str, reason: str = "auto") -> dict:
         r = await self.http.post(
             f"{self.base}/posts/close",

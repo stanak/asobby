@@ -19,12 +19,13 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `POST /posts` | 募集の新規作成（Discord ログイン必須）。レスポンスで `owner_token` を発行 |
 | `POST /posts/update` | 募集の更新。`id` + `owner_token` が必須。応答に `messages`（閲覧者からの未読定型メッセージ）を含み、返却後キューはクリア |
 | `POST /posts/{id}/message` | Web ロビー閲覧者がホストへ定型メッセージを送る（Discord ログイン必須） |
+| `POST /posts/reply` | ホストがリクエストメッセージへ承諾/拒否を返す。`id` + `owner_token` + `message_id` + `reply` (`accept`/`decline`) |
 | `POST /posts/close` | 募集の削除。`id` + `owner_token` が必須 |
 | `POST /posts/result` | 対戦勝敗の報告。`id` + `owner_token` + `winner` (`host`/`guest`/`draw`) |
 | `POST /matches/report` | ゲスト側クライアントからの対戦結果補完報告。`Authorization: Bearer` 必須 |
 | `POST /replays/upload` | リプレイ (.rep) のアップロード。`Authorization: Bearer` 必須。body は生バイト |
 | `POST /import/tensokukan` | 天則観 (tsk) 戦績 DB (.db) のインポート。`Authorization: Bearer` またはクッキー必須。body は生バイト |
-| `GET /sse/posts` | SSE。接続直後に `snapshot`、以後 `upsert` / `close` |
+| `GET /sse/posts` | SSE。接続直後に `snapshot`、以後 `upsert` / `close` / `message_reply` |
 | `POST /auth/device` | Discord ログイン開始。`device_code` と `verify_url` を返す |
 | `GET /auth/discord/start` | (ブラウザ用) Discord の認可画面へリダイレクト |
 | `GET /auth/discord/web` | (Web 閲覧用) Discord ログイン。完了後クッキーセッションを発行 |
@@ -58,6 +59,13 @@ Discord ログイン済みの Web ロビー閲覧者が、募集中のホスト�
 - 自分の投稿へは 400。条件不一致は 409
 - 同一送信者・同一投稿への再送は 60 秒クールダウン（429、`Retry-After` 付き）
 - 未読キューは投稿あたり最大 20 件（古いものから破棄）
+
+返信 (`giuroll_request` / `casual_invite` のみ):
+
+- ホストクライアントは `POST /posts/reply` で `accept` または `decline` を返す
+- 送信時に付与された `message_id`（ハートビート応答 `messages[].id`）が必要
+- 返信は SSE `message_reply` イベントで送信者の Web ロビーページへ配信される
+- 同一 `message_id` への再返信は 409。`thanks` は返信対象外（`sent_log` に載らず reply は 404）
 
 ## 永続化 (PostgreSQL)
 

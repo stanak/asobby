@@ -74,6 +74,7 @@ MAX_ACTIVE_POSTS_PER_IP = 2
 # Web ロビーからホストへの定型メッセージ
 MESSAGE_COOLDOWN_SEC = 60.0
 MESSAGE_MAX_PENDING = 20
+MESSAGE_SENT_LOG_MAX = 50
 MESSAGE_LAST_SENT: dict[tuple[str, str], float] = {}  # (sender_user_id, post_id) -> 時刻
 
 # リプレイアップロード上限 (非想天則の .rep は通常 100KB 程度)
@@ -206,6 +207,8 @@ class PostRecord:
     guest_rank: str = ""  # 同定済みゲストのランク
     session_games: int = 0  # 現在ゲストとの対戦報告回数
     pending_messages: list[dict] = field(default_factory=list)
+    # giuroll_request / casual_invite の送信ログ (返信 API 用。配送キューとは別)
+    sent_log: dict[str, dict] = field(default_factory=dict)
 
 
 def now_ts() -> float:
@@ -265,6 +268,13 @@ class ChooseRankIn(BaseModel):
 
 class PostMessageIn(BaseModel):
     type: Literal["giuroll_request", "casual_invite", "thanks"]
+
+
+class PostReplyIn(BaseModel):
+    id: str = Field(max_length=64)
+    owner_token: str = Field(max_length=128)
+    message_id: str = Field(max_length=64)
+    reply: Literal["accept", "decline"]
 
 
 _CLIENT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -1779,16 +1789,54 @@ async def post_message(post_id: str, body: PostMessageIn, request: Request) -> d
             headers={"Retry-After": str(retry_after)},
         )
 
+    message_id = uuid4().hex
     rec.pending_messages.append({
+        "id": message_id,
         "type": body.type,
         "from_name": sess["name"],
+        "from_user_id": sess["id"],
         "sent_at": now,
     })
     if len(rec.pending_messages) > MESSAGE_MAX_PENDING:
         rec.pending_messages = rec.pending_messages[-MESSAGE_MAX_PENDING:]
 
+    if body.type in ("giuroll_request", "casual_invite"):
+        rec.sent_log[message_id] = {
+            "from_user_id": sess["id"],
+            "from_name": sess["name"],
+            "type": body.type,
+            "replied": False,
+        }
+        while len(rec.sent_log) > MESSAGE_SENT_LOG_MAX:
+            oldest = next(iter(rec.sent_log))
+            del rec.sent_log[oldest]
+
     MESSAGE_LAST_SENT[cooldown_key] = now
     return {"ok": True, "cooldown_sec": int(MESSAGE_COOLDOWN_SEC)}
+
+
+@app.post("/posts/reply")
+async def reply_post_message(body: PostReplyIn) -> dict[str, Any]:
+    """ホストが閲覧者からのリクエストメッセージへ承諾/拒否を返す。"""
+    rec = get_record_or_raise(body.id, body.owner_token)
+    entry = rec.sent_log.get(body.message_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="message not found")
+    if entry.get("replied"):
+        raise HTTPException(status_code=409, detail="already replied")
+
+    entry["replied"] = True
+    await HUB.publish(
+        "message_reply",
+        {
+            "to_user_id": entry["from_user_id"],
+            "from_name": rec.post.owner_name,
+            "req_type": entry["type"],
+            "reply": body.reply,
+            "ts": now_ts(),
+        },
+    )
+    return {"ok": True}
 
 
 @app.post("/posts/close")

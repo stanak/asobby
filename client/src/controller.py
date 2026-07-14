@@ -38,6 +38,16 @@ STATS_SYNC_INITIAL_DELAY_SEC = 10.0
 STATS_SYNC_INTERVAL_SEC = 10 * 60
 STATS_SYNC_BATCH = 500
 
+PENDING_REQUEST_TTL_SEC = 600  # 未返信リクエストの保持期限
+
+
+@dataclass
+class PendingRequest:
+    message_id: str
+    req_type: str
+    from_name: str
+    received_at: float
+
 
 def _parse_version(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in v.lstrip("v").split(".") if x.isdigit())
@@ -55,6 +65,7 @@ class Controller:
     def __init__(self, app) -> None:
         self.log_sink = app.emit_log
         self.notify_sink = app.emit_notify
+        self.request_sink = app.emit_request
         self.my_post_sink = app.emit_my_post
         self.btn_labels_sink = app.emit_btn_labels
 
@@ -112,6 +123,8 @@ class Controller:
         self._uploaded_replays: set[str] = set()
         self._pending_replay_upload: Optional[Tuple[float, str]] = None
 
+        self.pending_requests: list[PendingRequest] = []
+
     # -----------------
     # basic helpers
     # -----------------
@@ -150,6 +163,7 @@ class Controller:
         self._local_match_recorded = False
         self._pending_local_match = None
         self._notified_casual_fallback = False
+        self.pending_requests.clear()
         self.my_post = replace(
             self.my_post,
             id="",
@@ -212,6 +226,70 @@ class Controller:
             "match_status": match_status,
             "net_status": net_status,
         }
+
+    def _prune_pending_requests(self) -> None:
+        cutoff = time.time() - PENDING_REQUEST_TTL_SEC
+        self.pending_requests = [
+            r for r in self.pending_requests if r.received_at >= cutoff
+        ]
+
+    def _request_type_label(self, req_type: str) -> str:
+        if req_type == "giuroll_request":
+            return "Giuroll リクエスト"
+        if req_type == "casual_invite":
+            return "カジュアルのお誘い"
+        return req_type
+
+    def _message_notify_text(self, msg_type: str, from_name: str) -> str:
+        if msg_type == "giuroll_request":
+            return (
+                f"{from_name} さんから Giuroll を使ってほしいとの"
+                "リクエストが届きました"
+            )
+        if msg_type == "casual_invite":
+            return f"{from_name} さんからカジュアル対戦のお誘いが届きました"
+        if msg_type == "thanks":
+            return (
+                f"{from_name} さんから「対戦ありがとうございました」"
+                "が届きました"
+            )
+        return f"{from_name} さんからメッセージが届きました"
+
+    async def reply_request(self, message_id: str, reply: str) -> None:
+        self._prune_pending_requests()
+        pending = next(
+            (r for r in self.pending_requests if r.message_id == message_id),
+            None,
+        )
+        if pending is None:
+            self.notify_sink("返信対象が見つかりません")
+            return
+        if not self.has_active_post():
+            self.notify_sink("返信を送れませんでした（募集が終了した可能性）")
+            return
+
+        try:
+            await self.api.reply_message(
+                self.my_post.id,
+                self.owner_token,
+                message_id,
+                reply,
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (403, 404):
+                self.notify_sink("返信を送れませんでした（募集が終了した可能性）")
+            else:
+                self.notify_sink("返信を送れませんでした")
+            return
+        except httpx.HTTPError:
+            self.notify_sink("返信を送れませんでした（募集が終了した可能性）")
+            return
+
+        self.pending_requests = [
+            r for r in self.pending_requests if r.message_id != message_id
+        ]
+        action = "承諾" if reply == "accept" else "拒否"
+        self.notify_sink(f"{pending.from_name} さんに{action}を返信しました")
 
     # -----------------
     # loops
@@ -307,24 +385,27 @@ class Controller:
                     for msg in resp.get("messages") or []:
                         msg_type = msg.get("type", "")
                         from_name = msg.get("from_name", "")
-                        if msg_type == "giuroll_request":
-                            text = (
-                                f"{from_name} さんから Giuroll を使ってほしいとの"
-                                "リクエストが届きました"
-                            )
-                            self.notify_sink(text)
-                            self.log_sink("info", text)
-                        elif msg_type == "casual_invite":
-                            text = (
-                                f"{from_name} さんからカジュアル対戦のお誘いが届きました"
-                            )
-                            self.notify_sink(text)
+                        text = self._message_notify_text(msg_type, from_name)
+                        if msg_type in ("giuroll_request", "casual_invite"):
+                            message_id = str(msg.get("id", ""))
+                            if message_id:
+                                self._prune_pending_requests()
+                                self.pending_requests.append(
+                                    PendingRequest(
+                                        message_id=message_id,
+                                        req_type=msg_type,
+                                        from_name=from_name,
+                                        received_at=time.time(),
+                                    )
+                                )
+                                self.request_sink(
+                                    self.pending_requests[-1],
+                                    text,
+                                )
+                            else:
+                                self.notify_sink(text)
                             self.log_sink("info", text)
                         elif msg_type == "thanks":
-                            text = (
-                                f"{from_name} さんから「対戦ありがとうございました」"
-                                "が届きました"
-                            )
                             self.notify_sink(text)
                             self.log_sink("info", text)
                     guest_connected = resp.get("guest_connected")

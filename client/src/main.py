@@ -15,6 +15,7 @@ from pystray import Menu, MenuItem
 from controller import Controller
 from services import Post, POST_TYPE_LABEL, edit_post_settings, NET_BATTLE, __version__
 from stats_window import open_stats_window
+import toast
 
 LOG_PATH = Path("asobby.log")
 LOG_MAX_BYTES = 256 * 1024
@@ -65,6 +66,28 @@ class TrayApp:
 
     def emit_notify(self, text: str) -> None:
         self._notify(text)
+        if self.icon:
+            self.icon.update_menu()
+
+    def emit_request(self, req, text: str) -> None:
+        def callback(reply: str) -> None:
+            fut = asyncio.run_coroutine_threadsafe(
+                self.controller.reply_request(req.message_id, reply),
+                self.loop,
+            )
+
+            def done(_fut) -> None:
+                if self.icon:
+                    self.icon.update_menu()
+
+            fut.add_done_callback(done)
+
+        shown = toast.show_request_toast(
+            text + "\n承諾/拒否をボタンで返信できます",
+            callback,
+        )
+        if not shown:
+            self._notify(text)
         if self.icon:
             self.icon.update_menu()
 
@@ -324,6 +347,38 @@ class TrayApp:
         if not presets:
             yield MenuItem("投稿設定で配信URLを追加できます", None, enabled=False)
 
+    def _request_menu_items(self):
+        """未返信リクエストへの承諾/拒否メニュー。"""
+        self.controller._prune_pending_requests()
+        for req in self.controller.pending_requests:
+            type_label = self.controller._request_type_label(req.req_type)
+            header = f"{req.from_name}: {type_label}"
+
+            def make_reply(message_id: str, reply: str):
+                def act(icon, item):
+                    fut = asyncio.run_coroutine_threadsafe(
+                        self.controller.reply_request(message_id, reply),
+                        self.loop,
+                    )
+
+                    def done(_fut) -> None:
+                        if self.icon:
+                            self.icon.update_menu()
+
+                    fut.add_done_callback(done)
+
+                return act
+
+            yield MenuItem(header, None, enabled=False)
+            yield MenuItem(
+                "承諾する",
+                make_reply(req.message_id, "accept"),
+            )
+            yield MenuItem(
+                "ごめんなさい",
+                make_reply(req.message_id, "decline"),
+            )
+
     def _build_menu(self) -> Menu:
         return Menu(
             MenuItem(lambda item: self._status_text(), None, enabled=False),
@@ -334,6 +389,14 @@ class TrayApp:
             MenuItem("戦績をサーバーと同期", lambda: self._sync_stats()),
             MenuItem("コメント切替", Menu(lambda: self._comment_menu_items())),
             MenuItem("配信URL切替", Menu(lambda: self._stream_menu_items())),
+            MenuItem(
+                "リクエストに返信",
+                Menu(lambda: self._request_menu_items()),
+                visible=lambda item: (
+                    self.controller._prune_pending_requests(),
+                    bool(self.controller.pending_requests),
+                )[-1],
+            ),
             MenuItem(lambda item: self._discord_label(), lambda: self._discord_action()),
             Menu.SEPARATOR,
             MenuItem(lambda item: self._tool_label("giuroll"),
