@@ -748,7 +748,9 @@ class Controller:
             if not d.is_dir():
                 continue
             try:
-                for rep in d.glob("*.rep"):
+                # リプレイ整理 Mod は replay/YY/MM/DD/ のようなサブフォルダに
+                # 保存するため再帰的に探索する
+                for rep in d.rglob("*.rep"):
                     if str(rep) in self._uploaded_replays:
                         continue
                     try:
