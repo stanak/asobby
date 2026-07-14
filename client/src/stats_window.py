@@ -496,7 +496,8 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         return ()
 
     def _char_iid(cid: int | None) -> str:
-        return _ALL_IID if cid is None else f"char_{cid}"
+        # キャラ不明の集計行。"(すべて)" 行 (_ALL_IID) と衝突させない
+        return "char_unknown" if cid is None else f"char_{cid}"
 
     def _prof_iid(profile_key: str) -> str:
         return f"prof_{hash(profile_key) & 0xFFFFFFFF:08x}"
@@ -532,7 +533,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
                 ),
                 tags=tags,
             )
-            if agg.key == selected_key:
+            if selected_key is not None and agg.key == selected_key:
                 select_iid = iid
         tree.selection_set(select_iid)
         tree.focus(select_iid)
@@ -650,7 +651,8 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         win.after(50, check_loaded)
 
     def _parse_char_iid(iid: str) -> int | None:
-        if iid == _ALL_IID:
+        # "char_unknown" (キャラ不明行) は絞り込み解除扱い
+        if iid == _ALL_IID or iid == "char_unknown":
             return None
         if iid.startswith("char_"):
             return int(iid[5:])
