@@ -62,7 +62,7 @@ RANK_LADDER: dict[str, dict[str, Any]] = {
     "normal": {"promote_at": 0.5, "demote_at": None, "promote_to": "ex", "demote_to": None},
     "ex": {"promote_at": 0.6, "demote_at": 0.2, "promote_to": "hard", "demote_to": "normal"},
     "hard": {"promote_at": 0.6, "demote_at": 0.2, "promote_to": "luna", "demote_to": "ex"},
-    "luna": {"promote_at": 0.6, "demote_at": 0.2, "promote_to": "ph", "demote_to": "hard"},
+    "luna": {"promote_at": 0.7, "demote_at": 0.2, "promote_to": "ph", "demote_to": "hard"},
     "ph": {"promote_at": None, "demote_at": None, "promote_to": None, "demote_to": None},
 }
 RANK_ORDER: dict[str, int] = {k: i for i, k in enumerate(RANK_LADDER.keys())}
