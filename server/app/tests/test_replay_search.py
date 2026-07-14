@@ -1,9 +1,7 @@
 """リプレイ検索 API の結合テスト。"""
 from __future__ import annotations
 
-import io
 import os
-import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncIterator
@@ -265,9 +263,7 @@ async def test_replay_search_public_access():
 
         dl = await client.get(f"/replays/{match_id}")
         assert dl.status_code == 200
-        # ダウンロードは ZIP に包まれて返る (Chrome の未知拡張子警告対策)
-        with zipfile.ZipFile(io.BytesIO(dl.content)) as zf:
-            assert zf.read(zf.namelist()[0]) == REPLAY_DATA
+        assert dl.content == REPLAY_DATA
 
         page = await client.get("/replays")
         assert page.status_code == 200

@@ -13,7 +13,7 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `GET /replays/players` | リプレイ検索用プレイヤー名候補（`q` / `limit` クエリ、公開・ログイン不要） |
 | `GET /stats/me` | ログインユーザーの戦績集計（JSON） |
 | `GET /stats/me/matches` | ログインユーザーの対戦一覧（`since` / `limit` クエリ、played_at 昇順） |
-| `GET /replays/{match_id}` | リプレイをダウンロード（ZIP 形式・公開・ログイン不要） |
+| `GET /replays/{match_id}` | リプレイ (.rep) をダウンロード（公開・ログイン不要） |
 | `POST /matches/sync` | クライアントのローカル戦績を一括登録（最大 500 件） |
 | `GET /myip` | クライアントのグローバル IP を返す |
 | `GET /posts` | 募集一覧（公開フィールドのみ） |
@@ -167,7 +167,6 @@ asobby クライアントはローカル SQLite に戦績を保持し、`POST /m
 - asobby クライアントはネット対戦終了後、非想天則が保存した `.rep` を自動アップロードする
 - 1 対戦 (match) に対して 1 ファイルのみ保存される（両側クライアントがアップロードしても先着 1 件のみ）
 - **ダウンロードは公開**（`GET /replays/{match_id}` はログイン不要。リプレイ未添付・存在しない match は 404）
-- ダウンロードは `.rep` を ZIP に包んで返す（`.rep` は一般的でない拡張子のため、Chrome Safe Browsing の「一般的にダウンロードされないファイル」警告を回避する目的）
 - **`GET /replays` でリプレイ検索ページ**を提供。プレイヤー名（プロファイル / Discord 表示名）、キャラ、日付範囲、並び順（日付・ランク）で絞り込み可能
 - ファイル名形式: `{日時JST}_{host_profile}-{host_char}_vs_{guest_profile}-{guest_char}_{result}.rep`
   - `result`: ホスト勝ち `ox`、ゲスト勝ち `xo`、引き分け `xx`
