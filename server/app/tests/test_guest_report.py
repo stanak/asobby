@@ -252,6 +252,7 @@ async def test_guest_first_host_promotes():
             assert m.id == promoted_id
             assert m.source == "host"
             assert m.ranked is True
+            assert m.match_rank == "normal"
             assert m.host_user_id == "999"
             assert m.guest_user_id == "888"
             assert m.winner == "host"

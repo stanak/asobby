@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from local_store import LocalStore
+from services import RANK_LABEL
 
 # hisoutensoku_memory は Windows 専用のため CHAR_NAME をここに複製
 CHAR_NAME: dict[int, str] = {
@@ -50,6 +51,15 @@ def _result_symbol(row: dict) -> str:
     if LocalStore.is_draw(row):
         return "△"
     return "○" if LocalStore.is_my_win(row) else "×"
+
+
+def _format_ranked_cell(row: dict) -> str:
+    if not row.get("ranked"):
+        return "x"
+    match_rank = row.get("match_rank")
+    if match_rank:
+        return RANK_LABEL.get(str(match_rank), str(match_rank))
+    return "o"
 
 
 @dataclass
@@ -589,7 +599,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
                     _char_label(LocalStore.opp_char_id(row)),
                     LocalStore.opp_profile(row),
                     _result_symbol(row),
-                    "o" if row.get("ranked") else "x",
+                    _format_ranked_cell(row),
                 ),
             )
         shown = min(limit, len(history_sorted))

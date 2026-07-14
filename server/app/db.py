@@ -84,6 +84,8 @@ class Match(Base):
     host_profile: Mapped[str] = mapped_column(String(64), default="")
     guest_profile: Mapped[str] = mapped_column(String(64), default="")
     ranked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # ランクマ成立時のランク帯 (easy / normal / ex / hard / luna / ph)
+    match_rank: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     # "host" = ホスト報告 (正)、 "guest" = ゲスト補完報告
     source: Mapped[str] = mapped_column(String(8), default="host", server_default="host")
     played_at: Mapped[Optional[datetime]] = mapped_column(
@@ -308,6 +310,7 @@ async def insert_match_result(
     host_profile: str = "",
     guest_profile: str = "",
     ranked: bool = False,
+    match_rank: Optional[str] = None,
     source: str = "host",
 ) -> str:
     """対戦結果を matches に新規 insert する。insert した行の id を返す。"""
@@ -323,6 +326,7 @@ async def insert_match_result(
             host_profile=host_profile,
             guest_profile=guest_profile,
             ranked=ranked,
+            match_rank=match_rank,
             source=source,
             played_at=utcnow(),
         )
@@ -383,6 +387,7 @@ async def promote_guest_match(
     host_profile: str,
     guest_profile: str,
     ranked: bool,
+    match_rank: Optional[str] = None,
 ) -> Optional[Match]:
     """ゲスト報告行をホスト報告に昇格する (delete+insert 禁止)。更新後の Match を返す。"""
     async with session() as s:
@@ -397,6 +402,7 @@ async def promote_guest_match(
         match.host_profile = host_profile
         match.guest_profile = guest_profile
         match.ranked = ranked
+        match.match_rank = match_rank
         match.source = "host"
         await s.commit()
         return match

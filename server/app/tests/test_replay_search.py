@@ -70,6 +70,7 @@ async def create_match_with_replay(
     guest_profile: str = "guestprof",
     winner: str = "host",
     ranked: bool = False,
+    match_rank: str | None = None,
     played_at: datetime,
     with_replay: bool = True,
 ) -> None:
@@ -84,6 +85,7 @@ async def create_match_with_replay(
             host_profile=host_profile,
             guest_profile=guest_profile,
             ranked=ranked,
+            match_rank=match_rank,
             source="host",
             played_at=played_at,
         )
@@ -266,3 +268,22 @@ async def test_replay_search_public_access():
         page = await client.get("/replays")
         assert page.status_code == 200
         assert "リプレイ検索" in page.text
+
+
+@pytest.mark.asyncio
+async def test_replay_search_includes_match_rank():
+    async with app_client() as client:
+        played_at = datetime(2025, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
+        match_id = "d" * 32
+        await create_match_with_replay(
+            match_id,
+            ranked=True,
+            match_rank="ex",
+            played_at=played_at,
+        )
+
+        search = await client.get("/replays/search")
+        assert search.status_code == 200
+        row = next(r for r in search.json()["replays"] if r["match_id"] == match_id)
+        assert row["ranked"] is True
+        assert row["match_rank"] == "ex"

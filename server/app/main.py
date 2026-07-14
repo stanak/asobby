@@ -1111,6 +1111,7 @@ def _match_to_stats_item(match: db.Match, user_id: str, has_replay: bool) -> dic
         "host_profile": match.host_profile or "",
         "guest_profile": match.guest_profile or "",
         "ranked": match.ranked,
+        "match_rank": match.match_rank,
         "source": match.source,
         "has_replay": has_replay,
     }
@@ -1197,6 +1198,7 @@ def _replay_search_item(
         "guest_rating": guest_rating,
         "filename": filename,
         "ranked": match.ranked,
+        "match_rank": match.match_rank,
     }
 
 
@@ -1949,6 +1951,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
 
     post = rec.post
     is_ranked = post.ranked_active and rec.session_games < RANKED_SESSION_MAX_GAMES
+    match_rank = post.rank if is_ranked else None
     host_ip, _, _ = post.addr.partition(":")
 
     if rec.guest_user_id:
@@ -1964,6 +1967,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 host_profile=body.host_profile,
                 guest_profile=body.guest_profile,
                 ranked=is_ranked,
+                match_rank=match_rank,
             )
         else:
             await db.insert_match_result(
@@ -1977,6 +1981,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 host_profile=body.host_profile,
                 guest_profile=body.guest_profile,
                 ranked=is_ranked,
+                match_rank=match_rank,
                 source="host",
             )
     else:
@@ -1991,6 +1996,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
             host_profile=body.host_profile,
             guest_profile=body.guest_profile,
             ranked=is_ranked,
+            match_rank=match_rank,
             source="host",
         )
     rec.session_games += 1

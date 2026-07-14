@@ -144,6 +144,20 @@ async def test_ranked_match_flow():
             assert len(matches) == 4
             ranked_flags = [m.ranked for m in matches]
             assert ranked_flags == [True, True, True, False]
+            ranked_match_ranks = [m.match_rank for m in matches[:3]]
+            assert ranked_match_ranks == ["normal", "normal", "normal"]
+            assert matches[3].match_rank is None
+
+        host_token = bearer_token("999", "host")
+        stats_matches = await client.get(
+            "/stats/me/matches",
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        assert stats_matches.status_code == 200
+        rows = stats_matches.json()["matches"]
+        ranked_rows = [r for r in rows if r["ranked"]]
+        assert len(ranked_rows) == 3
+        assert all(r["match_rank"] == "normal" for r in ranked_rows)
 
 
 @pytest.mark.asyncio

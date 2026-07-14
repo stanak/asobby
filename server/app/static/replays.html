@@ -301,6 +301,12 @@ function winnerResult(winner) {
   return "xx";
 }
 
+function formatRankedCell(ranked, matchRank) {
+  if (!ranked) return "x";
+  if (matchRank) return RANK_LABEL[matchRank] || matchRank;
+  return "o";
+}
+
 function appendTextCell(tr, text, cls) {
   const td = document.createElement("td");
   td.textContent = text;
@@ -326,7 +332,7 @@ function renderRow(r) {
 
   appendTextCell(tr, charName(r.guest_char));
   appendTextCell(tr, winnerResult(r.winner));
-  appendTextCell(tr, r.ranked ? "o" : "x");
+  appendTextCell(tr, formatRankedCell(r.ranked, r.match_rank));
 
   const tdDl = document.createElement("td");
   const a = document.createElement("a");

@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS matches(
   host_profile TEXT NOT NULL DEFAULT '',
   guest_profile TEXT NOT NULL DEFAULT '',
   ranked INTEGER NOT NULL DEFAULT 0,
+  match_rank TEXT,
   source TEXT NOT NULL DEFAULT 'local',
   pushed INTEGER NOT NULL DEFAULT 0
 );
@@ -67,6 +68,14 @@ class LocalStore:
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            self._migrate_columns(conn)
+
+    def _migrate_columns(self, conn: sqlite3.Connection) -> None:
+        """既存 DB への後方互換: 不足列を ALTER TABLE で追加する。"""
+        cur = conn.execute("PRAGMA table_info(matches)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "match_rank" not in columns:
+            conn.execute("ALTER TABLE matches ADD COLUMN match_rank TEXT")
 
     def record_local(
         self,
@@ -119,6 +128,7 @@ class LocalStore:
                 guest_profile = str(row.get("guest_profile", "") or "")
                 my_side = str(row.get("my_side", ""))
                 ranked = int(row.get("ranked", 0) or 0)
+                match_rank = row.get("match_rank")
                 source = str(row.get("source", "server") or "server")
 
                 cur = conn.execute(
@@ -133,7 +143,7 @@ class LocalStore:
                           played_at = ?, my_side = ?, winner = ?,
                           host_char = ?, guest_char = ?,
                           host_profile = ?, guest_profile = ?,
-                          ranked = ?, source = ?
+                          ranked = ?, match_rank = ?, source = ?
                         WHERE server_id = ?
                         """,
                         (
@@ -145,6 +155,7 @@ class LocalStore:
                             host_profile,
                             guest_profile,
                             ranked,
+                            match_rank,
                             source,
                             server_id,
                         ),
@@ -171,7 +182,7 @@ class LocalStore:
                           played_at = ?, my_side = ?, winner = ?,
                           host_char = ?, guest_char = ?,
                           host_profile = ?, guest_profile = ?,
-                          ranked = ?
+                          ranked = ?, match_rank = ?
                         WHERE id = ?
                         """,
                         (
@@ -184,6 +195,7 @@ class LocalStore:
                             host_profile,
                             guest_profile,
                             ranked,
+                            match_rank,
                             local_match["id"],
                         ),
                     )
@@ -194,8 +206,8 @@ class LocalStore:
                     INSERT INTO matches(
                       id, server_id, played_at, my_side, winner,
                       host_char, guest_char, host_profile, guest_profile,
-                      ranked, source, pushed
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'server', 1)
+                      ranked, match_rank, source, pushed
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'server', 1)
                     """,
                     (
                         server_id,
@@ -208,6 +220,7 @@ class LocalStore:
                         host_profile,
                         guest_profile,
                         ranked,
+                        match_rank,
                     ),
                 )
                 inserted += 1

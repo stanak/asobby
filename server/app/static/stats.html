@@ -366,7 +366,7 @@ const RANK_LABEL = {
 const MATCH_LIMIT = 5000;
 const PROFILE_TOP = 30;
 const HISTORY_LIMIT = 100;
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 
 let allMatches = [];
 let statsData = null;
@@ -438,6 +438,12 @@ function winRateClass(rate) {
   if (rate >= 0.6) return "wr-high";
   if (rate <= 0.4) return "wr-low";
   return "";
+}
+
+function formatRankedCell(ranked, matchRank) {
+  if (!ranked) return "x";
+  if (matchRank) return RANK_LABEL[matchRank] || matchRank;
+  return "o";
 }
 
 function computeBucket(matches) {
@@ -847,7 +853,7 @@ function renderHistory() {
     const res = resultSymbol(m);
     appendTextCell(tr, res.text, res.cls);
 
-    appendTextCell(tr, m.ranked ? "o" : "x");
+    appendTextCell(tr, formatRankedCell(m.ranked, m.match_rank));
 
     const tdReplay = document.createElement("td");
     if (m.has_replay) {
