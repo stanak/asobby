@@ -71,6 +71,11 @@ RANK_ORDER: dict[str, int] = {k: i for i, k in enumerate(RANK_LADDER.keys())}
 CREATE_MIN_INTERVAL_SEC = 2.0
 MAX_ACTIVE_POSTS_PER_IP = 2
 
+# Web ロビーからホストへの定型メッセージ
+MESSAGE_COOLDOWN_SEC = 60.0
+MESSAGE_MAX_PENDING = 20
+MESSAGE_LAST_SENT: dict[tuple[str, str], float] = {}  # (sender_user_id, post_id) -> 時刻
+
 # リプレイアップロード上限 (非想天則の .rep は通常 100KB 程度)
 REPLAY_MAX_BYTES = 300 * 1024
 
@@ -200,6 +205,7 @@ class PostRecord:
     guest_user_id: str = ""  # 同定済みゲストの Discord ID
     guest_rank: str = ""  # 同定済みゲストのランク
     session_games: int = 0  # 現在ゲストとの対戦報告回数
+    pending_messages: list[dict] = field(default_factory=list)
 
 
 def now_ts() -> float:
@@ -255,6 +261,10 @@ class DevicePollIn(BaseModel):
 
 class ChooseRankIn(BaseModel):
     rank: Literal["easy", "normal", "ex", "hard", "luna"]
+
+
+class PostMessageIn(BaseModel):
+    type: Literal["giuroll_request", "casual_invite", "thanks"]
 
 
 _CLIENT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -498,6 +508,7 @@ async def cleanup_loop() -> None:
         ]
         for post_id in stale_ids:
             RECORDS.pop(post_id, None)
+            cleanup_message_state_for_post(post_id)
             await HUB.publish("close", {"id": post_id, "reason": "ttl_expired", "ts": now_ts()})
         await asyncio.sleep(CLEANUP_INTERVAL_SEC)
 
@@ -591,6 +602,12 @@ def get_record_or_raise(post_id: str, owner_token: str) -> PostRecord:
     if not secrets.compare_digest(rec.owner_token, owner_token):
         raise HTTPException(status_code=403, detail="invalid owner_token")
     return rec
+
+
+def cleanup_message_state_for_post(post_id: str) -> None:
+    """投稿削除時に MESSAGE_LAST_SENT の該当エントリを掃除する。"""
+    for key in [k for k in MESSAGE_LAST_SENT if k[1] == post_id]:
+        MESSAGE_LAST_SENT.pop(key, None)
 
 
 # ----------------------------
@@ -1720,9 +1737,58 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     p.net_status = body.net_status
     p.updated_at = now_ts()
 
+    messages = list(rec.pending_messages)
+    rec.pending_messages.clear()
     data = asdict(p)
-    await HUB.publish("upsert", data)
+    data["messages"] = messages
+    await HUB.publish("upsert", asdict(p))
     return data
+
+
+@app.post("/posts/{post_id}/message")
+async def post_message(post_id: str, body: PostMessageIn, request: Request) -> dict[str, Any]:
+    """Web ロビー閲覧者がホストへ定型メッセージを送る。"""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+
+    rec = RECORDS.get(post_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="post not found")
+
+    if rec.owner_user_id == sess["id"]:
+        raise HTTPException(status_code=400, detail="cannot message your own post")
+
+    post = rec.post
+    if body.type == "giuroll_request":
+        if post.giuroll:
+            raise HTTPException(status_code=409, detail="giuroll is already enabled")
+    elif body.type == "casual_invite":
+        if post.post_type != "ranked":
+            raise HTTPException(status_code=409, detail="not a ranked post")
+
+    now = now_ts()
+    cooldown_key = (sess["id"], post_id)
+    last_sent = MESSAGE_LAST_SENT.get(cooldown_key, 0.0)
+    elapsed = now - last_sent
+    if elapsed < MESSAGE_COOLDOWN_SEC:
+        retry_after = int(MESSAGE_COOLDOWN_SEC - elapsed + 0.999)
+        raise HTTPException(
+            status_code=429,
+            detail="please wait before sending another message",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    rec.pending_messages.append({
+        "type": body.type,
+        "from_name": sess["name"],
+        "sent_at": now,
+    })
+    if len(rec.pending_messages) > MESSAGE_MAX_PENDING:
+        rec.pending_messages = rec.pending_messages[-MESSAGE_MAX_PENDING:]
+
+    MESSAGE_LAST_SENT[cooldown_key] = now
+    return {"ok": True, "cooldown_sec": int(MESSAGE_COOLDOWN_SEC)}
 
 
 @app.post("/posts/close")
@@ -1730,6 +1796,7 @@ async def close_post(body: ClosePostIn) -> dict[str, Any]:
     _ = get_record_or_raise(body.id, body.owner_token)
 
     del RECORDS[body.id]
+    cleanup_message_state_for_post(body.id)
     await HUB.publish("close", {"id": body.id, "reason": body.reason, "ts": now_ts()})
     return {"ok": True, "id": body.id}
 

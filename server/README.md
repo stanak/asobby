@@ -17,7 +17,8 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `GET /myip` | クライアントのグローバル IP を返す |
 | `GET /posts` | 募集一覧（公開フィールドのみ） |
 | `POST /posts` | 募集の新規作成（Discord ログイン必須）。レスポンスで `owner_token` を発行 |
-| `POST /posts/update` | 募集の更新。`id` + `owner_token` が必須 |
+| `POST /posts/update` | 募集の更新。`id` + `owner_token` が必須。応答に `messages`（閲覧者からの未読定型メッセージ）を含み、返却後キューはクリア |
+| `POST /posts/{id}/message` | Web ロビー閲覧者がホストへ定型メッセージを送る（Discord ログイン必須） |
 | `POST /posts/close` | 募集の削除。`id` + `owner_token` が必須 |
 | `POST /posts/result` | 対戦勝敗の報告。`id` + `owner_token` + `winner` (`host`/`guest`/`draw`) |
 | `POST /matches/report` | ゲスト側クライアントからの対戦結果補完報告。`Authorization: Bearer` 必須 |
@@ -38,6 +39,25 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 - autopunch ホストは AutoPunch リレー経由で検証する（リレー lookup → hole punch → soku echo）。リレー先は環境変数 `ASOBBY_AUTOPUNCH_RELAY` で変更可能（既定 `delthas.fr:14763`）。リレー自体に到達できない場合は検証をスキップする（fail-open）
 - 作成レート制限: IP あたり 2 秒間隔・同時 2 件まで
 - 旧 `POST /posts/upsert` は 410 Gone を返す（旧クライアントへの更新案内）
+
+### Web ロビーからホストへのメッセージ
+
+Discord ログイン済みの Web ロビー閲覧者が、募集中のホストへ定型メッセージを送れる。
+ホストの asobby クライアントは 5 秒間隔のハートビート (`POST /posts/update`) の応答
+`messages` 配列で受け取り、トースト通知する。
+
+メッセージ種別:
+
+| type | 内容 | 送信条件 |
+| --- | --- | --- |
+| `giuroll_request` | Giuroll を使ってほしい | 対象投稿の `giuroll` が false のときのみ |
+| `casual_invite` | カジュアル対戦のお誘い | 対象投稿の `post_type` が `ranked` のときのみ |
+| `thanks` | 対戦ありがとうございました | 常に送信可 |
+
+- `POST /posts/{id}/message` は Discord セッション必須（未ログイン 401）
+- 自分の投稿へは 400。条件不一致は 409
+- 同一送信者・同一投稿への再送は 60 秒クールダウン（429、`Retry-After` 付き）
+- 未読キューは投稿あたり最大 20 件（古いものから破棄）
 
 ## 永続化 (PostgreSQL)
 

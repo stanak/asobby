@@ -190,6 +190,75 @@
     vertical-align: -6px;
     margin-right: 6px;
   }
+  button.msg-btn {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    white-space: nowrap;
+  }
+  button.msg-btn:hover:not(:disabled) {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  button.msg-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  button.msg-btn.sent {
+    color: var(--ok);
+    border-color: var(--ok);
+  }
+  button.msg-btn.wait {
+    color: var(--muted);
+  }
+  .msg-cell {
+    position: relative;
+    white-space: nowrap;
+  }
+  .msg-popover {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    z-index: 10;
+    margin-top: 4px;
+    min-width: 200px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  }
+  .msg-popover button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    padding: 8px 10px;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 4px;
+    font-family: inherit;
+  }
+  .msg-popover button:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--accent);
+  }
+  .msg-status {
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+    min-height: 14px;
+  }
+  .msg-status.err { color: var(--err); }
+  .msg-status.ok { color: var(--ok); }
 </style>
 </head>
 <body>
@@ -227,6 +296,7 @@
           <th>Stream</th>
           <th>Comment</th>
           <th>Addr</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="ranked-rows"></tbody>
@@ -272,6 +342,11 @@ const INITIAL_RANK_CHOICES = [
 
 const posts = new Map();
 let myRank = null;
+let loggedIn = false;
+let myUserId = null;
+let myName = "";
+let openPopoverId = null;
+const messageCooldowns = new Map();
 
 const rankedRowsEl = document.getElementById("ranked-rows");
 const casualRowsEl = document.getElementById("casual-rows");
@@ -303,6 +378,146 @@ function sortPosts(list) {
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
   return list;
+}
+
+function closePopover() {
+  openPopoverId = null;
+}
+
+function isMessageCooldown(postId) {
+  const until = messageCooldowns.get(postId);
+  return until != null && Date.now() < until;
+}
+
+function setMessageCooldown(postId, sec) {
+  messageCooldowns.set(postId, Date.now() + sec * 1000);
+}
+
+function isOwnPost(p) {
+  return loggedIn && myName && p.owner_name === myName;
+}
+
+async function sendMessage(postId, type, statusEl, btn) {
+  statusEl.textContent = "";
+  statusEl.className = "msg-status";
+  try {
+    const res = await fetch(`/posts/${postId}/message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ type }),
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const sec = data.cooldown_sec || 60;
+      setMessageCooldown(postId, sec);
+      statusEl.textContent = "送信しました";
+      statusEl.className = "msg-status ok";
+      if (btn) {
+        btn.disabled = true;
+        btn.classList.add("sent");
+        btn.textContent = "✉ 送信済";
+        setTimeout(() => {
+          if (isMessageCooldown(postId)) return;
+          btn.disabled = false;
+          btn.classList.remove("sent");
+          btn.textContent = "✉ 送る";
+        }, sec * 1000);
+      }
+      closePopover();
+      return;
+    }
+    if (res.status === 429) {
+      statusEl.textContent = "しばらく待ってから送ってください";
+      statusEl.className = "msg-status err";
+      setMessageCooldown(postId, 60);
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    statusEl.textContent = data.detail || `エラー (${res.status})`;
+    statusEl.className = "msg-status err";
+  } catch (_) {
+    statusEl.textContent = "通信に失敗しました";
+    statusEl.className = "msg-status err";
+  }
+}
+
+function buildMessageCell(p) {
+  const cell = document.createElement("td");
+  cell.className = "msg-cell";
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "msg-btn";
+
+  if (!loggedIn) {
+    btn.textContent = "✉ 送る";
+    btn.disabled = true;
+    btn.title = "Discord ログインが必要です";
+    cell.appendChild(btn);
+    return cell;
+  }
+
+  if (isOwnPost(p)) {
+    return cell;
+  }
+
+  const onCooldown = isMessageCooldown(p.id);
+  btn.textContent = onCooldown ? "✉ 待機中" : "✉ 送る";
+  btn.disabled = onCooldown;
+  if (onCooldown) btn.classList.add("wait");
+
+  const statusEl = document.createElement("span");
+  statusEl.className = "msg-status";
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (openPopoverId === p.id) {
+      closePopover();
+      render();
+      return;
+    }
+    openPopoverId = p.id;
+    render();
+  });
+
+  cell.appendChild(btn);
+  cell.appendChild(statusEl);
+
+  if (openPopoverId === p.id) {
+    const pop = document.createElement("div");
+    pop.className = "msg-popover";
+
+    const options = [
+      { type: "thanks", label: "対戦ありがとうございました", show: true },
+      {
+        type: "giuroll_request",
+        label: "Giuroll をお願いする",
+        show: !p.giuroll,
+      },
+      {
+        type: "casual_invite",
+        label: "カジュアル対戦に誘う",
+        show: (p.post_type || "casual") === "ranked",
+      },
+    ];
+
+    for (const opt of options) {
+      if (!opt.show) continue;
+      const ob = document.createElement("button");
+      ob.type = "button";
+      ob.textContent = opt.label;
+      ob.addEventListener("click", (e) => {
+        e.stopPropagation();
+        sendMessage(p.id, opt.type, statusEl, btn);
+      });
+      pop.appendChild(ob);
+    }
+
+    cell.appendChild(pop);
+  }
+
+  return cell;
 }
 
 function buildRow(p) {
@@ -389,6 +604,8 @@ function buildRow(p) {
   addr.appendChild(btn);
   tr.appendChild(addr);
 
+  tr.appendChild(buildMessageCell(p));
+
   return tr;
 }
 
@@ -400,6 +617,9 @@ function fillTable(tbody, list) {
 }
 
 function render() {
+  if (openPopoverId && !posts.has(openPopoverId)) {
+    closePopover();
+  }
   const all = [...posts.values()];
   let ranked = all.filter((p) => (p.post_type || "casual") === "ranked");
   const casual = all.filter((p) => (p.post_type || "casual") !== "ranked");
@@ -486,6 +706,9 @@ function setupRankChoiceBanner(user) {
 }
 
 function showLoggedIn(user) {
+  loggedIn = true;
+  myUserId = user.id || null;
+  myName = user.name || "";
   myRank = (user.rank || "normal").toLowerCase();
   setupRankChoiceBanner(user);
   authInfoEl.hidden = false;
@@ -510,6 +733,9 @@ function showLoggedIn(user) {
 }
 
 function showLoginRequired() {
+  loggedIn = false;
+  myUserId = null;
+  myName = "";
   myRank = null;
   rankChoiceBannerEl.hidden = true;
   authInfoEl.hidden = false;
@@ -567,6 +793,13 @@ function connect() {
 }
 
 initAuth();
+
+document.addEventListener("click", () => {
+  if (openPopoverId) {
+    closePopover();
+    render();
+  }
+});
 </script>
 </body>
 </html>

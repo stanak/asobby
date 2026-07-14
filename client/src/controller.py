@@ -304,6 +304,29 @@ class Controller:
                     resp = await self.api.update(
                         self.my_post.id, self.owner_token, act.payload
                     )
+                    for msg in resp.get("messages") or []:
+                        msg_type = msg.get("type", "")
+                        from_name = msg.get("from_name", "")
+                        if msg_type == "giuroll_request":
+                            text = (
+                                f"{from_name} さんから Giuroll を使ってほしいとの"
+                                "リクエストが届きました"
+                            )
+                            self.notify_sink(text)
+                            self.log_sink("info", text)
+                        elif msg_type == "casual_invite":
+                            text = (
+                                f"{from_name} さんからカジュアル対戦のお誘いが届きました"
+                            )
+                            self.notify_sink(text)
+                            self.log_sink("info", text)
+                        elif msg_type == "thanks":
+                            text = (
+                                f"{from_name} さんから「対戦ありがとうございました」"
+                                "が届きました"
+                            )
+                            self.notify_sink(text)
+                            self.log_sink("info", text)
                     guest_connected = resp.get("guest_connected")
                     if not guest_connected:
                         self._notified_casual_fallback = False
