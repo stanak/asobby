@@ -238,11 +238,10 @@
     white-space: nowrap;
   }
   .msg-popover {
-    position: absolute;
-    right: 0;
-    top: 100%;
-    z-index: 10;
-    margin-top: 4px;
+    /* table の overflow:hidden にクリップされないよう fixed で浮かせ、
+       表示位置は JS がボタンの位置から算出する */
+    position: fixed;
+    z-index: 100;
     min-width: 200px;
     background: var(--panel);
     border: 1px solid var(--border);
@@ -591,6 +590,13 @@ function buildMessageCell(p) {
     }
 
     cell.appendChild(pop);
+    // fixed 配置なので、レイアウト確定後にボタン位置から表示座標を決める
+    requestAnimationFrame(() => {
+      const r = btn.getBoundingClientRect();
+      if (!r.width && !r.height) return; // 行が消えた場合
+      pop.style.top = `${r.bottom + 4}px`;
+      pop.style.left = `${Math.max(8, r.right - pop.offsetWidth)}px`;
+    });
   }
 
   return cell;
