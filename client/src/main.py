@@ -160,6 +160,18 @@ class TrayApp:
             lambda: open_stats_window(self.tk_root, self.controller.local_store)
         )
 
+    def _sync_stats(self) -> None:
+        """戦績DBのサーバー同期を手動で実行する。結果はトーストで通知される。"""
+        fut = asyncio.run_coroutine_threadsafe(
+            self.controller.sync_stats_now(), self.loop
+        )
+
+        def done(_fut) -> None:
+            if self.icon:
+                self.icon.update_menu()
+
+        fut.add_done_callback(done)
+
     def _pick_path(self, title: str, callback) -> None:
         """ファイル選択ダイアログを tk メインスレッドで開き、結果を callback に渡す。"""
         def do() -> None:
@@ -319,6 +331,7 @@ class TrayApp:
             MenuItem("ロビーページを開く", lambda: self._open_lobby(), default=True),
             MenuItem("投稿設定...", lambda: self._open_settings()),
             MenuItem("戦績を見る...", lambda: self._open_stats()),
+            MenuItem("戦績をサーバーと同期", lambda: self._sync_stats()),
             MenuItem("コメント切替", Menu(lambda: self._comment_menu_items())),
             MenuItem("配信URL切替", Menu(lambda: self._stream_menu_items())),
             MenuItem(lambda item: self._discord_label(), lambda: self._discord_action()),

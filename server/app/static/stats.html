@@ -230,6 +230,13 @@
   #gate a:hover { text-decoration: underline; }
   #loading { text-align: center; padding: 60px; color: var(--muted); }
   .history-scroll { overflow-x: auto; }
+  .sync-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .sync-bar span { color: var(--muted); font-size: 13px; }
 </style>
 </head>
 <body>
@@ -249,6 +256,10 @@
     <p><a href="/auth/discord/web">Discord でログイン</a></p>
   </div>
   <div id="content" hidden>
+    <div class="sync-bar">
+      <button type="button" class="btn-more" id="resync-btn">サーバーと再同期</button>
+      <span id="resync-status"></span>
+    </div>
     <div class="panel" id="overview"></div>
     <div class="panel" id="ranked-panel">
       <h2>ランクマ</h2>
@@ -930,6 +941,28 @@ async function reloadData(forceFull) {
   renderAll();
 }
 
+function setupResync() {
+  const btn = document.getElementById("resync-btn");
+  const statusEl = document.getElementById("resync-status");
+  if (!btn || btn.dataset.bound) return;
+  btn.dataset.bound = "1";
+
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    statusEl.textContent = "再同期中...";
+    try {
+      // キャッシュを破棄してサーバーDBから全件取り直す
+      await reloadData(true);
+      statusEl.textContent =
+        `再同期しました（全 ${allMatches.length} 件, ${new Date().toLocaleTimeString("ja-JP")}）`;
+    } catch (_) {
+      statusEl.textContent = "再同期に失敗しました";
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
 function setupTskImport() {
   const btn = document.getElementById("tsk-upload");
   const fileInput = document.getElementById("tsk-file");
@@ -1010,6 +1043,7 @@ async function init() {
     setupFacetDelegation();
     setupProfileMore();
     renderAll();
+    setupResync();
     setupTskImport();
   } catch (_) {
     loading.textContent = "読み込みに失敗しました";

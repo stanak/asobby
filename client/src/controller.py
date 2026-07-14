@@ -105,6 +105,8 @@ class Controller:
         self._notified_login_required = False
         self._notified_casual_fallback = False
 
+        self._stats_sync_running = False
+
         self._battle_start_ts = 0.0
         self._replay_pending = False
         self._uploaded_replays: set[str] = set()
@@ -765,6 +767,33 @@ class Controller:
 
     async def _sync_stats_once(self) -> None:
         try:
+            await self._sync_stats_impl()
+        except Exception as e:
+            self.log_sink("warn", f"Stats sync failed: {e}")
+
+    async def sync_stats_now(self) -> None:
+        """トレイメニューからの手動同期。結果をトーストで通知する。"""
+        if not self.is_logged_in():
+            self.notify_sink("戦績の同期には Discord ログインが必要です")
+            return
+        if self._stats_sync_running:
+            self.notify_sink("戦績を同期中です…")
+            return
+        try:
+            pulled, pushed = await self._sync_stats_impl()
+            self.notify_sink(f"戦績を同期しました（取得 {pulled} 件 / 送信 {pushed} 件）")
+        except Exception as e:
+            self.log_sink("warn", f"Stats sync failed: {e}")
+            self.notify_sink("戦績の同期に失敗しました")
+
+    async def _sync_stats_impl(self) -> tuple[int, int]:
+        """サーバー戦績との双方向同期。(取得件数, 送信件数) を返す。"""
+        if self._stats_sync_running:
+            return (0, 0)
+        self._stats_sync_running = True
+        pulled = 0
+        pushed = 0
+        try:
             since = await asyncio.to_thread(self.local_store.max_server_played_at)
             while True:
                 resp = await self.api.fetch_my_matches(
@@ -776,6 +805,7 @@ class Controller:
                         self.local_store.merge_server_rows, rows
                     )
                     since = max(float(r["played_at"]) for r in rows)
+                    pulled += inserted
                     if inserted:
                         self.log_sink("info", f"Stats pull: {inserted} new match(es)")
                 if len(rows) < STATS_SYNC_BATCH:
@@ -801,11 +831,13 @@ class Controller:
                         self.local_store.mark_pushed, client_id, sid
                     )
                     if status == "imported":
+                        pushed += 1
                         self.log_sink("info", f"Stats push: imported {client_id}")
                 if len(unpushed) <= STATS_SYNC_BATCH:
                     break
-        except Exception as e:
-            self.log_sink("warn", f"Stats sync failed: {e}")
+        finally:
+            self._stats_sync_running = False
+        return (pulled, pushed)
 
     # -----------------
     # result / error handling
