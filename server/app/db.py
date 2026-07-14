@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -180,10 +181,22 @@ async def dispose() -> None:
 # ----------------------------
 # User helpers
 # ----------------------------
+def _ipv4_or_empty(ip: str) -> str:
+    """IPv4 のみ受け付ける。last_ip は th123 の echo プローブで得た
+    ゲスト IPv4 と照合するため、IPv6 (Web ブラウザ経由で混入しうる) は
+    保存せず既存値を保持する。"""
+    try:
+        ipaddress.IPv4Address(ip)
+        return ip
+    except (ipaddress.AddressValueError, ValueError):
+        return ""
+
+
 async def upsert_user_on_login(
     user_id: str, name: str, ip: str, avatar: str = ""
 ) -> User:
     """ログイン完了時のユーザー登録/更新。IP が変わっていれば更新する。"""
+    ip = _ipv4_or_empty(ip)
     async with session() as s:
         user = await s.get(User, user_id)
         now = utcnow()
@@ -221,6 +234,7 @@ async def get_user_if_token_valid(user_id: str, token_version: int) -> Optional[
 
 async def touch_user(user_id: str, ip: str) -> None:
     """認証済みリクエスト時に last_seen と IP を最新化する。"""
+    ip = _ipv4_or_empty(ip)
     async with session() as s:
         user = await s.get(User, user_id)
         if user is None:
@@ -229,6 +243,11 @@ async def touch_user(user_id: str, ip: str) -> None:
         if ip and user.last_ip != ip:
             user.last_ip = ip
         await s.commit()
+
+
+async def get_user(user_id: str) -> Optional[User]:
+    async with session() as s:
+        return await s.get(User, user_id)
 
 
 async def find_user_by_ip(ip: str) -> Optional[User]:

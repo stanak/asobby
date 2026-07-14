@@ -262,6 +262,10 @@ class DevicePollIn(BaseModel):
     device_code: str = Field(max_length=128)
 
 
+class ClientExchangeIn(BaseModel):
+    code: str = Field(max_length=128)
+
+
 class ChooseRankIn(BaseModel):
     rank: Literal["easy", "normal", "ex", "hard", "luna"]
 
@@ -432,8 +436,29 @@ class DeviceLogin:
 
 DEVICE_LOGINS: Dict[str, DeviceLogin] = {}  # web_code -> DeviceLogin
 
-# Web ブラウザ直接ログイン (state -> created_at)
-WEB_LOGINS: Dict[str, float] = {}
+# Web ブラウザ直接ログイン (state -> (created_at, ログイン後のリダイレクト先))
+WEB_LOGINS: Dict[str, tuple[float, str]] = {}
+
+
+@dataclass
+class HandoffCode:
+    """ブラウザのクッキーセッションからクライアントへトークンを引き渡す一時コード。"""
+    user_id: str
+    created_at: float
+
+
+# クライアント連携用ワンタイムコード (code -> HandoffCode)
+CLIENT_HANDOFF_CODES: Dict[str, HandoffCode] = {}
+HANDOFF_CODE_TTL_SEC = 120.0
+
+
+def cleanup_handoff_codes() -> None:
+    now = time.time()
+    for key in [
+        k for k, v in CLIENT_HANDOFF_CODES.items()
+        if (now - v.created_at) > HANDOFF_CODE_TTL_SEC
+    ]:
+        CLIENT_HANDOFF_CODES.pop(key, None)
 
 
 def cleanup_device_logins() -> None:
@@ -448,8 +473,8 @@ def cleanup_device_logins() -> None:
 def cleanup_web_logins() -> None:
     now = time.time()
     for key in [
-        k for k, ts in WEB_LOGINS.items()
-        if (now - ts) > DEVICE_CODE_TTL_SEC
+        k for k, v in WEB_LOGINS.items()
+        if (now - v[0]) > DEVICE_CODE_TTL_SEC
     ]:
         WEB_LOGINS.pop(key, None)
 
@@ -1511,12 +1536,15 @@ async def auth_discord_start(code: str) -> RedirectResponse:
 
 
 @app.get("/auth/discord/web")
-async def auth_discord_web() -> RedirectResponse:
+async def auth_discord_web(next: str = "/") -> RedirectResponse:
     """Web ページ閲覧用の Discord ログイン。完了後はクッキーセッションを発行する。"""
     require_discord_configured()
     cleanup_web_logins()
+    # オープンリダイレクト防止: サイト内パスのみ許可
+    if not next.startswith("/") or next.startswith("//"):
+        next = "/"
     state = "w-" + secrets.token_urlsafe(24)
-    WEB_LOGINS[state] = time.time()
+    WEB_LOGINS[state] = (time.time(), next)
     params = urlencode({
         "client_id": DISCORD_CLIENT_ID,
         "redirect_uri": f"{PUBLIC_BASE_URL}/auth/discord/callback",
@@ -1587,12 +1615,12 @@ async def auth_discord_callback(
         return _login_result_page(ok=False, message="Discord ユーザー情報が不正です。")
 
     if is_web:
-        WEB_LOGINS.pop(state, None)
+        _, next_path = WEB_LOGINS.pop(state, (0.0, "/"))
         user_row = await db.upsert_user_on_login(
             user["id"], user["name"], ip=client_ip(request), avatar=avatar
         )
         token = make_session_token(user, user_row.token_version)
-        response = RedirectResponse("/", status_code=302)
+        response = RedirectResponse(next_path or "/", status_code=302)
         response.set_cookie(
             key="asobby_session",
             value=token,
@@ -1673,6 +1701,58 @@ async def auth_me(request: Request) -> dict[str, Any]:
     if sess is None:
         raise HTTPException(status_code=401, detail="invalid or expired session")
     return sess
+
+
+@app.get("/auth/client/handoff")
+async def auth_client_handoff(request: Request, port: int) -> RedirectResponse:
+    """ブラウザのクッキーセッションをクライアントへ引き渡す。
+
+    クライアントは 127.0.0.1:{port} で待ち受けてからこの URL をブラウザで開く。
+    Web 側でログイン済みならワンタイムコード付きで即 localhost へリダイレクトされ、
+    未ログインなら Discord ログインを挟んでからここへ戻ってくる。
+    """
+    require_discord_configured()
+    cleanup_handoff_codes()
+    if not (1024 <= port <= 65535):
+        raise HTTPException(status_code=400, detail="invalid port")
+
+    sess = await resolve_session(request)
+    if sess is None:
+        next_url = quote(f"/auth/client/handoff?port={port}", safe="")
+        return RedirectResponse(
+            f"/auth/discord/web?next={next_url}", status_code=302
+        )
+
+    code = secrets.token_urlsafe(32)
+    CLIENT_HANDOFF_CODES[code] = HandoffCode(
+        user_id=sess["id"], created_at=time.time()
+    )
+    return RedirectResponse(
+        f"http://127.0.0.1:{port}/auth?code={quote(code, safe='')}",
+        status_code=302,
+    )
+
+
+@app.post("/auth/client/exchange")
+async def auth_client_exchange(body: ClientExchangeIn, request: Request) -> dict[str, Any]:
+    """ワンタイムコードをクライアントのセッショントークンに交換する。"""
+    cleanup_handoff_codes()
+    handoff = CLIENT_HANDOFF_CODES.pop(body.code, None)
+    if handoff is None:
+        raise HTTPException(status_code=404, detail="code expired")
+
+    user_row = await db.get_user(handoff.user_id)
+    if user_row is None:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    # 交換リクエストはクライアント本体 (IPv4 強制) から来るので IP を記録する
+    await db.touch_user(user_row.id, client_ip(request))
+    user = {"id": user_row.id, "name": user_row.name}
+    return {
+        "status": "ok",
+        "session_token": make_session_token(user, user_row.token_version),
+        "user": user,
+    }
 
 
 @app.post("/rank/initial")

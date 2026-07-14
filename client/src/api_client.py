@@ -123,16 +123,11 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
-    async def auth_device_start(self) -> dict:
-        """Discord ログインを開始する。{"device_code", "verify_url", "expires_in", "interval"}"""
-        r = await self.http.post(f"{self.base}/auth/device")
-        r.raise_for_status()
-        return r.json()
-
-    async def auth_device_poll(self, device_code: str) -> dict:
-        """ログイン完了をポーリングする。pending なら {"status": "pending"}。"""
+    async def auth_client_exchange(self, code: str) -> dict:
+        """ハンドオフのワンタイムコードをセッショントークンに交換する。
+        {"status": "ok", "session_token", "user"}"""
         r = await self.http.post(
-            f"{self.base}/auth/device/poll", json={"device_code": device_code}
+            f"{self.base}/auth/client/exchange", json={"code": code}
         )
         r.raise_for_status()
         return r.json()

@@ -32,6 +32,8 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `GET /auth/discord/web` | (Web 閲覧用) Discord ログイン。完了後クッキーセッションを発行 |
 | `GET /auth/discord/callback` | (ブラウザ用) OAuth コールバック。完了ページを表示 |
 | `POST /auth/device/poll` | ログイン完了ポーリング。完了時に `session_token` を返す |
+| `GET /auth/client/handoff?port=N` | (ブラウザ用) Web クッキーセッションをクライアントへ引き渡す。ワンタイムコード付きで `http://127.0.0.1:N/auth` へリダイレクト |
+| `POST /auth/client/exchange` | ワンタイムコードを `session_token` に交換 |
 | `GET /auth/me` | `Authorization: Bearer` またはクッキーのセッション検証・ユーザー情報 |
 | `GET /auth/logout` | Web クッキーセッションを削除して `/` へリダイレクト |
 
@@ -79,7 +81,7 @@ Discord ログイン済みの Web ロビー閲覧者が、募集中のホスト�
 
 ### テーブル概要
 
-- `users`: Discord ID 主キー、表示名、`token_version`（インクリメントで発行済みセッションを失効）、`last_ip`（ログイン時・認証リクエスト時に自動更新。echo パケットで得た対戦相手 IP との照合用）
+- `users`: Discord ID 主キー、表示名、`token_version`（インクリメントで発行済みセッションを失効）、`last_ip`（ログイン時・認証リクエスト時に自動更新。echo パケットで得た対戦相手 IP との照合用のため **IPv4 のみ保存**。IPv6 からのリクエストでは既存値を保持）
 - `matches`: ホスト/ゲストのユーザー ID・IP・勝敗。戦績機能用に schema のみ先行準備
 - `replays`: match に紐づくリプレイファイル（bytea、100KB 程度想定）
 
@@ -108,9 +110,14 @@ DATABASE_URL=... ../bin/alembic revision --autogenerate -m "add xxx"
 **ロビー閲覧（`GET /posts`, `GET /sse/posts`）はログイン不要。**
 Web ページのログインはクッキーセッション（`asobby_session`、有効期限 30 日）。
 
-フローはデバイスコード方式:
-クライアントが `POST /auth/device` → ユーザーがブラウザで `verify_url` を開いて
-Discord で承認 → クライアントが `POST /auth/device/poll` で `session_token` を受領。
+クライアントのログインはブラウザセッション引き継ぎ（ハンドオフ）方式:
+クライアントが 127.0.0.1 の空きポートで待ち受け、ブラウザで
+`GET /auth/client/handoff?port=N` を開く → Web 側でログイン済みなら
+ワンタイムコード付きで即 localhost へリダイレクト（未ログインなら Discord OAuth を
+経由してから戻る）→ クライアントが `POST /auth/client/exchange` で
+`session_token` を受領。**Web ロビーでログイン済みならクライアント側の操作は不要**。
+募集検知時に未ログインだった場合、クライアントはこのフローを一度だけ自動実行する。
+（旧デバイスコード方式 `POST /auth/device` / `poll` も互換のため残している）
 セッションは HMAC 署名付きトークン（有効期限 30 日）で、`users.token_version` と
 突合して検証される（DB 側で version を上げれば個別に失効可能）。
 以後 `POST /posts` に `Authorization: Bearer <session_token>` を付ける。

@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import webbrowser
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Optional, Literal, Any, Tuple
+from urllib.parse import parse_qsl, urlsplit
 from collections import defaultdict
 
 import httpx
@@ -114,6 +116,7 @@ class Controller:
         self.discord_user: str = str(auth.get("username", "")) if self.api.session_token else ""
         self._login_in_progress = False
         self._notified_login_required = False
+        self._auto_login_attempted = False
         self._notified_casual_fallback = False
 
         self._stats_sync_running = False
@@ -657,7 +660,19 @@ class Controller:
 
             if not self.has_active_post():
                 if not self.is_logged_in():
-                    if not self._notified_login_required:
+                    # まずブラウザのクッキーセッション引き継ぎを一度だけ試す
+                    # (Web 側でログイン済みなら操作なしでログインが完了する)
+                    if not self._auto_login_attempted:
+                        self._auto_login_attempted = True
+                        self.log_sink(
+                            "info",
+                            "Recruitment detected without login; trying browser session handoff",
+                        )
+                        asyncio.get_running_loop().create_task(self._auto_login())
+                    elif (
+                        not self._login_in_progress
+                        and not self._notified_login_required
+                    ):
                         self._notified_login_required = True
                         self.notify_sink(
                             "募集には Discord ログインが必要です。トレイメニューからログインしてください"
@@ -1063,33 +1078,87 @@ class Controller:
     def is_logged_in(self) -> bool:
         return bool(self.api.session_token)
 
+    async def _start_handoff_listener(
+        self,
+    ) -> tuple[asyncio.AbstractServer, int, asyncio.Future]:
+        """127.0.0.1 の空きポートで待ち受け、/auth?code=... を 1 回受け取る。"""
+        loop = asyncio.get_running_loop()
+        code_fut: asyncio.Future = loop.create_future()
+
+        async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                request_line = await asyncio.wait_for(reader.readline(), 10.0)
+                while True:
+                    line = await asyncio.wait_for(reader.readline(), 10.0)
+                    if line in (b"\r\n", b"\n", b""):
+                        break
+                parts = request_line.decode("latin-1", errors="replace").split(" ")
+                path = parts[1] if len(parts) >= 2 else ""
+                parsed = urlsplit(path)
+                code = dict(parse_qsl(parsed.query)).get("code", "")
+                if parsed.path == "/auth" and code:
+                    body = (
+                        "<html><head><meta charset='utf-8'><title>asobby</title></head>"
+                        "<body style='background:#14171c;color:#d8dee9;font-family:sans-serif;"
+                        "display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
+                        "<div style='text-align:center'><h1 style='color:#57c07d'>ログイン完了</h1>"
+                        "<p>asobby クライアントに連携しました。このタブは閉じて構いません。</p></div>"
+                        "</body></html>"
+                    )
+                    if not code_fut.done():
+                        code_fut.set_result(code)
+                else:
+                    body = "<html><body>asobby</body></html>"
+                data = body.encode("utf-8")
+                writer.write(
+                    b"HTTP/1.1 200 OK\r\n"
+                    b"Content-Type: text/html; charset=utf-8\r\n"
+                    b"Content-Length: " + str(len(data)).encode() + b"\r\n"
+                    b"Connection: close\r\n\r\n" + data
+                )
+                await writer.drain()
+            except Exception:
+                pass
+            finally:
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        return server, port, code_fut
+
     async def login_discord(self, open_browser) -> None:
-        """Discord ログインフロー。open_browser(url) でブラウザを開き、
-        完了までポーリングする。"""
+        """Discord ログインフロー。ブラウザで /auth/client/handoff を開き、
+        Web 側でログイン済みならワンタイムコードが即 localhost へ届く。
+        未ログインなら Discord OAuth を挟んでから届く。"""
         if self._login_in_progress:
             return
         self._login_in_progress = True
         try:
-            start = await self.api.auth_device_start()
-            open_browser(start["verify_url"])
-            self.log_sink("info", "ブラウザで Discord ログインを完了してください")
+            server, port, code_fut = await self._start_handoff_listener()
+            try:
+                base = self.api.base.rstrip("/")
+                open_browser(f"{base}/auth/client/handoff?port={port}")
+                self.log_sink("info", "ブラウザで Discord ログインを確認しています...")
+                code = await asyncio.wait_for(code_fut, timeout=180.0)
+            finally:
+                server.close()
 
-            interval = float(start.get("interval", 2))
-            deadline = time.time() + float(start.get("expires_in", 600))
-            while time.time() < deadline and not self._stop.is_set():
-                await asyncio.sleep(interval)
-                res = await self.api.auth_device_poll(start["device_code"])
-                if res.get("status") == "ok":
-                    self.api.session_token = str(res["session_token"])
-                    self.discord_user = str((res.get("user") or {}).get("name", ""))
-                    self.config_mgr.set_values(
-                        "auth",
-                        session_token=self.api.session_token,
-                        username=self.discord_user,
-                    )
-                    self._notified_login_required = False
-                    self.log_sink("info", f"Discord にログインしました: {self.discord_user}")
-                    return
+            res = await self.api.auth_client_exchange(code)
+            if res.get("status") == "ok":
+                self.api.session_token = str(res["session_token"])
+                self.discord_user = str((res.get("user") or {}).get("name", ""))
+                self.config_mgr.set_values(
+                    "auth",
+                    session_token=self.api.session_token,
+                    username=self.discord_user,
+                )
+                self._notified_login_required = False
+                self.log_sink("info", f"Discord にログインしました: {self.discord_user}")
+                self.notify_sink(f"Discord にログインしました: {self.discord_user}")
+        except asyncio.TimeoutError:
             self.log_sink("warn", "Discord ログインがタイムアウトしました")
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 503:
@@ -1103,16 +1172,30 @@ class Controller:
         finally:
             self._login_in_progress = False
 
+    async def _auto_login(self) -> None:
+        """募集検知時にログインしていない場合、ブラウザ経由で自動連携を試みる。
+        Web 側でログイン済みなら操作なしで完了する。"""
+        await self.login_discord(webbrowser.open)
+        if not self.is_logged_in() and not self._notified_login_required:
+            self._notified_login_required = True
+            self.notify_sink(
+                "募集には Discord ログインが必要です。トレイメニューからログインしてください"
+            )
+
     def logout_discord(self) -> None:
         self.api.session_token = ""
         self.discord_user = ""
         self.config_mgr.set_values("auth", session_token="", username="")
+        # 明示的なログアウト後はブラウザ連携の自動ログインを走らせない
+        self._auto_login_attempted = True
         self.log_sink("info", "Discord からログアウトしました")
 
     def _clear_expired_session(self) -> None:
         self.api.session_token = ""
         self.discord_user = ""
         self.config_mgr.set_values("auth", session_token="", username="")
+        # 期限切れは自動再ログインの対象にする
+        self._auto_login_attempted = False
         self.log_sink("warn", "Discord セッションが期限切れです。再ログインしてください")
 
     # -----------------
