@@ -373,6 +373,42 @@ function appendTextCell(tr, text, cls) {
   tr.appendChild(td);
 }
 
+// URL 遷移せず fetch + Blob で保存する（Safe Browsing のページ警告を避ける）
+async function downloadReplayBlob(matchId, fallbackName, linkEl) {
+  if (linkEl.dataset.busy) return;
+  linkEl.dataset.busy = "1";
+  const orig = linkEl.textContent;
+  linkEl.textContent = "...";
+  try {
+    const res = await fetch("/replays/" + matchId);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    let filename = fallbackName || matchId + ".rep";
+    const cd = res.headers.get("content-disposition") || "";
+    const star = cd.match(/filename\*=UTF-8''([^;]+)/i);
+    const plain = cd.match(/filename="([^"]+)"/i);
+    if (star) {
+      try { filename = decodeURIComponent(star[1]); } catch (_) {}
+    } else if (plain) {
+      filename = plain[1];
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    linkEl.textContent = orig;
+  } catch (_) {
+    linkEl.textContent = "失敗";
+    setTimeout(() => { linkEl.textContent = orig; }, 3000);
+  } finally {
+    delete linkEl.dataset.busy;
+  }
+}
+
 function renderRow(r) {
   const tr = document.createElement("tr");
   appendTextCell(tr, formatJst(r.played_at));
@@ -395,8 +431,12 @@ function renderRow(r) {
 
   const tdDl = document.createElement("td");
   const a = document.createElement("a");
-  a.href = "/replays/" + r.match_id;
+  a.href = "#";
   a.textContent = "DL";
+  a.addEventListener("click", (e) => {
+    e.preventDefault();
+    downloadReplayBlob(r.match_id, r.filename, a);
+  });
   tdDl.appendChild(a);
   tr.appendChild(tdDl);
 
