@@ -225,8 +225,6 @@ def _sort_agg_rows(
 
     def sort_key(agg: AggRow) -> Any:
         col = sort_state.col
-        if col == "label":
-            return agg.key if char_facet else agg.label
         if col == "total":
             return agg.total
         if col == "wins":
@@ -237,6 +235,13 @@ def _sort_agg_rows(
             return agg.win_rate
         return agg.key if char_facet else agg.label
 
+    if sort_state.col == "label" and char_facet:
+        # キャラ不明 (key=None) の行はソート方向によらず末尾に寄せる
+        known = [r for r in rows if r.key is not None]
+        unknown = [r for r in rows if r.key is None]
+        return (
+            sorted(known, key=sort_key, reverse=not sort_state.asc) + unknown
+        )
     return sorted(rows, key=sort_key, reverse=not sort_state.asc)
 
 
