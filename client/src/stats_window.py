@@ -262,8 +262,6 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
 
     all_rows: list[dict] = []
     filter_state = FilterState()
-    _updating = False
-    _click_iid: dict[int, str | None] = {}
     history_limit = [HISTORY_PAGE]  # 「さらに表示」で増える表示上限
 
     filter_label_var = tk.StringVar(value="絞り込みなし")
@@ -444,72 +442,67 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         tree.see(select_iid)
 
     def refresh_view() -> None:
-        nonlocal _updating
-        _updating = True
-        try:
-            filter_state.ranked_only = ranked_var.get()
-            filter_label_var.set(format_filter_label(filter_state))
+        filter_state.ranked_only = ranked_var.get()
+        filter_label_var.set(format_filter_label(filter_state))
 
-            filtered = apply_filter_state(all_rows, filter_state)
-            summary_var.set(format_summary_text(compute_summary(filtered)))
+        filtered = apply_filter_state(all_rows, filter_state)
+        summary_var.set(format_summary_text(compute_summary(filtered)))
 
-            my_rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"my_char"}))
-            opp_rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"opp_char"}))
-            prof_rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"opp_profile"}))
+        my_rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"my_char"}))
+        opp_rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"opp_char"}))
+        prof_rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"opp_profile"}))
 
-            _populate_facet_tree(
-                my_char_tree,
-                aggregate_by_my_char(my_rows),
-                selected_key=filter_state.my_char,
-                key_to_iid=lambda k: _char_iid(k),
+        _populate_facet_tree(
+            my_char_tree,
+            aggregate_by_my_char(my_rows),
+            selected_key=filter_state.my_char,
+            key_to_iid=lambda k: _char_iid(k),
+        )
+        _populate_facet_tree(
+            opp_char_tree,
+            aggregate_by_opp_char(opp_rows),
+            selected_key=filter_state.opp_char,
+            key_to_iid=lambda k: _char_iid(k),
+        )
+        prof_aggs = aggregate_by_opp_profile(prof_rows)
+        # 選択中のプロファイルは上限で切られても行として残す
+        visible_prof = prof_aggs[:PROFILE_FACET_LIMIT]
+        if filter_state.opp_profile is not None and all(
+            a.key != filter_state.opp_profile for a in visible_prof
+        ):
+            visible_prof = visible_prof + [
+                a for a in prof_aggs if a.key == filter_state.opp_profile
+            ]
+        _populate_facet_tree(
+            opp_prof_tree,
+            visible_prof,
+            selected_key=filter_state.opp_profile,
+            key_to_iid=_prof_iid,
+        )
+
+        _clear_tree(history_tree)
+        history_sorted = sorted(filtered, key=lambda r: r["played_at"], reverse=True)
+        limit = history_limit[0]
+        for row in history_sorted[:limit]:
+            played = datetime.fromtimestamp(row["played_at"]).strftime("%m-%d %H:%M")
+            history_tree.insert(
+                "",
+                "end",
+                values=(
+                    played,
+                    _char_label(LocalStore.my_char_id(row)),
+                    _char_label(LocalStore.opp_char_id(row)),
+                    LocalStore.opp_profile(row),
+                    _result_symbol(row),
+                    "o" if row.get("ranked") else "x",
+                ),
             )
-            _populate_facet_tree(
-                opp_char_tree,
-                aggregate_by_opp_char(opp_rows),
-                selected_key=filter_state.opp_char,
-                key_to_iid=lambda k: _char_iid(k),
-            )
-            prof_aggs = aggregate_by_opp_profile(prof_rows)
-            # 選択中のプロファイルは上限で切られても行として残す
-            visible_prof = prof_aggs[:PROFILE_FACET_LIMIT]
-            if filter_state.opp_profile is not None and all(
-                a.key != filter_state.opp_profile for a in visible_prof
-            ):
-                visible_prof = visible_prof + [
-                    a for a in prof_aggs if a.key == filter_state.opp_profile
-                ]
-            _populate_facet_tree(
-                opp_prof_tree,
-                visible_prof,
-                selected_key=filter_state.opp_profile,
-                key_to_iid=_prof_iid,
-            )
-
-            _clear_tree(history_tree)
-            history_sorted = sorted(filtered, key=lambda r: r["played_at"], reverse=True)
-            limit = history_limit[0]
-            for row in history_sorted[:limit]:
-                played = datetime.fromtimestamp(row["played_at"]).strftime("%m-%d %H:%M")
-                history_tree.insert(
-                    "",
-                    "end",
-                    values=(
-                        played,
-                        _char_label(LocalStore.my_char_id(row)),
-                        _char_label(LocalStore.opp_char_id(row)),
-                        LocalStore.opp_profile(row),
-                        _result_symbol(row),
-                        "o" if row.get("ranked") else "x",
-                    ),
-                )
-            shown = min(limit, len(history_sorted))
-            history_count_var.set(f"{shown} / {len(history_sorted)} 件を表示")
-            if len(history_sorted) > limit:
-                more_btn.state(["!disabled"])
-            else:
-                more_btn.state(["disabled"])
-        finally:
-            _updating = False
+        shown = min(limit, len(history_sorted))
+        history_count_var.set(f"{shown} / {len(history_sorted)} 件を表示")
+        if len(history_sorted) > limit:
+            more_btn.state(["!disabled"])
+        else:
+            more_btn.state(["disabled"])
 
     def show_more_history() -> None:
         history_limit[0] += HISTORY_PAGE
@@ -546,11 +539,6 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
 
         win.after(50, check_loaded)
 
-    def _on_tree_button1(event: tk.Event) -> None:
-        tree = event.widget
-        iid = tree.identify_row(event.y)
-        _click_iid[id(tree)] = iid if iid else None
-
     def _parse_char_iid(iid: str) -> int | None:
         if iid == _ALL_IID:
             return None
@@ -566,37 +554,32 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
                 return agg.key
         return None
 
-    def _handle_facet_select(
-        tree: ttk.Treeview,
+    # 注意: <<TreeviewSelect>> は使わない。selection_set() が発火する仮想
+    # イベントがガード解除後に届き refresh_view() が無限ループするため、
+    # 物理クリック (<Button-1>) のみでフィルタを切り替える。
+    def _handle_facet_click(
+        event: "tk.Event",
         *,
-        dimension: str,
         get_current: Callable[[], Any],
         set_value: Callable[[Any], None],
-        get_agg_rows: Callable[[], list[AggRow]],
         parse_iid: Callable[[str], Any],
-    ) -> None:
-        if _updating:
-            return
-        sel = tree.selection()
-        if not sel:
-            return
-        iid = sel[0]
-        clicked = _click_iid.get(id(tree))
-        current_iid = (
-            _char_iid(get_current())
-            if dimension in ("my_char", "opp_char")
-            else (
-                _ALL_IID
-                if get_current() is None
-                else _prof_iid(get_current())
-            )
-        )
-        if iid == _ALL_IID or (iid == clicked and iid == current_iid):
-            set_value(None)
+    ) -> str | None:
+        tree = event.widget
+        iid = tree.identify_row(event.y)
+        if not iid:
+            return None
+        if iid == _ALL_IID:
+            new_value = None
         else:
-            set_value(parse_iid(iid))
-        history_limit[0] = HISTORY_PAGE
-        refresh_view()
+            parsed = parse_iid(iid)
+            # 選択中の行を再クリックしたら解除 (トグル)
+            new_value = None if parsed == get_current() else parsed
+        if new_value != get_current():
+            set_value(new_value)
+            history_limit[0] = HISTORY_PAGE
+            refresh_view()
+        # クラスバインディングに渡さない (refresh 後の選択状態を上書きさせない)
+        return "break"
 
     def _bind_facet_tree(
         tree: ttk.Treeview,
@@ -607,17 +590,15 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         get_agg_rows: Callable[[], list[AggRow]],
         parse_iid: Callable[[str], Any],
     ) -> None:
-        tree.bind("<Button-1>", _on_tree_button1, add="+")
         tree.bind(
-            "<<TreeviewSelect>>",
-            lambda _e: _handle_facet_select(
-                tree,
-                dimension=dimension,
+            "<Button-1>",
+            lambda e: _handle_facet_click(
+                e,
                 get_current=get_current,
                 set_value=set_value,
-                get_agg_rows=get_agg_rows,
                 parse_iid=parse_iid,
             ),
+            add="+",
         )
 
     def _my_agg_rows() -> list[AggRow]:
