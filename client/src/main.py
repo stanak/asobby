@@ -13,7 +13,14 @@ from PIL import Image, ImageDraw
 from pystray import Menu, MenuItem
 
 from controller import Controller
-from services import Post, POST_TYPE_LABEL, edit_post_settings, NET_BATTLE, __version__
+from services import (
+    Post,
+    POST_TYPE_LABEL,
+    POST_TYPE_OPTIONS,
+    edit_post_settings,
+    NET_BATTLE,
+    __version__,
+)
 from stats_window import open_stats_window
 import toast
 
@@ -293,6 +300,23 @@ class TrayApp:
     # -----------------
     # menu construction
     # -----------------
+    def _post_type_menu_items(self):
+        """募集タイプ切替サブメニュー (カジュアル/ランクマのラジオ選択)。"""
+        def make_action(value: str):
+            def act(icon, item):
+                self.controller.set_active_post_type(value)
+            return act
+
+        for label, value in POST_TYPE_OPTIONS:
+            yield MenuItem(
+                label,
+                make_action(value),
+                radio=True,
+                checked=lambda item, value=value: (
+                    (self.controller.my_post.post_type or "casual") == value
+                ),
+            )
+
     def _comment_menu_items(self):
         """コメント切替サブメニュー (プリセットからラジオ選択)。"""
         current = self.controller.my_post.comment or ""
@@ -387,6 +411,7 @@ class TrayApp:
             MenuItem("投稿設定...", lambda: self._open_settings()),
             MenuItem("戦績を見る...", lambda: self._open_stats()),
             MenuItem("戦績をサーバーと同期", lambda: self._sync_stats()),
+            MenuItem("募集タイプ切替", Menu(lambda: self._post_type_menu_items())),
             MenuItem("コメント切替", Menu(lambda: self._comment_menu_items())),
             MenuItem("配信URL切替", Menu(lambda: self._stream_menu_items())),
             MenuItem(

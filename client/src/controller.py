@@ -143,6 +143,10 @@ class Controller:
         self.config_mgr.set_post_default("comment", text)
         self.update_my_post(comment=text)
 
+    def set_active_post_type(self, post_type: str) -> None:
+        self.config_mgr.set_post_default("post_type", post_type)
+        self.update_my_post(post_type=post_type)
+
     def stream_presets(self) -> list[str]:
         v = self.config_mgr.get_value("post_defaults", "stream_url_presets", [])
         if not isinstance(v, list):
