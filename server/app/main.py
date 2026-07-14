@@ -1320,6 +1320,37 @@ async def search_replays(
     }
 
 
+@app.get("/replays/players")
+async def suggest_replay_players(
+    q: str = "",
+    limit: int = 10,
+) -> dict[str, Any]:
+    """リプレイ検索用のプレイヤー名候補 (公開・ログイン不要)。"""
+    player_q = q.strip()
+    if not player_q:
+        return {"ok": True, "suggestions": []}
+    if not db.is_configured():
+        return {"ok": True, "suggestions": []}
+
+    page_limit = min(max(1, limit), 20)
+    users, profiles = await db.suggest_replay_players(player_q, page_limit)
+
+    suggestions: list[dict[str, Any]] = []
+    for user in users:
+        suggestions.append({
+            "kind": "user",
+            "name": user.name,
+            "user_id": user.id,
+            "avatar": user.avatar or None,
+        })
+    for name in profiles:
+        suggestions.append({
+            "kind": "profile",
+            "name": name,
+        })
+    return {"ok": True, "suggestions": suggestions[:page_limit]}
+
+
 @app.get("/replays/{match_id}")
 async def download_replay(match_id: str) -> Response:
     """リプレイをダウンロードする (公開・ログイン不要)。"""

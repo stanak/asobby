@@ -10,6 +10,7 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `GET /stats` | 戦績閲覧用 Web ページ |
 | `GET /replays` | リプレイ検索 Web ページ |
 | `GET /replays/search` | リプレイ付き対戦の検索（公開・ログイン不要） |
+| `GET /replays/players` | リプレイ検索用プレイヤー名候補（`q` / `limit` クエリ、公開・ログイン不要） |
 | `GET /stats/me` | ログインユーザーの戦績集計（JSON） |
 | `GET /stats/me/matches` | ログインユーザーの対戦一覧（`since` / `limit` クエリ、played_at 昇順） |
 | `GET /replays/{match_id}` | リプレイ (.rep) をダウンロード（公開・ログイン不要） |

@@ -287,3 +287,78 @@ async def test_replay_search_includes_match_rank():
         row = next(r for r in search.json()["replays"] if r["match_id"] == match_id)
         assert row["ranked"] is True
         assert row["match_rank"] == "ex"
+
+
+@pytest.mark.asyncio
+async def test_replay_players_suggest():
+    async with app_client() as client:
+        await create_user("u1", name="AliceDiscord")
+        await create_user("u2", name="BobDiscord")
+
+        t1 = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        t2 = datetime(2025, 6, 2, 12, 0, 0, tzinfo=timezone.utc)
+
+        await create_match_with_replay(
+            "p1" + "0" * 30,
+            host_user_id="u1",
+            guest_user_id="u2",
+            host_profile="UniqueProfileHost",
+            guest_profile="OtherGuest",
+            played_at=t1,
+        )
+        await create_match_with_replay(
+            "p2" + "0" * 30,
+            host_char=1,
+            guest_char=2,
+            host_profile="NoReplayOnly",
+            guest_profile="HiddenGuest",
+            played_at=t2,
+            with_replay=False,
+        )
+
+        by_profile = await client.get("/replays/players", params={"q": "uniqueprofile"})
+        assert by_profile.status_code == 200
+        body = by_profile.json()
+        assert body["ok"] is True
+        profiles = [s for s in body["suggestions"] if s["kind"] == "profile"]
+        assert any(s["name"] == "UniqueProfileHost" for s in profiles)
+
+        by_user = await client.get("/replays/players", params={"q": "alicediscord"})
+        assert by_user.status_code == 200
+        users = [s for s in by_user.json()["suggestions"] if s["kind"] == "user"]
+        assert len(users) == 1
+        assert users[0]["name"] == "AliceDiscord"
+        assert users[0]["user_id"] == "u1"
+        assert "avatar" in users[0]
+
+        case_insensitive = await client.get("/replays/players", params={"q": "ALICE"})
+        assert case_insensitive.status_code == 200
+        assert any(
+            s["kind"] == "user" and s["name"] == "AliceDiscord"
+            for s in case_insensitive.json()["suggestions"]
+        )
+
+        no_replay = await client.get("/replays/players", params={"q": "noreplayonly"})
+        assert no_replay.status_code == 200
+        assert not any(
+            s["name"] == "NoReplayOnly" for s in no_replay.json()["suggestions"]
+        )
+
+        empty_q = await client.get("/replays/players", params={"q": "  "})
+        assert empty_q.status_code == 200
+        assert empty_q.json()["suggestions"] == []
+
+        clamped = await client.get("/replays/players", params={"q": "a", "limit": 99})
+        assert clamped.status_code == 200
+        assert len(clamped.json()["suggestions"]) <= 20
+
+
+@pytest.mark.asyncio
+async def test_replay_players_suggest_public_access():
+    async with app_client() as client:
+        played_at = datetime(2025, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+        await create_match_with_replay("e" * 32, host_profile="PublicProf", played_at=played_at)
+
+        res = await client.get("/replays/players", params={"q": "publicprof"})
+        assert res.status_code == 200
+        assert res.json()["ok"] is True

@@ -10,7 +10,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, SmallInteger, String, and_, exists, func, or_, select
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, SmallInteger, String, and_, exists, func, or_, select, union
 from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -615,6 +615,69 @@ async def get_replay_for_match(match_id: str) -> Optional[Replay]:
             select(Replay).where(Replay.match_id == match_id).limit(1)
         )
         return res.scalar_one_or_none()
+
+
+async def suggest_replay_players(
+    q: str,
+    limit: int = 10,
+) -> tuple[list[User], list[str]]:
+    """リプレイ付き match に登場するプレイヤー名候補を返す。
+
+    (users, profile_names) のタプル。それぞれ最大 limit 件、名前昇順。
+    """
+    needle = q.lower()
+
+    replay_user_ids = (
+        select(Match.host_user_id.label("uid"))
+        .join(Replay, Replay.match_id == Match.id)
+        .where(Match.host_user_id.is_not(None))
+        .union(
+            select(Match.guest_user_id.label("uid"))
+            .join(Replay, Replay.match_id == Match.id)
+            .where(Match.guest_user_id.is_not(None))
+        )
+    ).subquery()
+
+    async with session() as s:
+        user_res = await s.execute(
+            select(User)
+            .where(
+                User.id.in_(select(replay_user_ids.c.uid)),
+                func.lower(User.name).contains(needle),
+            )
+            .order_by(User.name.asc())
+            .limit(limit)
+        )
+        users = list(user_res.scalars().all())
+
+        host_profiles = (
+            select(Match.host_profile.label("name"))
+            .join(Replay, Replay.match_id == Match.id)
+            .where(
+                Match.played_at.is_not(None),
+                Match.host_profile != "",
+                func.lower(Match.host_profile).contains(needle),
+            )
+        )
+        guest_profiles = (
+            select(Match.guest_profile.label("name"))
+            .join(Replay, Replay.match_id == Match.id)
+            .where(
+                Match.played_at.is_not(None),
+                Match.guest_profile != "",
+                func.lower(Match.guest_profile).contains(needle),
+            )
+        )
+        profiles_union = union(host_profiles, guest_profiles).subquery()
+        profile_res = await s.execute(
+            select(profiles_union.c.name)
+            .distinct()
+            .order_by(profiles_union.c.name.asc())
+            .limit(limit)
+        )
+        profiles = [row[0] for row in profile_res.all()]
+
+    return users, profiles
 
 
 async def search_replay_matches(
