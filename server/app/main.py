@@ -1126,7 +1126,8 @@ def _content_disposition_attachment(filename: str) -> str:
         safe_ascii.encode("ascii")
         ascii_name = safe_ascii
     except UnicodeEncodeError:
-        ascii_name = "replay.rep"
+        ext = os.path.splitext(safe_ascii)[1]
+        ascii_name = "replay" + (ext if ext.isascii() else ".rep")
     if ascii_name != filename:
         return (
             f'attachment; filename="{ascii_name}"; '
