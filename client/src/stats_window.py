@@ -74,6 +74,24 @@ class MatchSummary:
 
 
 @dataclass
+class FacetSortState:
+    """ファセット表の列ソート状態。"""
+
+    col: str = "label"
+    asc: bool = True
+
+
+# 列の初回クリック時の向き（True=昇順）
+_FACET_SORT_FIRST_ASC: dict[str, bool] = {
+    "label": True,
+    "total": False,
+    "wins": False,
+    "losses": False,
+    "rate": False,
+}
+
+
+@dataclass
 class AggRow:
     key: Any
     label: str
@@ -161,8 +179,6 @@ def _aggregate_rows(
     rows: list[dict],
     key_fn: Callable[[dict], Any],
     label_fn: Callable[[Any], str],
-    *,
-    sort_key: Callable[[AggRow], Any],
 ) -> list[AggRow]:
     stats: dict[Any, list[int]] = defaultdict(lambda: [0, 0, 0])
     for row in rows:
@@ -186,8 +202,32 @@ def _aggregate_rows(
                 win_rate=_win_rate(wins, losses),
             )
         )
-    out.sort(key=sort_key, reverse=True)
     return out
+
+
+def _sort_agg_rows(
+    rows: list[AggRow],
+    sort_state: FacetSortState,
+    *,
+    char_facet: bool,
+) -> list[AggRow]:
+    """表示用に AggRow をソートする。"""
+
+    def sort_key(agg: AggRow) -> Any:
+        col = sort_state.col
+        if col == "label":
+            return agg.key if char_facet else agg.label
+        if col == "total":
+            return agg.total
+        if col == "wins":
+            return agg.wins
+        if col == "losses":
+            return agg.losses
+        if col == "rate":
+            return agg.win_rate
+        return agg.key if char_facet else agg.label
+
+    return sorted(rows, key=sort_key, reverse=not sort_state.asc)
 
 
 def aggregate_by_my_char(rows: list[dict]) -> list[AggRow]:
@@ -195,7 +235,6 @@ def aggregate_by_my_char(rows: list[dict]) -> list[AggRow]:
         rows,
         key_fn=lambda r: LocalStore.my_char_id(r),
         label_fn=_char_label,
-        sort_key=lambda a: a.total,
     )
 
 
@@ -204,7 +243,6 @@ def aggregate_by_opp_char(rows: list[dict]) -> list[AggRow]:
         rows,
         key_fn=lambda r: LocalStore.opp_char_id(r),
         label_fn=_char_label,
-        sort_key=lambda a: a.total,
     )
 
 
@@ -213,7 +251,6 @@ def aggregate_by_opp_profile(rows: list[dict]) -> list[AggRow]:
         rows,
         key_fn=lambda r: LocalStore.opp_profile(r) or "",
         label_fn=lambda p: p or "(不明)",
-        sort_key=lambda a: a.total,
     )
 
 
@@ -310,13 +347,36 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
 
     stat_cols = ("label", "total", "wins", "losses", "rate")
     stat_headings = ("キャラ", "対戦数", "勝", "負", "勝率")
+    prof_headings = ("プロファイル", "対戦数", "勝", "負", "勝率")
 
-    def _make_facet_frame(title: str) -> tuple[ttk.Frame, ttk.Treeview]:
+    # ファセットごとのソート状態（絞り込み変更後も維持）
+    my_char_sort = FacetSortState(col="label", asc=True)
+    opp_char_sort = FacetSortState(col="label", asc=True)
+    opp_prof_sort = FacetSortState(col="total", asc=False)
+
+    def _update_facet_headings(
+        tree: ttk.Treeview,
+        sort_state: FacetSortState,
+        headings: tuple[str, ...],
+    ) -> None:
+        for col, base in zip(stat_cols, headings):
+            text = base
+            if sort_state.col == col:
+                text += " ▲" if sort_state.asc else " ▼"
+            tree.heading(col, text=text)
+
+    def _make_facet_frame(
+        title: str,
+        *,
+        sort_state: FacetSortState,
+        headings: tuple[str, ...],
+        on_sort: Callable[[str], None],
+    ) -> tuple[ttk.Frame, ttk.Treeview]:
         frame = ttk.LabelFrame(facet_pane, text=title, padding=4)
         facet_pane.add(frame, weight=1)
         tree = ttk.Treeview(frame, columns=stat_cols, show="headings", height=10)
-        for col, text in zip(stat_cols, stat_headings):
-            tree.heading(col, text=text)
+        for col, text in zip(stat_cols, headings):
+            tree.heading(col, text=text, command=lambda c=col: on_sort(c))
         tree.column("label", width=100, anchor="w")
         tree.column("total", width=60, anchor="e")
         tree.column("wins", width=40, anchor="e")
@@ -328,18 +388,40 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         scroll.pack(side="right", fill="y")
         tree.tag_configure("high", foreground="#1a7f37")
         tree.tag_configure("low", foreground="#cf222e")
+        _update_facet_headings(tree, sort_state, headings)
         return frame, tree
 
-    _, my_char_tree = _make_facet_frame("自キャラ別")
-    _, opp_char_tree = _make_facet_frame("相手キャラ別")
+    def _toggle_facet_sort(sort_state: FacetSortState, col: str) -> None:
+        if sort_state.col == col:
+            sort_state.asc = not sort_state.asc
+        else:
+            sort_state.col = col
+            sort_state.asc = _FACET_SORT_FIRST_ASC[col]
+        refresh_view()
+
+    _, my_char_tree = _make_facet_frame(
+        "自キャラ別",
+        sort_state=my_char_sort,
+        headings=stat_headings,
+        on_sort=lambda col: _toggle_facet_sort(my_char_sort, col),
+    )
+    _, opp_char_tree = _make_facet_frame(
+        "相手キャラ別",
+        sort_state=opp_char_sort,
+        headings=stat_headings,
+        on_sort=lambda col: _toggle_facet_sort(opp_char_sort, col),
+    )
 
     prof_frame = ttk.LabelFrame(facet_pane, text="相手プロファイル別", padding=4)
     facet_pane.add(prof_frame, weight=1)
     prof_cols = ("label", "total", "wins", "losses", "rate")
-    prof_headings = ("プロファイル", "対戦数", "勝", "負", "勝率")
     opp_prof_tree = ttk.Treeview(prof_frame, columns=prof_cols, show="headings", height=10)
     for col, text in zip(prof_cols, prof_headings):
-        opp_prof_tree.heading(col, text=text)
+        opp_prof_tree.heading(
+            col,
+            text=text,
+            command=lambda c=col: _toggle_facet_sort(opp_prof_sort, c),
+        )
     opp_prof_tree.column("label", width=140, anchor="w")
     opp_prof_tree.column("total", width=60, anchor="e")
     opp_prof_tree.column("wins", width=40, anchor="e")
@@ -452,19 +534,32 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         opp_rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"opp_char"}))
         prof_rows = apply_filter_state(all_rows, filter_state, skip=frozenset({"opp_profile"}))
 
+        my_aggs = _sort_agg_rows(
+            aggregate_by_my_char(my_rows), my_char_sort, char_facet=True
+        )
+        opp_aggs = _sort_agg_rows(
+            aggregate_by_opp_char(opp_rows), opp_char_sort, char_facet=True
+        )
+        prof_aggs = _sort_agg_rows(
+            aggregate_by_opp_profile(prof_rows), opp_prof_sort, char_facet=False
+        )
+
+        _update_facet_headings(my_char_tree, my_char_sort, stat_headings)
+        _update_facet_headings(opp_char_tree, opp_char_sort, stat_headings)
+        _update_facet_headings(opp_prof_tree, opp_prof_sort, prof_headings)
+
         _populate_facet_tree(
             my_char_tree,
-            aggregate_by_my_char(my_rows),
+            my_aggs,
             selected_key=filter_state.my_char,
             key_to_iid=lambda k: _char_iid(k),
         )
         _populate_facet_tree(
             opp_char_tree,
-            aggregate_by_opp_char(opp_rows),
+            opp_aggs,
             selected_key=filter_state.opp_char,
             key_to_iid=lambda k: _char_iid(k),
         )
-        prof_aggs = aggregate_by_opp_profile(prof_rows)
         # 選択中のプロファイルは上限で切られても行として残す
         visible_prof = prof_aggs[:PROFILE_FACET_LIMIT]
         if filter_state.opp_profile is not None and all(
@@ -565,6 +660,9 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         parse_iid: Callable[[str], Any],
     ) -> str | None:
         tree = event.widget
+        # ヘッダークリックは heading command が処理する
+        if tree.identify_region(event.x, event.y) == "heading":
+            return None
         iid = tree.identify_row(event.y)
         if not iid:
             return None

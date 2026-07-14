@@ -208,6 +208,11 @@
     top: 0;
     background: var(--panel);
   }
+  th.sortable {
+    cursor: pointer;
+    user-select: none;
+  }
+  th.sortable:hover { color: var(--text); }
   tr:last-child td { border-bottom: none; }
   tr.facet-row { cursor: pointer; }
   tr.facet-row:hover td { background: var(--row-hover); }
@@ -277,7 +282,13 @@
         <h2>自キャラ別</h2>
         <div class="facet-scroll">
           <table>
-            <thead><tr><th>キャラ</th><th>対戦</th><th>勝</th><th>負</th><th>勝率</th></tr></thead>
+            <thead><tr data-facet="myChar">
+              <th class="sortable" data-col="char">キャラ</th>
+              <th class="sortable" data-col="games">対戦</th>
+              <th class="sortable" data-col="wins">勝</th>
+              <th class="sortable" data-col="losses">負</th>
+              <th class="sortable" data-col="winRate">勝率</th>
+            </tr></thead>
             <tbody id="facet-my-char"></tbody>
           </table>
         </div>
@@ -286,7 +297,13 @@
         <h2>相手キャラ別</h2>
         <div class="facet-scroll">
           <table>
-            <thead><tr><th>キャラ</th><th>対戦</th><th>勝</th><th>負</th><th>勝率</th></tr></thead>
+            <thead><tr data-facet="oppChar">
+              <th class="sortable" data-col="char">キャラ</th>
+              <th class="sortable" data-col="games">対戦</th>
+              <th class="sortable" data-col="wins">勝</th>
+              <th class="sortable" data-col="losses">負</th>
+              <th class="sortable" data-col="winRate">勝率</th>
+            </tr></thead>
             <tbody id="facet-opp-char"></tbody>
           </table>
         </div>
@@ -295,7 +312,13 @@
         <h2>相手プロファイル別</h2>
         <div class="facet-scroll">
           <table>
-            <thead><tr><th>プロファイル</th><th>対戦</th><th>勝</th><th>負</th><th>勝率</th></tr></thead>
+            <thead><tr data-facet="oppProfile">
+              <th class="sortable" data-col="profile">プロファイル</th>
+              <th class="sortable" data-col="games">対戦</th>
+              <th class="sortable" data-col="wins">勝</th>
+              <th class="sortable" data-col="losses">負</th>
+              <th class="sortable" data-col="winRate">勝率</th>
+            </tr></thead>
             <tbody id="facet-opp-profile"></tbody>
           </table>
         </div>
@@ -355,6 +378,31 @@ const filter = {
   oppChar: null,
   oppProfile: null,
   rankedOnly: false,
+};
+
+// ファセット表のソート状態（絞り込み変更後も維持）
+const facetSort = {
+  myChar: { col: "char", asc: true },
+  oppChar: { col: "char", asc: true },
+  oppProfile: { col: "games", asc: false },
+};
+
+const SORT_FIRST_ASC = {
+  char: true,
+  profile: true,
+  games: false,
+  wins: false,
+  losses: false,
+  winRate: false,
+};
+
+const SORT_COL_LABEL = {
+  char: "キャラ",
+  profile: "プロファイル",
+  games: "対戦",
+  wins: "勝",
+  losses: "負",
+  winRate: "勝率",
 };
 
 function charName(id) {
@@ -443,7 +491,6 @@ function groupByChar(matches, pickChar) {
       winRate: decisive > 0 ? row.wins / decisive : 0,
     });
   }
-  rows.sort((a, b) => b.games - a.games || a.char - b.char);
   return rows;
 }
 
@@ -469,8 +516,64 @@ function groupByProfile(matches) {
       winRate: decisive > 0 ? row.wins / decisive : 0,
     });
   }
-  rows.sort((a, b) => b.games - a.games || a.profile.localeCompare(b.profile, "ja"));
   return rows;
+}
+
+function sortCharFacetRows(rows, sortState) {
+  const dir = sortState.asc ? 1 : -1;
+  const col = sortState.col;
+  return rows.slice().sort((a, b) => {
+    let cmp = 0;
+    if (col === "char") cmp = a.char - b.char;
+    else if (col === "games") cmp = a.games - b.games;
+    else if (col === "wins") cmp = a.wins - b.wins;
+    else if (col === "losses") cmp = a.losses - b.losses;
+    else if (col === "winRate") cmp = a.winRate - b.winRate;
+    if (cmp !== 0) return cmp * dir;
+    return a.char - b.char;
+  });
+}
+
+function sortProfileFacetRows(rows, sortState) {
+  const dir = sortState.asc ? 1 : -1;
+  const col = sortState.col;
+  return rows.slice().sort((a, b) => {
+    let cmp = 0;
+    if (col === "profile") cmp = a.profile.localeCompare(b.profile, "ja");
+    else if (col === "games") cmp = a.games - b.games;
+    else if (col === "wins") cmp = a.wins - b.wins;
+    else if (col === "losses") cmp = a.losses - b.losses;
+    else if (col === "winRate") cmp = a.winRate - b.winRate;
+    if (cmp !== 0) return cmp * dir;
+    return a.profile.localeCompare(b.profile, "ja");
+  });
+}
+
+function updateFacetSortHeaders() {
+  for (const tr of document.querySelectorAll("#facets thead tr[data-facet]")) {
+    const facetKey = tr.dataset.facet;
+    const state = facetSort[facetKey];
+    for (const th of tr.querySelectorAll("th.sortable")) {
+      const col = th.dataset.col;
+      const label = SORT_COL_LABEL[col];
+      if (state.col === col) {
+        th.textContent = label + (state.asc ? " ▲" : " ▼");
+      } else {
+        th.textContent = label;
+      }
+    }
+  }
+}
+
+function onFacetSortHeaderClick(facetKey, col) {
+  const state = facetSort[facetKey];
+  if (state.col === col) {
+    state.asc = !state.asc;
+  } else {
+    state.col = col;
+    state.asc = SORT_FIRST_ASC[col];
+  }
+  renderFacets();
 }
 
 function recentWinRates(matches, counts) {
@@ -686,9 +789,20 @@ function renderSummary() {
 }
 
 function renderFacets() {
-  const myRows = groupByChar(applyFilter(allMatches, "myChar"), myChar);
-  const oppRows = groupByChar(applyFilter(allMatches, "oppChar"), oppChar);
-  const profRows = groupByProfile(applyFilter(allMatches, "oppProfile"));
+  const myRows = sortCharFacetRows(
+    groupByChar(applyFilter(allMatches, "myChar"), myChar),
+    facetSort.myChar,
+  );
+  const oppRows = sortCharFacetRows(
+    groupByChar(applyFilter(allMatches, "oppChar"), oppChar),
+    facetSort.oppChar,
+  );
+  const profRows = sortProfileFacetRows(
+    groupByProfile(applyFilter(allMatches, "oppProfile")),
+    facetSort.oppProfile,
+  );
+
+  updateFacetSortHeaders();
 
   fillFacetCharTable(
     document.getElementById("facet-my-char"),
@@ -849,6 +963,14 @@ function setupFacetDelegation() {
   if (facets.dataset.bound) return;
   facets.dataset.bound = "1";
   facets.addEventListener("click", (ev) => {
+    const th = ev.target.closest("th.sortable");
+    if (th) {
+      const tr = th.closest("tr[data-facet]");
+      if (tr) {
+        onFacetSortHeaderClick(tr.dataset.facet, th.dataset.col);
+      }
+      return;
+    }
     const tr = ev.target.closest("tr.facet-row");
     if (!tr) return;
     onFacetClick(tr.dataset.dim, tr.dataset.value);
