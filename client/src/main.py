@@ -279,7 +279,7 @@ class TrayApp:
         fut.add_done_callback(done)
 
     def _reset_paths(self) -> None:
-        for name in ("giuroll", "soku"):
+        for name in ("autopunch", "giuroll", "soku"):
             self.controller.tool_mgr.clear_path(name)
         self.controller.tool_mgr.reset_state()
         if self.icon:
@@ -424,6 +424,8 @@ class TrayApp:
             ),
             MenuItem(lambda item: self._discord_label(), lambda: self._discord_action()),
             Menu.SEPARATOR,
+            MenuItem(lambda item: self._tool_label("autopunch"),
+                     lambda: self._handle_tool("autopunch", "Select autopunch exe")),
             MenuItem(lambda item: self._tool_label("giuroll"),
                      lambda: self._handle_tool("giuroll", "Select giuroll exe")),
             MenuItem(lambda item: self._tool_label("soku"),

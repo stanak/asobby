@@ -360,6 +360,7 @@ class Controller:
         while not self._stop.is_set():
             st: DetectionState = read_detection_state()
             self.update_btn_labels("soku", st.alive)
+            self.update_btn_labels("autopunch", st.autopunch)
             self.update_btn_labels("giuroll", st.giuroll)
             act = self.on_detect(st, my_ip=my_ip)
             if act:

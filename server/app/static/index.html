@@ -108,6 +108,15 @@
     background: rgba(255,255,255,0.02);
   }
   tr:last-child td { border-bottom: none; }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-right: 4px;
+    color: var(--muted);
+  }
   tr.battle td { color: var(--battle); }
   a.stream { color: var(--accent); text-decoration: none; }
   a.stream:hover { text-decoration: underline; }
@@ -327,7 +336,7 @@
           <th>Match</th>
           <th>User</th>
           <th>Rank</th>
-          <th>Giuroll</th>
+          <th>Cap</th>
           <th>Stream</th>
           <th>Comment</th>
           <th>Addr</th>
@@ -349,7 +358,7 @@
         <th>Match</th>
         <th>User</th>
         <th>Rank</th>
-        <th>Giuroll</th>
+        <th>Cap</th>
         <th>Stream</th>
         <th>Comment</th>
         <th>Addr</th>
@@ -626,7 +635,10 @@ function buildRow(p) {
   tr.appendChild(userCell);
   tr.appendChild(td(rankLabel(p)));
 
-  tr.appendChild(td(p.giuroll ? "o" : "x"));
+  const cap = document.createElement("td");
+  if (p.giuroll) cap.appendChild(badge("G"));
+  if (p.autopunch) cap.appendChild(badge("A"));
+  tr.appendChild(cap);
 
   const stream = document.createElement("td");
   if ((p.stream_url || "").trim()) {
@@ -713,6 +725,13 @@ function render() {
   casualCountEl.textContent = `${casual.length} 件`;
 }
 
+function badge(text) {
+  const el = document.createElement("span");
+  el.className = "badge";
+  el.textContent = text;
+  return el;
+}
+
 function td(text) {
   const el = document.createElement("td");
   el.textContent = text;
@@ -784,13 +803,6 @@ function showLoggedIn(user) {
   const sep = document.createElement("span");
   sep.textContent = " / ";
   authInfoEl.appendChild(sep);
-  const stats = document.createElement("a");
-  stats.href = "/stats";
-  stats.textContent = "戦績";
-  authInfoEl.appendChild(stats);
-  const sep2 = document.createElement("span");
-  sep2.textContent = " / ";
-  authInfoEl.appendChild(sep2);
   const logout = document.createElement("a");
   logout.href = "/auth/logout";
   logout.textContent = "ログアウト";

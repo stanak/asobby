@@ -65,6 +65,7 @@ class ToolManager:
 
         self._tools: dict[str, ToolEntry] = {
             "giuroll": self._make_entry("giuroll", paths.get("giuroll_path", "")),
+            "autopunch": self._make_entry("autopunch", paths.get("autopunch_path", "")),
             "soku": self._make_entry("soku", paths.get("soku_path", "")),
         }
 
