@@ -92,9 +92,10 @@ class TrayApp:
         shown = toast.show_request_toast(
             text + "\n承諾/拒否をボタンで返信できます",
             callback,
+            log=lambda m: self._append_log("warn", m),
         )
         if not shown:
-            self._notify(text)
+            self._notify(text + "（トレイメニューの「リクエストに返信」から返信できます）")
         if self.icon:
             self.icon.update_menu()
 
