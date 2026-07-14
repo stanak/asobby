@@ -2017,8 +2017,12 @@ def build_replay_filename(match: db.Match) -> str:
 
 
 @app.post("/replays/upload")
-async def upload_replay(request: Request) -> dict[str, Any]:
-    """ログインユーザーの直近対戦リプレイを受け取る。"""
+async def upload_replay(request: Request, battle_ts: float = 0) -> dict[str, Any]:
+    """ログインユーザーの直近対戦リプレイを受け取る。
+
+    battle_ts (unix 秒; 対戦終了時刻) が付いていればその時刻の周辺で
+    match を照合する。時刻で絞らないと、リトライや同定遅れの際に
+    別の古い match へ誤紐付けされる。"""
     sess = await resolve_session(request)
     if sess is None:
         raise HTTPException(status_code=401, detail="invalid or expired session")
@@ -2029,10 +2033,23 @@ async def upload_replay(request: Request) -> dict[str, Any]:
     if len(data) > REPLAY_MAX_BYTES:
         raise HTTPException(status_code=413, detail="replay too large")
 
-    match = await db.find_recent_match_for_user(sess["id"])
+    now = db.utcnow()
+    around = now
+    if battle_ts > 0:
+        try:
+            candidate = datetime.fromtimestamp(battle_ts, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            candidate = now
+        # 過去24時間以内かつ未来でなければ採用
+        if now - timedelta(hours=24) <= candidate <= now + timedelta(minutes=5):
+            around = candidate
+
+    # battle_ts なし (旧クライアント) はアップロード遅延分だけ窓を広げる
+    window = 90 if battle_ts > 0 else 180
+    match = await db.find_match_for_replay(sess["id"], around, window_sec=window)
     if match is None:
-        recent = await db.find_recent_match_for_user(
-            sess["id"], require_no_replay=False
+        recent = await db.find_match_for_replay(
+            sess["id"], around, window_sec=window, require_no_replay=False
         )
         if recent is not None and await db.replay_count_for_match(recent.id) > 0:
             return {"ok": True, "stored": False, "reason": "duplicate"}

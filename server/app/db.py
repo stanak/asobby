@@ -536,14 +536,19 @@ async def fetch_ranked_matches_at_current_rank(
         return list(res.scalars().all())
 
 
-async def find_recent_match_for_user(
-    user_id: str, within_sec: int = 900, *, require_no_replay: bool = True
+async def find_match_for_replay(
+    user_id: str,
+    around_ts: datetime,
+    window_sec: int = 90,
+    *,
+    require_no_replay: bool = True,
 ) -> Optional[Match]:
-    """直近の対戦を 1 件返す (played_at 降順)。
+    """リプレイの対戦終了時刻に最も近い match を返す。
 
-    require_no_replay=True なら replays 未紐付けの match のみ。
-    """
-    cutoff = utcnow() - timedelta(seconds=within_sec)
+    リプレイは対戦終了直後にアップロードされるため、時刻で照合しないと
+    古い match (直前の対戦など) に誤紐付けされる。"""
+    lo = around_ts - timedelta(seconds=window_sec)
+    hi = around_ts + timedelta(seconds=window_sec)
     replay_exists = exists().where(Replay.match_id == Match.id)
     async with session() as s:
         q = (
@@ -552,7 +557,8 @@ async def find_recent_match_for_user(
                 ((Match.host_user_id == user_id) | (Match.guest_user_id == user_id))
                 & (Match.winner != "")
                 & Match.played_at.is_not(None)
-                & (Match.played_at >= cutoff)
+                & (Match.played_at >= lo)
+                & (Match.played_at <= hi)
             )
             .order_by(Match.played_at.desc())
             .limit(1)

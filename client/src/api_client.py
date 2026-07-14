@@ -111,10 +111,12 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
-    async def upload_replay(self, data: bytes) -> dict:
+    async def upload_replay(self, data: bytes, battle_ts: float = 0) -> dict:
+        params = {"battle_ts": battle_ts} if battle_ts > 0 else None
         r = await self.http.post(
             f"{self.base}/replays/upload",
             content=data,
+            params=params,
             headers={
                 **self._auth_headers(),
                 "Content-Type": "application/octet-stream",

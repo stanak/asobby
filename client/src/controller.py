@@ -34,6 +34,8 @@ DETECT_INTERVAL_SEC = 0.05
 REPLAY_MAX_BYTES = 300 * 1024
 REPLAY_POLL_INTERVAL_SEC = 2.0
 REPLAY_POLL_TIMEOUT_SEC = 60.0
+REPLAY_UPLOAD_RETRIES = 3
+REPLAY_UPLOAD_RETRY_DELAY_SEC = 15.0
 REPLAY_MTIME_MARGIN_SEC = 10.0
 
 STATS_SYNC_INITIAL_DELAY_SEC = 10.0
@@ -816,6 +818,7 @@ class Controller:
         return max(candidates, key=lambda p: p.stat().st_mtime)
 
     async def _upload_replay(self, battle_start_ts: float, exe_path: str) -> None:
+        battle_end_ts = time.time()
         if not self.is_logged_in():
             self.log_sink("info", "Replay upload skipped: not logged in")
             return
@@ -865,14 +868,21 @@ class Controller:
             self.log_sink("error", f"Replay read failed: {e}")
             return
 
-        try:
-            resp = await self.api.upload_replay(data)
-        except httpx.HTTPError as e:
-            self.log_sink("error", f"Replay upload failed: {e}")
-            return
+        # 対戦相手側の報告 (host result / guest report) がまだ届いておらず
+        # no_match になることがあるためリトライする
+        resp: dict = {}
+        for attempt in range(REPLAY_UPLOAD_RETRIES + 1):
+            if attempt > 0:
+                await asyncio.sleep(REPLAY_UPLOAD_RETRY_DELAY_SEC)
+            try:
+                resp = await self.api.upload_replay(data, battle_ts=battle_end_ts)
+            except httpx.HTTPError as e:
+                self.log_sink("error", f"Replay upload failed: {e}")
+                return
+            if resp.get("stored") or resp.get("reason") != "no_match":
+                break
 
-        stored = bool(resp.get("stored"))
-        if stored:
+        if resp.get("stored"):
             self.log_sink(
                 "info",
                 f"Replay uploaded: {resp.get('filename', chosen.name)}",

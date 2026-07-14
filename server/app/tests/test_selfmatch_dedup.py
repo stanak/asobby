@@ -219,6 +219,75 @@ async def test_guest_report_dedups_against_unlinked_host_report():
 
 
 @pytest.mark.asyncio
+async def test_replay_upload_matches_by_battle_ts():
+    """リプレイは battle_ts に近い match に紐付き、古い match に誤紐付けしない。"""
+    async with app_client() as client:
+        from datetime import timedelta
+
+        await create_user("100", name="host", last_ip="1.2.3.4")
+        await create_user("200", name="guest", last_ip="5.6.7.8")
+
+        # 対戦 2 件 (10 分前と直近) を作る
+        post, owner_token = await create_post(client, "100", "1.2.3.4")
+        rec = main.RECORDS[post["id"]]
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        await report_host_result(client, post["id"], owner_token)
+        await report_host_result(client, post["id"], owner_token)
+
+        matches = sorted(await all_matches(), key=lambda m: m.played_at)
+        old_match, new_match = matches[0], matches[1]
+        async with db.session() as s:
+            m = await s.get(db.Match, old_match.id)
+            m.played_at = db.utcnow() - timedelta(seconds=600)
+            await s.commit()
+
+        token = bearer_token("100", "host")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/octet-stream",
+        }
+
+        # battle_ts が現在なら新しい match に付く
+        up = await client.post(
+            "/replays/upload",
+            params={"battle_ts": time.time()},
+            content=b"REP-NEW",
+            headers=headers,
+        )
+        assert up.json()["stored"] is True
+        async with db.session() as s:
+            res = await s.execute(select(db.Replay))
+            replays = list(res.scalars().all())
+        assert len(replays) == 1
+        assert replays[0].match_id == new_match.id
+
+        # battle_ts が古い対戦付近ならそちらに付く
+        up2 = await client.post(
+            "/replays/upload",
+            params={"battle_ts": time.time() - 600},
+            content=b"REP-OLD",
+            headers=headers,
+        )
+        assert up2.json()["stored"] is True
+        async with db.session() as s:
+            res = await s.execute(
+                select(db.Replay).where(db.Replay.match_id == old_match.id)
+            )
+            assert res.scalar_one_or_none() is not None
+
+        # どの match からも遠い battle_ts は no_match
+        up3 = await client.post(
+            "/replays/upload",
+            params={"battle_ts": time.time() - 3000},
+            content=b"REP-NONE",
+            headers=headers,
+        )
+        body = up3.json()
+        assert body["stored"] is False
+        assert body["reason"] == "no_match"
+
+
+@pytest.mark.asyncio
 async def test_host_result_promotes_guest_report_by_profiles():
     """ゲスト報告が先行し、ホスト側でゲスト未同定でも昇格して二重登録しない。"""
     async with app_client() as client:
