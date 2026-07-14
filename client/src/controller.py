@@ -739,8 +739,36 @@ class Controller:
             dirs.append(Path(local_app) / "VirtualStore" / parent_rel / "replay")
         return dirs
 
+    @staticmethod
+    def _newest_dir_chain(root: Path, max_depth: int = 4) -> list[Path]:
+        """root から「更新日時が最新のサブフォルダ」を辿ったフォルダ一覧を返す。
+
+        リプレイ整理 Mod は replay/YY/MM/DD/ のようなサブフォルダに保存する。
+        全体を再帰探索するとリプレイ数によっては重いため、直近の対戦が
+        入っているとみられる最新フォルダの系列だけを探索対象にする。
+        """
+        out = [root]
+        cur = root
+        for _ in range(max_depth):
+            try:
+                subs = [c for c in cur.iterdir() if c.is_dir()]
+            except OSError:
+                break
+            if not subs:
+                break
+
+            def _mtime(p: Path) -> float:
+                try:
+                    return p.stat().st_mtime
+                except OSError:
+                    return 0.0
+
+            cur = max(subs, key=_mtime)
+            out.append(cur)
+        return out
+
     def _find_latest_replay(
-        self, dirs: list[Path], battle_start_ts: float
+        self, dirs: list[Path], battle_start_ts: float, *, deep: bool = False
     ) -> Optional[Path]:
         cutoff = battle_start_ts - REPLAY_MTIME_MARGIN_SEC
         candidates: list[Path] = []
@@ -748,9 +776,16 @@ class Controller:
             if not d.is_dir():
                 continue
             try:
-                # リプレイ整理 Mod は replay/YY/MM/DD/ のようなサブフォルダに
-                # 保存するため再帰的に探索する
-                for rep in d.rglob("*.rep"):
+                if deep:
+                    # 最終手段: 全体を再帰探索 (想定外のフォルダ構成向け)
+                    reps = d.rglob("*.rep")
+                else:
+                    reps = (
+                        rep
+                        for sub in self._newest_dir_chain(d)
+                        for rep in sub.glob("*.rep")
+                    )
+                for rep in reps:
                     if str(rep) in self._uploaded_replays:
                         continue
                     try:
@@ -781,6 +816,12 @@ class Controller:
             if chosen is not None:
                 break
             await asyncio.sleep(REPLAY_POLL_INTERVAL_SEC)
+
+        if chosen is None:
+            # 最新フォルダ系列で見つからない場合のみ全体を再帰探索する
+            chosen = await asyncio.to_thread(
+                self._find_latest_replay, dirs, battle_start_ts, deep=True
+            )
 
         if chosen is None:
             self.log_sink("info", "Replay file not found after battle")
