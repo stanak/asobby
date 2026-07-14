@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import socket
 import struct
 import time
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncIterator
@@ -215,17 +217,26 @@ async def test_replay_download_access_control():
             },
         )
 
+        def unzip_replay(content: bytes) -> bytes:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                names = zf.namelist()
+                assert len(names) == 1
+                assert names[0].endswith(".rep")
+                return zf.read(names[0])
+
         no_auth = await client.get(f"/replays/{match_id}")
         assert no_auth.status_code == 200
-        assert no_auth.content == REPLAY_DATA
+        assert unzip_replay(no_auth.content) == REPLAY_DATA
 
         host_dl = await client.get(
             f"/replays/{match_id}",
             headers={"Authorization": f"Bearer {host_token}"},
         )
         assert host_dl.status_code == 200
-        assert host_dl.content == REPLAY_DATA
+        assert unzip_replay(host_dl.content) == REPLAY_DATA
         assert "attachment" in host_dl.headers.get("content-disposition", "")
+        assert host_dl.headers.get("content-type") == "application/zip"
+        assert ".zip" in host_dl.headers.get("content-disposition", "")
 
         guest_dl = await client.get(
             f"/replays/{match_id}",

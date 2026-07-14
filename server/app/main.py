@@ -5,6 +5,7 @@ import base64
 import bisect
 import hashlib
 import hmac
+import io
 import ipaddress
 import json
 import os
@@ -14,6 +15,7 @@ import sqlite3
 import struct
 import tempfile
 import threading
+import zipfile
 import time
 import socket
 from contextlib import asynccontextmanager
@@ -1353,7 +1355,12 @@ async def suggest_replay_players(
 
 @app.get("/replays/{match_id}")
 async def download_replay(match_id: str) -> Response:
-    """リプレイをダウンロードする (公開・ログイン不要)。"""
+    """リプレイをダウンロードする (公開・ログイン不要)。
+
+    .rep は一般的でない拡張子のため、そのまま配ると Chrome の
+    Safe Browsing に「一般的にダウンロードされないファイル」として
+    警告される。一般的な形式である ZIP に包んで返す。
+    """
     if not db.is_configured():
         raise HTTPException(status_code=404, detail="not found")
 
@@ -1365,11 +1372,17 @@ async def download_replay(match_id: str) -> Response:
     if replay is None:
         raise HTTPException(status_code=404, detail="not found")
 
+    rep_name = replay.filename or "replay.rep"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(rep_name, replay.data)
+    zip_name = (rep_name[:-4] if rep_name.endswith(".rep") else rep_name) + ".zip"
+
     return Response(
-        content=replay.data,
-        media_type="application/octet-stream",
+        content=buf.getvalue(),
+        media_type="application/zip",
         headers={
-            "Content-Disposition": _content_disposition_attachment(replay.filename),
+            "Content-Disposition": _content_disposition_attachment(zip_name),
         },
     )
 
