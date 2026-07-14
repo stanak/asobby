@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>asobby - リプレイ検索</title>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1c2129;
+    --border: #2c3440;
+    --text: #d8dee9;
+    --muted: #7b8794;
+    --accent: #6ab0f3;
+    --ok: #57c07d;
+    --err: #e06c75;
+    --row-hover: rgba(255,255,255,0.04);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 15px;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 16px 20px 8px;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 20px;
+    letter-spacing: 1px;
+  }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header nav {
+    margin-left: auto;
+    font-size: 13px;
+    display: flex;
+    gap: 12px;
+  }
+  header nav a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  header nav a:hover { text-decoration: underline; }
+  main { padding: 8px 20px 32px; max-width: 1400px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .panel h2 {
+    margin: 0 0 12px;
+    font-size: 15px;
+    color: var(--muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px 16px;
+    align-items: end;
+  }
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  input[type="text"],
+  input[type="date"],
+  select {
+    padding: 7px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 14px;
+  }
+  .filter-actions {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  button {
+    padding: 8px 16px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  button:hover { opacity: 0.9; }
+  button.btn-more {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    margin-top: 12px;
+  }
+  .result-meta {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .history-scroll { overflow-x: auto; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th, td {
+    text-align: left;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    font-size: 14px;
+  }
+  th {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    background: rgba(0,0,0,0.15);
+  }
+  tr:hover td { background: var(--row-hover); }
+  tr:last-child td { border-bottom: none; }
+  .winner { color: var(--ok); font-weight: 600; }
+  .rank-tag {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--muted);
+    margin-left: 4px;
+  }
+  #status-msg { color: var(--muted); font-size: 14px; }
+  #status-msg.error { color: var(--err); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header>
+  <h1>asobby リプレイ検索</h1>
+  <span class="sub">非想天則 リプレイ一覧</span>
+  <nav>
+    <a href="/">ロビー</a>
+    <a href="/stats">戦績</a>
+  </nav>
+</header>
+
+<main>
+  <div class="panel">
+    <h2>検索条件</h2>
+    <form id="search-form" class="filter-grid">
+      <label>
+        プレイヤー名
+        <input type="text" id="player" placeholder="プロファイル名 / Discord 名">
+      </label>
+      <label>
+        キャラ 1
+        <select id="char1"></select>
+      </label>
+      <label>
+        キャラ 2 (対面)
+        <select id="char2"></select>
+      </label>
+      <label>
+        日付 (from)
+        <input type="date" id="date-from">
+      </label>
+      <label>
+        日付 (to)
+        <input type="date" id="date-to">
+      </label>
+      <label>
+        並び順
+        <select id="sort-order">
+          <option value="date-desc" selected>新しい順</option>
+          <option value="date-asc">古い順</option>
+          <option value="rank-desc">ランク高い順</option>
+        </select>
+      </label>
+      <div class="filter-actions">
+        <button type="submit">検索</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h2>検索結果</h2>
+    <div class="result-meta" id="result-meta"></div>
+    <div id="status-msg">条件を入力して検索してください</div>
+    <div class="history-scroll" id="results-wrap" hidden>
+      <table>
+        <thead>
+          <tr>
+            <th>日時</th>
+            <th>ホスト</th>
+            <th>HC</th>
+            <th>ゲスト</th>
+            <th>GC</th>
+            <th>勝敗</th>
+            <th>ランクマ</th>
+            <th>DL</th>
+          </tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+      </table>
+    </div>
+    <button type="button" class="btn-more" id="load-more" hidden>もっと見る</button>
+  </div>
+</main>
+
+<script>
+const CHAR_NAME = {
+  0: "Reimu", 1: "Marisa", 2: "Sakuya", 3: "Alice", 4: "Patchouli",
+  5: "Youmu", 6: "Remilia", 7: "Yuyuko", 8: "Yukari", 9: "Suica",
+  10: "Reisen", 11: "Aya", 12: "Komachi", 13: "Iku", 14: "Tenshi",
+  15: "Sanae", 16: "Cirno", 17: "Meiling", 18: "Utsuho", 19: "Suwako",
+};
+
+const RANK_LABEL = {
+  easy: "E", normal: "N", ex: "Ex", hard: "H", luna: "L", ph: "Ph",
+};
+
+const PAGE_SIZE = 50;
+let currentOffset = 0;
+let currentTotal = 0;
+let loading = false;
+let searched = false;
+let results = [];
+
+const char1El = document.getElementById("char1");
+const char2El = document.getElementById("char2");
+const formEl = document.getElementById("search-form");
+const resultsBodyEl = document.getElementById("results-body");
+const resultsWrapEl = document.getElementById("results-wrap");
+const statusMsgEl = document.getElementById("status-msg");
+const resultMetaEl = document.getElementById("result-meta");
+const loadMoreEl = document.getElementById("load-more");
+
+function fillCharSelect(sel) {
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "(指定なし)";
+  sel.appendChild(empty);
+  for (let i = 0; i < 20; i++) {
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = CHAR_NAME[i] || String(i);
+    sel.appendChild(opt);
+  }
+}
+
+fillCharSelect(char1El);
+fillCharSelect(char2El);
+
+function formatJst(unixSec) {
+  const d = new Date(unixSec * 1000);
+  return d.toLocaleString("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false,
+  });
+}
+
+function charName(id) {
+  if (id == null) return "-";
+  return CHAR_NAME[id] || String(id);
+}
+
+function playerLabel(name, profile, rank, rating) {
+  const primary = name || profile || "(不明)";
+  let text = primary;
+  if (rank) {
+    const rl = RANK_LABEL[rank] || rank;
+    text += " [" + rl;
+    if (rank === "ph" && rating != null) {
+      text += " " + rating;
+    }
+    text += "]";
+  }
+  return text;
+}
+
+function winnerResult(winner) {
+  if (winner === "host") return "ox";
+  if (winner === "guest") return "xo";
+  return "xx";
+}
+
+function appendTextCell(tr, text, cls) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  if (cls) td.className = cls;
+  tr.appendChild(td);
+}
+
+function renderRow(r) {
+  const tr = document.createElement("tr");
+  appendTextCell(tr, formatJst(r.played_at));
+
+  const hostTd = document.createElement("td");
+  hostTd.textContent = playerLabel(r.host_name, r.host_profile, r.host_rank, r.host_rating);
+  if (r.winner === "host") hostTd.className = "winner";
+  tr.appendChild(hostTd);
+
+  appendTextCell(tr, charName(r.host_char));
+
+  const guestTd = document.createElement("td");
+  guestTd.textContent = playerLabel(r.guest_name, r.guest_profile, r.guest_rank, r.guest_rating);
+  if (r.winner === "guest") guestTd.className = "winner";
+  tr.appendChild(guestTd);
+
+  appendTextCell(tr, charName(r.guest_char));
+  appendTextCell(tr, winnerResult(r.winner));
+  appendTextCell(tr, r.ranked ? "o" : "x");
+
+  const tdDl = document.createElement("td");
+  const a = document.createElement("a");
+  a.href = "/replays/" + r.match_id;
+  a.textContent = "DL";
+  tdDl.appendChild(a);
+  tr.appendChild(tdDl);
+
+  return tr;
+}
+
+function renderTable() {
+  const frag = document.createDocumentFragment();
+  for (const r of results) {
+    frag.appendChild(renderRow(r));
+  }
+  if (!results.length && searched) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 8;
+    td.style.color = "var(--muted)";
+    td.textContent = "該当するリプレイがありません";
+    tr.appendChild(td);
+    frag.appendChild(tr);
+  }
+  resultsBodyEl.replaceChildren(frag);
+}
+
+function updateMeta() {
+  if (!searched) {
+    resultMetaEl.textContent = "";
+    return;
+  }
+  resultMetaEl.textContent = `${results.length} / ${currentTotal} 件表示`;
+}
+
+function updateLoadMore() {
+  loadMoreEl.hidden = !searched || results.length >= currentTotal;
+}
+
+function buildQueryParams(offset) {
+  const params = new URLSearchParams();
+  const player = document.getElementById("player").value.trim();
+  if (player) params.set("player", player);
+
+  const c1 = char1El.value;
+  const c2 = char2El.value;
+  if (c1 !== "") params.set("char1", c1);
+  if (c2 !== "") params.set("char2", c2);
+
+  const df = document.getElementById("date-from").value;
+  const dt = document.getElementById("date-to").value;
+  if (df) params.set("date_from", df);
+  if (dt) params.set("date_to", dt);
+
+  const sortVal = document.getElementById("sort-order").value;
+  if (sortVal === "date-asc") {
+    params.set("sort", "date");
+    params.set("order", "asc");
+  } else if (sortVal === "rank-desc") {
+    params.set("sort", "rank");
+    params.set("order", "desc");
+  } else {
+    params.set("sort", "date");
+    params.set("order", "desc");
+  }
+
+  params.set("limit", String(PAGE_SIZE));
+  params.set("offset", String(offset));
+  return params;
+}
+
+async function fetchResults(reset) {
+  if (loading) return;
+  loading = true;
+  statusMsgEl.hidden = false;
+  statusMsgEl.className = "";
+  statusMsgEl.textContent = "検索中...";
+  resultsWrapEl.hidden = true;
+  loadMoreEl.hidden = true;
+
+  const offset = reset ? 0 : currentOffset;
+  try {
+    const res = await fetch("/replays/search?" + buildQueryParams(offset).toString());
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    if (!data.ok) throw new Error("search failed");
+
+    searched = true;
+    currentTotal = data.total;
+    if (reset) {
+      results = data.replays.slice();
+      currentOffset = data.replays.length;
+    } else {
+      results = results.concat(data.replays);
+      currentOffset += data.replays.length;
+    }
+
+    statusMsgEl.hidden = true;
+    resultsWrapEl.hidden = false;
+    renderTable();
+    updateMeta();
+    updateLoadMore();
+  } catch (err) {
+    statusMsgEl.className = "error";
+    statusMsgEl.textContent = "検索に失敗しました";
+    if (reset) {
+      results = [];
+      currentTotal = 0;
+      currentOffset = 0;
+    }
+  } finally {
+    loading = false;
+  }
+}
+
+formEl.addEventListener("submit", (e) => {
+  e.preventDefault();
+  fetchResults(true);
+});
+
+loadMoreEl.addEventListener("click", () => {
+  fetchResults(false);
+});
+
+fetchResults(true);
+</script>
+</body>
+</html>

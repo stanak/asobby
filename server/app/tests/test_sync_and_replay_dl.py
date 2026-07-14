@@ -216,7 +216,8 @@ async def test_replay_download_access_control():
         )
 
         no_auth = await client.get(f"/replays/{match_id}")
-        assert no_auth.status_code == 401
+        assert no_auth.status_code == 200
+        assert no_auth.content == REPLAY_DATA
 
         host_dl = await client.get(
             f"/replays/{match_id}",
@@ -236,7 +237,7 @@ async def test_replay_download_access_control():
             f"/replays/{match_id}",
             headers={"Authorization": f"Bearer {other_token}"},
         )
-        assert other_dl.status_code == 404
+        assert other_dl.status_code == 200
 
         no_replay_id = "0" * 32
         missing = await client.get(

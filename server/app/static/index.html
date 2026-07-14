@@ -36,12 +36,22 @@
     letter-spacing: 1px;
   }
   header .sub { color: var(--muted); font-size: 13px; }
+  header nav {
+    margin-left: auto;
+    font-size: 13px;
+    display: flex;
+    gap: 12px;
+  }
+  header nav a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  header nav a:hover { text-decoration: underline; }
   #status {
     font-size: 13px;
     color: var(--muted);
   }
   #auth-info {
-    margin-left: auto;
     font-size: 13px;
     color: var(--muted);
     display: flex;
@@ -186,6 +196,10 @@
 <header>
   <h1>asobby</h1>
   <span class="sub">非想天則 対戦募集ロビー</span>
+  <nav>
+    <a href="/stats">戦績</a>
+    <a href="/replays">リプレイ検索</a>
+  </nav>
   <span id="auth-info" hidden></span>
   <span id="status" class="disconnected" hidden>接続中...</span>
 </header>

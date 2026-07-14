@@ -26,7 +26,7 @@ from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 import trueskill
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -65,6 +65,7 @@ RANK_LADDER: dict[str, dict[str, Any]] = {
     "luna": {"promote_at": 0.6, "demote_at": 0.2, "promote_to": "ph", "demote_to": "hard"},
     "ph": {"promote_at": None, "demote_at": None, "promote_to": None, "demote_to": None},
 }
+RANK_ORDER: dict[str, int] = {k: i for i, k in enumerate(RANK_LADDER.keys())}
 
 # 作成レート制限（IP 単位）
 CREATE_MIN_INTERVAL_SEC = 2.0
@@ -1104,6 +1105,74 @@ def _content_disposition_attachment(filename: str) -> str:
     return f'attachment; filename="{ascii_name}"'
 
 
+def _parse_jst_date_start(date_str: str) -> Optional[datetime]:
+    """YYYY-MM-DD を JST 00:00:00 として UTC datetime に変換する。"""
+    try:
+        dt = datetime.strptime(date_str.strip(), "%Y-%m-%d")
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=JST).astimezone(timezone.utc)
+
+
+def _parse_jst_date_end(date_str: str) -> Optional[datetime]:
+    """YYYY-MM-DD を JST 23:59:59 として UTC datetime に変換する。"""
+    try:
+        dt = datetime.strptime(date_str.strip(), "%Y-%m-%d")
+    except ValueError:
+        return None
+    return dt.replace(hour=23, minute=59, second=59, tzinfo=JST).astimezone(timezone.utc)
+
+
+def _participant_rank_key(user: Optional[db.User]) -> tuple[int, float]:
+    """ランクソート用キー (rank_order, rating)。ユーザー不明は最低。"""
+    if user is None:
+        return (-1, -1.0)
+    rank_order = RANK_ORDER.get(user.rank, -1)
+    rating = display_rating(user.ts_mu, user.ts_sigma) if user.rank == "ph" else -1.0
+    return (rank_order, rating)
+
+
+def _match_rank_sort_key(
+    host_user: Optional[db.User], guest_user: Optional[db.User]
+) -> tuple[int, float]:
+    """参加者の高い方の (rank_order, rating) を返す。"""
+    return max(_participant_rank_key(host_user), _participant_rank_key(guest_user))
+
+
+def _user_rank_rating(user: Optional[db.User]) -> tuple[Optional[str], Optional[float]]:
+    if user is None:
+        return None, None
+    rating = display_rating(user.ts_mu, user.ts_sigma) if user.rank == "ph" else None
+    return user.rank, rating
+
+
+def _replay_search_item(
+    match: db.Match,
+    filename: str,
+    host_user: Optional[db.User],
+    guest_user: Optional[db.User],
+) -> dict[str, Any]:
+    host_rank, host_rating = _user_rank_rating(host_user)
+    guest_rank, guest_rating = _user_rank_rating(guest_user)
+    return {
+        "match_id": match.id,
+        "played_at": _dt_ts(match.played_at) if match.played_at else 0.0,
+        "winner": match.winner,
+        "host_char": match.host_char,
+        "guest_char": match.guest_char,
+        "host_profile": match.host_profile or "",
+        "guest_profile": match.guest_profile or "",
+        "host_name": host_user.name if host_user else None,
+        "guest_name": guest_user.name if guest_user else None,
+        "host_rank": host_rank,
+        "guest_rank": guest_rank,
+        "host_rating": host_rating,
+        "guest_rating": guest_rating,
+        "filename": filename,
+        "ranked": match.ranked,
+    }
+
+
 def _sync_row_from_item(user_id: str, item: SyncMatchIn, match_id: str, played_at: datetime) -> dict[str, Any]:
     my_char = _normalize_char(item.my_char)
     opp_char = _normalize_char(item.opp_char)
@@ -1160,20 +1229,76 @@ async def stats_me_matches(
     return {"ok": True, "matches": matches, "total": total}
 
 
+@app.get("/replays")
+async def replays_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "replays.html")
+
+
+@app.get("/replays/search")
+async def search_replays(
+    player: str = "",
+    char1: Optional[int] = Query(None, ge=0, le=19),
+    char2: Optional[int] = Query(None, ge=0, le=19),
+    date_from: str = "",
+    date_to: str = "",
+    sort: Literal["date", "rank"] = "date",
+    order: Literal["asc", "desc"] = "desc",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """リプレイ付き対戦を検索する (公開・ログイン不要)。"""
+    if not db.is_configured():
+        return {"ok": True, "total": 0, "replays": []}
+
+    norm_char1 = _normalize_char(char1)
+    norm_char2 = _normalize_char(char2)
+    dt_from = _parse_jst_date_start(date_from) if date_from.strip() else None
+    dt_to = _parse_jst_date_end(date_to) if date_to.strip() else None
+    player_q = player.strip()
+
+    rows = await db.search_replay_matches(
+        player=player_q or None,
+        char1=norm_char1,
+        char2=norm_char2 if norm_char1 is not None else None,
+        date_from=dt_from,
+        date_to=dt_to,
+    )
+
+    reverse = order == "desc"
+    if sort == "rank":
+        rows.sort(
+            key=lambda r: _match_rank_sort_key(r[2], r[3]),
+            reverse=reverse,
+        )
+    else:
+        rows.sort(
+            key=lambda r: _dt_ts(r[0].played_at) if r[0].played_at else 0.0,
+            reverse=reverse,
+        )
+
+    total = len(rows)
+    page_limit = min(max(1, limit), 100)
+    page_offset = max(0, offset)
+    page = rows[page_offset : page_offset + page_limit]
+
+    return {
+        "ok": True,
+        "total": total,
+        "replays": [
+            _replay_search_item(match, filename, host_user, guest_user)
+            for match, filename, host_user, guest_user in page
+        ],
+    }
+
+
 @app.get("/replays/{match_id}")
-async def download_replay(match_id: str, request: Request) -> Response:
-    """対戦参加者のみリプレイをダウンロードできる。"""
-    sess = await resolve_session(request)
-    if sess is None:
-        raise HTTPException(status_code=401, detail="invalid or expired session")
+async def download_replay(match_id: str) -> Response:
+    """リプレイをダウンロードする (公開・ログイン不要)。"""
     if not db.is_configured():
         raise HTTPException(status_code=404, detail="not found")
 
     match = await db.get_match_by_id(match_id)
     if match is None:
-        raise HTTPException(status_code=404, detail="not found")
-    uid = sess["id"]
-    if match.host_user_id != uid and match.guest_user_id != uid:
         raise HTTPException(status_code=404, detail="not found")
 
     replay = await db.get_replay_for_match(match_id)

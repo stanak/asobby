@@ -10,7 +10,8 @@ from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, SmallInteger, String, exists, select
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, SmallInteger, String, and_, exists, func, or_, select
+from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -608,6 +609,63 @@ async def get_replay_for_match(match_id: str) -> Optional[Replay]:
             select(Replay).where(Replay.match_id == match_id).limit(1)
         )
         return res.scalar_one_or_none()
+
+
+async def search_replay_matches(
+    *,
+    player: Optional[str] = None,
+    char1: Optional[int] = None,
+    char2: Optional[int] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    limit: int = 1000,
+) -> list[tuple[Match, str, Optional[User], Optional[User]]]:
+    """リプレイ付き match を検索する。(Match, filename, host_user, guest_user) のリスト。"""
+    HostUser = aliased(User)
+    GuestUser = aliased(User)
+
+    q = (
+        select(Match, Replay.filename, HostUser, GuestUser)
+        .join(Replay, Replay.match_id == Match.id)
+        .outerjoin(HostUser, Match.host_user_id == HostUser.id)
+        .outerjoin(GuestUser, Match.guest_user_id == GuestUser.id)
+        .where(Match.played_at.is_not(None))
+    )
+
+    if player:
+        needle = player.lower()
+        q = q.where(
+            or_(
+                func.lower(Match.host_profile).contains(needle),
+                func.lower(Match.guest_profile).contains(needle),
+                func.lower(HostUser.name).contains(needle),
+                func.lower(GuestUser.name).contains(needle),
+            )
+        )
+
+    if char1 is not None:
+        if char2 is not None:
+            q = q.where(
+                or_(
+                    and_(Match.host_char == char1, Match.guest_char == char2),
+                    and_(Match.host_char == char2, Match.guest_char == char1),
+                )
+            )
+        else:
+            q = q.where(
+                or_(Match.host_char == char1, Match.guest_char == char1)
+            )
+
+    if date_from is not None:
+        q = q.where(Match.played_at >= date_from)
+    if date_to is not None:
+        q = q.where(Match.played_at <= date_to)
+
+    q = q.order_by(Match.played_at.desc()).limit(limit)
+
+    async with session() as s:
+        res = await s.execute(q)
+        return [(row[0], row[1], row[2], row[3]) for row in res.all()]
 
 
 async def fetch_user_match_times_with_ids(

@@ -8,9 +8,11 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | --- | --- |
 | `GET /` | 閲覧用 Web ページ（SSE でリアルタイム更新） |
 | `GET /stats` | 戦績閲覧用 Web ページ |
+| `GET /replays` | リプレイ検索 Web ページ |
+| `GET /replays/search` | リプレイ付き対戦の検索（公開・ログイン不要） |
 | `GET /stats/me` | ログインユーザーの戦績集計（JSON） |
 | `GET /stats/me/matches` | ログインユーザーの対戦一覧（`since` / `limit` クエリ、played_at 昇順） |
-| `GET /replays/{match_id}` | 対戦参加者のみリプレイ (.rep) をダウンロード |
+| `GET /replays/{match_id}` | リプレイ (.rep) をダウンロード（公開・ログイン不要） |
 | `POST /matches/sync` | クライアントのローカル戦績を一括登録（最大 500 件） |
 | `GET /myip` | クライアントのグローバル IP を返す |
 | `GET /posts` | 募集一覧（公開フィールドのみ） |
@@ -113,8 +115,9 @@ KO 報告 (`POST /posts/result`) には使用キャラとプロファイル名�
 (`ranked=False`) となる。同じ DB を再アップロードしても決定的 ID により重複しない。
 asobby クライアントはローカル SQLite に戦績を保持し、`POST /matches/sync` で
 サーバー未記録分を一括同期できる（決定的 ID により再送安全）。同期済みの対戦で
-リプレイが添付されていれば `GET /replays/{match_id}` からダウンロードできる
-（参加者のみ、未ログイン・非参加者は 404）。
+リプレイが添付されていれば `GET /replays/{match_id}` から誰でもダウンロードできる
+（未ログインでも可。存在しない match / リプレイ未添付は 404）。
+`GET /replays` の Web ページからプレイヤー名・キャラ・日付でリプレイを検索できる。
 
 ### ランクマッチ
 
@@ -134,6 +137,8 @@ asobby クライアントはローカル SQLite に戦績を保持し、`POST /m
 
 - asobby クライアントはネット対戦終了後、非想天則が保存した `.rep` を自動アップロードする
 - 1 対戦 (match) に対して 1 ファイルのみ保存される（両側クライアントがアップロードしても先着 1 件のみ）
+- **ダウンロードは公開**（`GET /replays/{match_id}` はログイン不要。リプレイ未添付・存在しない match は 404）
+- **`GET /replays` でリプレイ検索ページ**を提供。プレイヤー名（プロファイル / Discord 表示名）、キャラ、日付範囲、並び順（日付・ランク）で絞り込み可能
 - ファイル名形式: `{日時JST}_{host_profile}-{host_char}_vs_{guest_profile}-{guest_char}_{result}.rep`
   - `result`: ホスト勝ち `ox`、ゲスト勝ち `xo`、引き分け `xx`
   - プロファイル名はファイル名に使えない文字を `_` に置換
