@@ -457,7 +457,7 @@ class TrayApp:
         return Menu(
             MenuItem(lambda item: self._status_text(), None, enabled=False),
             Menu.SEPARATOR,
-            MenuItem("ロビーページを開く", lambda: self._open_lobby(), default=True),
+            MenuItem("ロビーページを開く", lambda: self._open_lobby()),
             MenuItem("投稿設定...", lambda: self._open_settings()),
             MenuItem("戦績を見る...", lambda: self._open_stats()),
             MenuItem("戦績をサーバーと同期", lambda: self._sync_stats()),
