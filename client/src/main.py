@@ -234,7 +234,12 @@ class TrayApp:
 
     def _handle_tool(self, tool_name: str, title: str) -> None:
         entry = self.controller.tool_mgr.get(tool_name)
-        if entry.state.name == "NO_PATH" and not entry.is_active:
+        # パス未設定ならファイル選択を開く。soku だけは稼働中 (= stop soku
+        # 表示) を除外する。giuroll/autopunch は DLL ロード済みでも
+        # ラベルが "set X path" なので、そのまま選択できるようにする
+        if entry.state.name == "NO_PATH" and (
+            tool_name != "soku" or not entry.is_active
+        ):
             def on_picked(path: str | None) -> None:
                 if path:
                     self.controller.tool_mgr.set_path(tool_name, path)
@@ -243,15 +248,17 @@ class TrayApp:
             self._pick_path(title, on_picked)
             return
         elif tool_name == "soku":
-            if entry.state.name == "LOADED" and entry.is_active:
+            # ラベルと同じ判定 (button_label 参照): パス設定 + 稼働中なら
+            # restart、パス設定 + 未稼働なら load、パス未設定 + 稼働中なら stop
+            if entry.state.name == "NO_PATH" and entry.is_active:
+                self.controller.tool_mgr.kill_hisoutensoku()
+                self.controller.tool_mgr.reset_state()
+            elif entry.is_active:
                 self.controller.tool_mgr.kill_hisoutensoku()
                 sleep(0.5)
                 self.controller.tool_mgr.load(tool_name)
                 self.controller.tool_mgr.reset_state()
-            elif entry.state.name == "NO_PATH" and entry.is_active:
-                self.controller.tool_mgr.kill_hisoutensoku()
-                self.controller.tool_mgr.reset_state()
-            elif entry.state.name == "READY":
+            else:
                 self.controller.tool_mgr.load(tool_name)
         else:
             if entry.state.name == "READY":

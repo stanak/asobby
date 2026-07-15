@@ -40,3 +40,6 @@ class DetectionState:
     # 検知系の異常。"" = 正常 / "access_denied" = プロセスは見つかったが
     # メモリを読めない (ゲームが管理者権限で動いている可能性が高い)
     detect_error: str = ""
+
+    # 検知に使った生の値のスナップショット (診断ログ用)
+    raw: str = ""

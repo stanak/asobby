@@ -39,12 +39,11 @@ class ToolEntry:
 
     def button_label(self) -> str:
         if self.name == "soku":
-            if self.state != ToolState.NO_PATH and not self.is_active:
-                return f"load {self.name}"
-            if self.state == ToolState.LOADED and self.is_active:
-                return f"restart {self.name}"
-            elif self.state == ToolState.NO_PATH and self.is_active:
-                return f"stop {self.name}"
+            # LOADED 状態はゲーム未起動の間に reset_state() で READY に
+            # 戻されるため頼れない。パス設定の有無と稼働中かで決める
+            if self.state == ToolState.NO_PATH:
+                return f"stop {self.name}" if self.is_active else f"set {self.name} path"
+            return f"restart {self.name}" if self.is_active else f"load {self.name}"
 
         if self.state == ToolState.LOADED and self.is_active:
             return f"{self.name} loaded"

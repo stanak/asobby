@@ -611,6 +611,11 @@ def read_detection_state() -> DetectionState:
         if scene_id in NET_BATTLE_SCENES:
             btl_mode, lwin, rwin = _read_battle_result(h, giu)
 
+        raw = (
+            f"scene={scene_id} comm={comm_mode} pnet={'y' if pnet else 'n'} "
+            f"s08={server08} s09={server09} port={port} mode={mode}"
+        )
+
         # 将来、対戦募集のランクをどこかから読めたらここに入れる。
         return DetectionState(
             alive=True,
@@ -629,6 +634,7 @@ def read_detection_state() -> DetectionState:
             lwin=lwin,
             rwin=rwin,
             exe_path=exe_path,
+            raw=raw,
         )
     finally:
         kernel32.CloseHandle(h)

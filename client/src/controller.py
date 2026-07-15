@@ -136,6 +136,11 @@ class Controller:
         # 検知系の異常 ("" = 正常)。トレイの状態表示に使う
         self.detect_error: str = ""
 
+        # 検知スナップショットの診断ログ用
+        self._last_raw_logged: str = ""
+        self._last_raw_log_ts: float = 0.0
+        self._last_exe_logged: str = ""
+
     # -----------------
     # basic helpers
     # -----------------
@@ -228,6 +233,28 @@ class Controller:
         elif not err:
             self.log_sink("info", "Memory read recovered")
         self.my_post_sink(self.my_post)  # トレイの状態表示を更新
+
+    def _log_detect_snapshot(self, st: DetectionState) -> None:
+        """検知の生の値が変化したらログに残す (募集が検知されない環境の診断用)。
+
+        50ms ポーリングのため、変化時のみ・最短 1 秒間隔に絞る。
+        """
+        now = time.time()
+        if st.exe_path and st.exe_path != self._last_exe_logged:
+            self._last_exe_logged = st.exe_path
+            try:
+                size = Path(st.exe_path).stat().st_size
+            except OSError:
+                size = -1
+            self.log_sink("info", f"Soku exe: {st.exe_path} ({size} bytes)")
+        if (
+            st.raw
+            and st.raw != self._last_raw_logged
+            and (now - self._last_raw_log_ts) >= 1.0
+        ):
+            self._last_raw_logged = st.raw
+            self._last_raw_log_ts = now
+            self.log_sink("info", f"Detect: {st.raw}")
 
     def is_detect_paused(self) -> bool:
         return time.time() < self._detect_pause_until
@@ -415,6 +442,7 @@ class Controller:
         while not self._stop.is_set():
             st: DetectionState = read_detection_state()
             self._track_detect_error(st.detect_error)
+            self._log_detect_snapshot(st)
             # 天則を検出したら soku path を自動設定する (未設定時のみ)
             if st.alive and st.exe_path and not self.tool_mgr.path("soku"):
                 self.tool_mgr.set_path("soku", st.exe_path)
