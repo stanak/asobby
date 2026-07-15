@@ -38,28 +38,28 @@ jobs:
           if (Test-Path "asobby.spec") {
             pyinstaller asobby.spec
           } else {
-            pyinstaller --noconfirm --clean --onedir --noconsole --hidden-import pystray._win32 --name asobby src\main.py
+            pyinstaller --noconfirm --clean --onefile --noconsole --hidden-import pystray._win32 --name asobby src\main.py
           }
 
-      - name: Archive build output
+      - name: Prepare release asset
         run: |
           $version = "${{ github.ref_name }}"
-          $zipName = "asobby-$version-windows.zip"
-          Compress-Archive -Path "dist/asobby/*" -DestinationPath $zipName -Force
-          echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+          $exeName = "asobby-$version-windows.exe"
+          Copy-Item "dist/asobby.exe" $exeName
+          echo "ASSET_NAME=$exeName" >> $env:GITHUB_ENV
 
       - name: Create or update GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $zip = $env:ZIP_NAME
+          $asset = $env:ASSET_NAME
 
           gh release view $tag 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $zip `
+            gh release create $tag $asset `
               --title "asobby client $tag" `
               --generate-notes
           } else {
-            gh release upload $tag $zip --clobber
+            gh release upload $tag $asset --clobber
           }

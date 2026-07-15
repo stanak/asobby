@@ -455,14 +455,19 @@ def _sanitize_profile(name: str) -> str:
 
 
 def _resolve_battle_mgr(h: wt.HANDLE, giuroll: bool) -> Optional[int]:
-    """PBATTLEMGR ポインタを解決する。giuroll 時は代替アドレスも試す。"""
-    ptr = _read_u32le(h, PBATTLEMGR)
-    if ptr and is_readable_ptr(h, ptr):
-        return ptr
+    """PBATTLEMGR ポインタを解決する。
+
+    giuroll 環境ではバニラの PBATTLEMGR がロールバック中に確定前の値を
+    見せることがある (Tsk が同一対戦を多重記録するのと同じ問題) ため、
+    giuroll リポジトリの指示どおり 0x0047579C を優先する。
+    """
     if giuroll:
         ptr = _read_u32le(h, PBATTLEMGR_GIUROLL)
         if ptr and is_readable_ptr(h, ptr):
             return ptr
+    ptr = _read_u32le(h, PBATTLEMGR)
+    if ptr and is_readable_ptr(h, ptr):
+        return ptr
     return None
 
 
