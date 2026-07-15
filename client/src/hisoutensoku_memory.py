@@ -580,6 +580,7 @@ def read_detection_state() -> DetectionState:
 
         pnet = _read_u32le(h, PNETOBJECT)
         lprof = rprof = ""
+        adrbeg = None
         server = None
         if pnet:
             lprof = _sanitize_profile(_read_cpsz_cp932(h, pnet + LPROFOFS, PROFSZ))
@@ -613,7 +614,9 @@ def read_detection_state() -> DetectionState:
 
         raw = (
             f"scene={scene_id} comm={comm_mode} pnet={'y' if pnet else 'n'} "
-            f"s08={server08} s09={server09} port={port} mode={mode}"
+            f"adr={adrbeg or 0:x} srv={server or 0:x} "
+            f"s08={server08} s09={server09} port={port} "
+            f"giu={'y' if giu else 'n'} ap={'y' if ap else 'n'} mode={mode}"
         )
 
         # 将来、対戦募集のランクをどこかから読めたらここに入れる。

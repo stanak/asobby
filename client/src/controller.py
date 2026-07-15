@@ -1208,25 +1208,24 @@ class Controller:
                 parsed = urlsplit(path)
                 code = dict(parse_qsl(parsed.query)).get("code", "")
                 if parsed.path == "/auth" and code:
-                    body = (
-                        "<html><head><meta charset='utf-8'><title>asobby</title></head>"
-                        "<body style='background:#14171c;color:#d8dee9;font-family:sans-serif;"
-                        "display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
-                        "<div style='text-align:center'><h1 style='color:#57c07d'>ログイン完了</h1>"
-                        "<p>asobby クライアントに連携しました。このタブは閉じて構いません。</p></div>"
-                        "</body></html>"
-                    )
+                    # 連携完了後はそのままロビーページへリダイレクトする
+                    location = self.lobby_url().encode("ascii", "ignore")
                     if not code_fut.done():
                         code_fut.set_result(code)
+                    writer.write(
+                        b"HTTP/1.1 302 Found\r\n"
+                        b"Location: " + location + b"\r\n"
+                        b"Content-Length: 0\r\n"
+                        b"Connection: close\r\n\r\n"
+                    )
                 else:
-                    body = "<html><body>asobby</body></html>"
-                data = body.encode("utf-8")
-                writer.write(
-                    b"HTTP/1.1 200 OK\r\n"
-                    b"Content-Type: text/html; charset=utf-8\r\n"
-                    b"Content-Length: " + str(len(data)).encode() + b"\r\n"
-                    b"Connection: close\r\n\r\n" + data
-                )
+                    body = b"<html><body>asobby</body></html>"
+                    writer.write(
+                        b"HTTP/1.1 200 OK\r\n"
+                        b"Content-Type: text/html; charset=utf-8\r\n"
+                        b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+                        b"Connection: close\r\n\r\n" + body
+                    )
                 await writer.drain()
             except Exception:
                 pass
