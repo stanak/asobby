@@ -36,3 +36,7 @@ class DetectionState:
 
     # th123.exe のフルパス (リプレイ保存先の解決用)
     exe_path: str = ""
+
+    # 検知系の異常。"" = 正常 / "access_denied" = プロセスは見つかったが
+    # メモリを読めない (ゲームが管理者権限で動いている可能性が高い)
+    detect_error: str = ""

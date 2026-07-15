@@ -139,6 +139,11 @@ class TrayApp:
         return POST_TYPE_LABEL.get(self.post.post_type, "カジュアル")
 
     def _status_text(self) -> str:
+        if self.controller.detect_error == "access_denied":
+            return "検出済み・メモリ読取不可 (ゲームが管理者権限?)"
+        if self.controller.is_detect_paused():
+            rest = self.controller.detect_pause_remaining_min()
+            return f"自動検知 停止中 (残り約 {rest} 分)"
         if not self.post.id:
             return "待機中 - ホストを立てると自動投稿"
         mode = self._post_type_label()
@@ -372,6 +377,36 @@ class TrayApp:
         if not presets:
             yield MenuItem("投稿設定で配信URLを追加できます", None, enabled=False)
 
+    def _pause_menu_items(self):
+        """ホスト自動検知の一時停止サブメニュー。"""
+        def make_pause(seconds: int):
+            def act(icon, item):
+                self.controller.pause_auto_detect(seconds)
+                if self.icon:
+                    self.icon.update_menu()
+            return act
+
+        def resume(icon, item):
+            self.controller.resume_auto_detect()
+            if self.icon:
+                self.icon.update_menu()
+
+        paused = self.controller.is_detect_paused()
+        if paused:
+            rest = self.controller.detect_pause_remaining_min()
+            yield MenuItem(f"停止中 (残り約 {rest} 分)", None, enabled=False)
+            yield MenuItem("今すぐ再開する", resume)
+            yield Menu.SEPARATOR
+        yield MenuItem("30 分停止", make_pause(30 * 60))
+        yield MenuItem("1 時間停止", make_pause(60 * 60))
+        yield MenuItem("3 時間停止", make_pause(3 * 60 * 60))
+
+    def _pause_menu_label(self) -> str:
+        if self.controller.is_detect_paused():
+            rest = self.controller.detect_pause_remaining_min()
+            return f"ホスト自動検知 (停止中 残り約 {rest} 分)"
+        return "ホスト自動検知を一時停止"
+
     def _request_menu_items(self):
         """未返信リクエストへの承諾/拒否メニュー。"""
         self.controller._prune_pending_requests()
@@ -415,6 +450,10 @@ class TrayApp:
             MenuItem("募集タイプ切替", Menu(lambda: self._post_type_menu_items())),
             MenuItem("コメント切替", Menu(lambda: self._comment_menu_items())),
             MenuItem("配信URL切替", Menu(lambda: self._stream_menu_items())),
+            MenuItem(
+                lambda item: self._pause_menu_label(),
+                Menu(lambda: self._pause_menu_items()),
+            ),
             MenuItem(
                 "リクエストに返信",
                 Menu(lambda: self._request_menu_items()),

@@ -130,6 +130,12 @@ class Controller:
 
         self.pending_requests: list[PendingRequest] = []
 
+        # ホスト自動検知 (自動投稿) の一時停止。0 なら停止していない
+        self._detect_pause_until: float = 0.0
+
+        # 検知系の異常 ("" = 正常)。トレイの状態表示に使う
+        self.detect_error: str = ""
+
     # -----------------
     # basic helpers
     # -----------------
@@ -186,6 +192,50 @@ class Controller:
 
     def has_active_post(self) -> bool:
         return bool(self.my_post.id and self.owner_token)
+
+    # -----------------
+    # ホスト自動検知の一時停止
+    # -----------------
+    def pause_auto_detect(self, seconds: float) -> None:
+        """ホスト自動検知 (自動投稿) を指定秒数だけ止める。既存の募集は閉じる。"""
+        self._detect_pause_until = time.time() + seconds
+        minutes = int(seconds / 60)
+        label = f"{minutes // 60} 時間" if minutes % 60 == 0 and minutes >= 60 else f"{minutes} 分"
+        self.log_sink("info", f"Auto detect paused for {label}")
+        self.notify_sink(f"ホスト自動検知を {label} 停止しました")
+
+    def resume_auto_detect(self) -> None:
+        if self._detect_pause_until:
+            self._detect_pause_until = 0.0
+            self.log_sink("info", "Auto detect resumed manually")
+            self.notify_sink("ホスト自動検知を再開しました")
+
+    def _track_detect_error(self, err: str) -> None:
+        """検知異常の遷移をログ・通知し、トレイ表示を更新する。"""
+        if err == self.detect_error:
+            return
+        self.detect_error = err
+        if err == "access_denied":
+            self.log_sink(
+                "warn",
+                "th123.exe found but memory is not readable (access denied). "
+                "Game may be running as administrator",
+            )
+            self.notify_sink(
+                "非想天則を検出しましたがメモリを読み取れません。"
+                "ゲームが管理者権限で動いている場合は、asobby も管理者として実行してください"
+            )
+        elif not err:
+            self.log_sink("info", "Memory read recovered")
+        self.my_post_sink(self.my_post)  # トレイの状態表示を更新
+
+    def is_detect_paused(self) -> bool:
+        return time.time() < self._detect_pause_until
+
+    def detect_pause_remaining_min(self) -> int:
+        """残り停止時間 (分、切り上げ)。停止していなければ 0。"""
+        rest = self._detect_pause_until - time.time()
+        return max(0, int(rest // 60) + (1 if rest % 60 > 0 else 0)) if rest > 0 else 0
 
     def _stable_key(self, key: str, need: int, *, seen: bool) -> bool:
         if seen:
@@ -364,6 +414,11 @@ class Controller:
 
         while not self._stop.is_set():
             st: DetectionState = read_detection_state()
+            self._track_detect_error(st.detect_error)
+            # 天則を検出したら soku path を自動設定する (未設定時のみ)
+            if st.alive and st.exe_path and not self.tool_mgr.path("soku"):
+                self.tool_mgr.set_path("soku", st.exe_path)
+                self.log_sink("info", f"Soku path auto-set: {st.exe_path}")
             self.update_btn_labels("soku", st.alive)
             self.update_btn_labels("autopunch", st.autopunch)
             self.update_btn_labels("giuroll", st.giuroll)
@@ -499,6 +554,12 @@ class Controller:
     def on_detect(self, st: DetectionState, *, my_ip: str) -> Optional[Action]:
         now = time.time()
 
+        # 一時停止が自然に切れたら一度だけ通知する
+        if self._detect_pause_until and now >= self._detect_pause_until:
+            self._detect_pause_until = 0.0
+            self.log_sink("info", "Auto detect pause expired")
+            self.notify_sink("ホスト自動検知を再開しました")
+
         # -----------------
         # process dead
         # -----------------
@@ -508,6 +569,15 @@ class Controller:
                 self._close_pending = True
                 return Action("close", {"reason": "process_dead"})
             return None
+
+        # -----------------
+        # 一時停止中: 自動投稿だけ止める (既存の募集があれば閉じる)。
+        # 戦績のローカル記録・ゲスト側報告・リプレイ収集は停止中も動かす
+        # -----------------
+        paused = now < self._detect_pause_until
+        if paused and self.has_active_post() and not self._close_pending:
+            self._close_pending = True
+            return Action("close", {"reason": "detect_paused"})
 
         # -----------------
         # classify
@@ -651,7 +721,9 @@ class Controller:
         # -----------------
         # 1) recruiting -> create / update
         # -----------------
-        if self._stable_for("recruiting", 3.0, seen=is_recruiting):
+        # 一時停止中もカウンタは更新する (再開時にホスト継続中なら即投稿される)
+        recruiting_stable = self._stable_for("recruiting", 3.0, seen=is_recruiting)
+        if recruiting_stable and not paused:
             payload = self._build_payload(
                 addr=self._current_addr(my_ip, st.port),
                 giuroll=st.giuroll,
@@ -698,7 +770,8 @@ class Controller:
         # 2) battle -> update (ホスト側のみ)
         # -----------------
         if (
-            st.net_side == "host"
+            not paused
+            and st.net_side == "host"
             and self.has_active_post()
             and self._seen_recruit_this_run
             and self._stable_for("battle", 2.0, seen=is_battle)
@@ -719,7 +792,7 @@ class Controller:
         # -----------------
         # 3) heartbeat (updated_at を更新して TTL 失効を防ぐ)
         # -----------------
-        if self.has_active_post() and (now - self._last_heartbeat_ts) >= HEARTBEAT_SEC:
+        if not paused and self.has_active_post() and (now - self._last_heartbeat_ts) >= HEARTBEAT_SEC:
             self._last_heartbeat_ts = now
             payload = self._build_payload(
                 addr=self.my_post.addr or "",

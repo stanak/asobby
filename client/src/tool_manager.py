@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from hisoutensoku_memory import get_hisoutensoku_pid_by_process_name
+from hisoutensoku_memory import (
+    get_hisoutensoku_pid_by_process_name,
+    set_soku_path_hint,
+)
 
 from dataclasses import dataclass
 from enum import Enum
@@ -68,6 +71,8 @@ class ToolManager:
             "autopunch": self._make_entry("autopunch", paths.get("autopunch_path", "")),
             "soku": self._make_entry("soku", paths.get("soku_path", "")),
         }
+        # 設定済みの soku exe をプロセス探索の手がかりにする
+        set_soku_path_hint(self._tools["soku"].path)
 
     def _make_entry(self, name: str, path: str) -> ToolEntry:
         path = (path or "").strip()
@@ -134,6 +139,9 @@ class ToolManager:
 
         config_key = f"{tool_name}_path"
         self.config_mgr.set_tool_path(config_key, entry.path)
+
+        if tool_name == "soku":
+            set_soku_path_hint(entry.path)
 
     def clear_path(self, tool_name: str) -> None:
         self.set_path(tool_name, "")

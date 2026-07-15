@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 import ctypes
 import ctypes.wintypes as wt
+import ntpath
 import time
 
 from detect_api import DetectionState
@@ -179,26 +180,61 @@ kernel32.CloseHandle.argtypes = [wt.HANDLE]
 kernel32.CloseHandle.restype = wt.BOOL
 
 
-def get_hisoutensoku_pid_by_process_name(
-    exe_names: Tuple[str, ...] = ("th123.exe", "th123_110a.exe"),
-) -> Optional[int]:
+DEFAULT_EXE_NAMES: Tuple[str, ...] = ("th123.exe", "th123_110a.exe")
+
+# 設定済みの soku exe パス (set soku path)。空でなければ、その exe 名も
+# プロセス探索の候補に加え、フルパス一致するプロセスを最優先する。
+# リネームされた exe や th123.exe が複数いる環境で正しいプロセスを掴むため。
+_soku_path_hint: str = ""
+
+
+def set_soku_path_hint(path: str) -> None:
+    global _soku_path_hint
+    p = (path or "").strip()
+    if p != _soku_path_hint:
+        _soku_path_hint = p
+        _invalidate_pid_cache()
+
+
+def _enum_pids_by_names(want: set[str]) -> list[int]:
     snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     if snap == wt.HANDLE(-1).value:
-        return None
+        return []
 
     try:
+        pids: list[int] = []
         pe = PROCESSENTRY32()
         pe.dwSize = ctypes.sizeof(PROCESSENTRY32)
         ok = kernel32.Process32First(snap, ctypes.byref(pe))
-        want = {n.lower() for n in exe_names}
         while ok:
             name = bytes(pe.szExeFile).split(b"\x00", 1)[0].decode("cp932", "ignore")
             if name.lower() in want:
-                return int(pe.th32ProcessID)
+                pids.append(int(pe.th32ProcessID))
             ok = kernel32.Process32Next(snap, ctypes.byref(pe))
-        return None
+        return pids
     finally:
         kernel32.CloseHandle(snap)
+
+
+def get_hisoutensoku_pid_by_process_name(
+    exe_names: Tuple[str, ...] = DEFAULT_EXE_NAMES,
+) -> Optional[int]:
+    want = {n.lower() for n in exe_names}
+    hint = _soku_path_hint
+    if hint:
+        base = ntpath.basename(hint).lower()
+        if base:
+            want.add(base)
+    pids = _enum_pids_by_names(want)
+    if not pids:
+        return None
+    if hint:
+        hint_lower = hint.lower()
+        for pid in pids:
+            path = _get_exe_path_for_pid(pid)
+            if path and path.lower() == hint_lower:
+                return pid
+    return pids[0]
 
 
 # ========================
@@ -499,9 +535,28 @@ def read_detection_state() -> DetectionState:
 
     try:
         h = _open_process(pid)
-    except Exception:
-        # プロセスが終了した直後の可能性が高い。キャッシュを破棄して
-        # 次の周期で再列挙させる。
+    except OSError as e:
+        # ERROR_ACCESS_DENIED (5): ゲームが管理者権限で動いていて読めない。
+        # プロセス自体は生きているのでキャッシュは維持し、異常として報告する
+        if getattr(e, "winerror", None) == 5:
+            return DetectionState(
+                alive=True,
+                mode="idle",
+                port=None,
+                giuroll=False,
+                autopunch=False,
+                lprof="",
+                rprof="",
+                lchar_id=None,
+                rchar_id=None,
+                lchar_name="?",
+                rchar_name="?",
+                net_side=None,
+                exe_path=exe_path,
+                detect_error="access_denied",
+            )
+        # それ以外はプロセスが終了した直後の可能性が高い。キャッシュを
+        # 破棄して次の周期で再列挙させる。
         _invalidate_pid_cache()
         return DetectionState(
             alive=True,
