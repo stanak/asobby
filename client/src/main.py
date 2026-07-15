@@ -414,6 +414,13 @@ class TrayApp:
             return f"ホスト自動検知 (停止中 残り約 {rest} 分)"
         return "ホスト自動検知を一時停止"
 
+    def _toggle_copy_addr(self) -> None:
+        self.controller.set_copy_addr_enabled(
+            not self.controller.copy_addr_enabled()
+        )
+        if self.icon:
+            self.icon.update_menu()
+
     def _request_menu_items(self):
         """未返信リクエストへの承諾/拒否メニュー。"""
         self.controller._prune_pending_requests()
@@ -460,6 +467,11 @@ class TrayApp:
             MenuItem(
                 lambda item: self._pause_menu_label(),
                 Menu(lambda: self._pause_menu_items()),
+            ),
+            MenuItem(
+                "ホスト時に IP:Port をコピー",
+                lambda: self._toggle_copy_addr(),
+                checked=lambda item: self.controller.copy_addr_enabled(),
             ),
             MenuItem(
                 "リクエストに返信",

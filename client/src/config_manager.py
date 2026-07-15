@@ -28,6 +28,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "stream_url_presets": [],
         "post_type": "casual",
     },
+    "options": {
+        "copy_addr_on_host": False,
+    },
 }
 
 

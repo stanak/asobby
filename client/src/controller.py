@@ -12,6 +12,7 @@ from collections import defaultdict
 
 import httpx
 
+import clipboard_util
 from api_client import ApiClient
 from detect_api import DetectionState
 from hisoutensoku_memory import read_detection_state
@@ -133,6 +134,9 @@ class Controller:
         # ホスト自動検知 (自動投稿) の一時停止。0 なら停止していない
         self._detect_pause_until: float = 0.0
 
+        # ホスト検知時の IP:Port クリップボードコピー (1 ホストセッション 1 回)
+        self._addr_copied = False
+
         # 検知系の異常 ("" = 正常)。トレイの状態表示に使う
         self.detect_error: str = ""
 
@@ -174,6 +178,23 @@ class Controller:
     def set_active_stream(self, text: str) -> None:
         self.config_mgr.set_post_default("stream_url", text)
         self.update_my_post(stream_url=text)
+
+    def copy_addr_enabled(self) -> bool:
+        return bool(self.config_mgr.get_value("options", "copy_addr_on_host", False))
+
+    def set_copy_addr_enabled(self, enabled: bool) -> None:
+        self.config_mgr.set_value("options", "copy_addr_on_host", bool(enabled))
+        self.log_sink(
+            "info",
+            f"Copy addr on host: {'enabled' if enabled else 'disabled'}",
+        )
+
+    def _copy_addr_to_clipboard(self, addr: str) -> None:
+        if clipboard_util.copy_text(addr):
+            self.log_sink("info", f"Copied host addr to clipboard: {addr}")
+            self.notify_sink(f"募集アドレスをコピーしました: {addr}")
+        else:
+            self.log_sink("warn", "Clipboard copy failed")
 
     def clear_my_post(self) -> None:
         self.owner_token = ""
@@ -603,6 +624,7 @@ class Controller:
         # -----------------
         if not st.alive:
             self.tool_mgr.reset_state()
+            self._addr_copied = False
             if self.has_active_post() and not self._close_pending:
                 self._close_pending = True
                 return Action("close", {"reason": "process_dead"})
@@ -755,6 +777,25 @@ class Controller:
             self._replay_pending = False
             self._pending_replay_upload = (self._battle_start_ts, st.exe_path)
             self._battle_start_ts = 0.0
+
+        # -----------------
+        # ホスト検知時の IP:Port クリップボードコピー (設定 ON のときのみ)。
+        # ログインや自動投稿の一時停止とは無関係に、ホストを立てたら 1 回コピーする。
+        # ホストセッションが終わったらリセットし、次のホストで再びコピーする
+        # -----------------
+        if self._stable_for("addr_copy_reset", 5.0, seen=(not is_recruiting and not is_battle)):
+            self._addr_copied = False
+        if (
+            not self._addr_copied
+            and self.copy_addr_enabled()
+            and self._stable_for("addr_copy", 1.0, seen=is_recruiting)
+        ):
+            self._addr_copied = True
+            addr = self._current_addr(my_ip, st.port)
+            if my_ip and addr:
+                self._copy_addr_to_clipboard(addr)
+            else:
+                self.log_sink("warn", "Clipboard copy skipped: own IP unknown")
 
         # -----------------
         # 1) recruiting -> create / update
