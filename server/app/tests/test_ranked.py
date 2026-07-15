@@ -268,7 +268,7 @@ async def test_auth_me_and_stats_me():
         data = stats.json()
         assert data["ranked"]["rank"] == "ex"
         assert data["ranked"]["total"]["games"] == 5
-        assert data["ranked"]["recent50"]["games"] == 5
+        assert data["ranked"]["recent30"]["games"] == 5
 
 
 @pytest.mark.asyncio

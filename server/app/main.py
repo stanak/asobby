@@ -52,6 +52,8 @@ SSE_PING_INTERVAL_SEC = 15
 
 # ランクマッチ: 昇降格判定に必要な最低試合数
 RANKED_EVAL_MIN_GAMES = 10
+# 昇降格判定に使う直近ランクマ対戦数
+RANKED_EVAL_WINDOW = 30
 # 1 セッション (ゲスト接続) でランクマ扱いになるのは最初の 3 戦まで
 RANKED_SESSION_MAX_GAMES = 3
 
@@ -672,7 +674,9 @@ async def evaluate_rank(user_id: str) -> Optional[str]:
     if rules is None:
         return None
 
-    matches = await db.fetch_ranked_matches_at_current_rank(user_id, limit=50)
+    matches = await db.fetch_ranked_matches_at_current_rank(
+        user_id, limit=RANKED_EVAL_WINDOW
+    )
     games = len(matches)
     if games < RANKED_EVAL_MIN_GAMES:
         return None
@@ -727,13 +731,13 @@ async def update_trueskill_ratings(
 
 def compute_ranked_stats(matches: list[db.Match], user_id: str) -> dict[str, Any]:
     total = _bucket_stats(matches, user_id)
-    recent50 = _bucket_stats(matches[:50], user_id)
+    recent = _bucket_stats(matches[:RANKED_EVAL_WINDOW], user_id)
     return {
         "total": total,
-        "recent50": {
-            "games": recent50["games"],
-            "wins": recent50["wins"],
-            "win_rate": recent50["win_rate"],
+        "recent30": {
+            "games": recent["games"],
+            "wins": recent["wins"],
+            "win_rate": recent["win_rate"],
         },
     }
 

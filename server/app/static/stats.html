@@ -981,11 +981,11 @@ function renderRanked() {
     `ランクマ総合成績: <strong>${rt.wins}-${rt.losses}-${rt.draws}</strong>　勝率: <span class="win-rate">${pct(rt.win_rate)}</span>（${rt.games} 戦）`;
   rankedEl.appendChild(rTotal);
 
-  const r50 = ranked.recent50 || { games: 0, wins: 0, win_rate: 0 };
+  const r30 = ranked.recent30 || { games: 0, wins: 0, win_rate: 0 };
   const rRecent = document.createElement("div");
   rRecent.className = "summary";
   rRecent.innerHTML =
-    `直近 50 戦: <span class="win-rate">${pct(r50.win_rate)}</span>（${r50.wins}勝 / ${r50.games}戦）`;
+    `直近 30 戦: <span class="win-rate">${pct(r30.win_rate)}</span>（${r30.wins}勝 / ${r30.games}戦）`;
   rankedEl.appendChild(rRecent);
 }
 
