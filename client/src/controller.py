@@ -140,6 +140,8 @@ class Controller:
         self._last_raw_logged: str = ""
         self._last_raw_log_ts: float = 0.0
         self._last_exe_logged: str = ""
+        self._last_modules_logged: str = ""
+        self._last_dump_log_ts: float = 0.0
 
     # -----------------
     # basic helpers
@@ -247,6 +249,11 @@ class Controller:
             except OSError:
                 size = -1
             self.log_sink("info", f"Soku exe: {st.exe_path} ({size} bytes)")
+        # ゲームフォルダ由来の DLL は後から注入されるものもあるので、
+        # 変化するたびに記録する (giuroll/autopunch のロードもここに出る)
+        if st.modules and st.modules != self._last_modules_logged:
+            self._last_modules_logged = st.modules
+            self.log_sink("info", f"Soku modules: {st.modules}")
         if (
             st.raw
             and st.raw != self._last_raw_logged
@@ -255,6 +262,9 @@ class Controller:
             self._last_raw_logged = st.raw
             self._last_raw_log_ts = now
             self.log_sink("info", f"Detect: {st.raw}")
+        if st.dump and (now - self._last_dump_log_ts) >= 30.0:
+            self._last_dump_log_ts = now
+            self.log_sink("info", f"Detect dump: {st.dump}")
 
     def is_detect_paused(self) -> bool:
         return time.time() < self._detect_pause_until

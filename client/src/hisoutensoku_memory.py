@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 import ctypes
 import ctypes.wintypes as wt
 import ntpath
+import os
 import time
 
 from detect_api import DetectionState
@@ -357,7 +358,8 @@ kernel32.Module32First.restype  = wt.BOOL
 kernel32.Module32Next.argtypes  = [wt.HANDLE, ctypes.POINTER(MODULEENTRY32)]
 kernel32.Module32Next.restype   = wt.BOOL
 
-def list_modules_toolhelp(pid: int) -> list[str]:
+def list_modules_toolhelp(pid: int) -> list[tuple[str, str]]:
+    """プロセスのロード済みモジュール (名前, フルパス) を列挙する。"""
     snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid)
     if snap == wt.HANDLE(-1).value:
         return []
@@ -365,10 +367,11 @@ def list_modules_toolhelp(pid: int) -> list[str]:
         me = MODULEENTRY32()
         me.dwSize = ctypes.sizeof(MODULEENTRY32)
         ok = kernel32.Module32First(snap, ctypes.byref(me))
-        mods: list[str] = []
+        mods: list[tuple[str, str]] = []
         while ok:
             name = bytes(me.szModule).split(b"\x00", 1)[0].decode("cp932", "ignore")
-            mods.append(name)
+            path = bytes(me.szExePath).split(b"\x00", 1)[0].decode("cp932", "ignore")
+            mods.append((name, path))
             ok = kernel32.Module32Next(snap, ctypes.byref(me))
         return mods
     finally:
@@ -376,10 +379,26 @@ def list_modules_toolhelp(pid: int) -> list[str]:
 
 
 def detect_tools_from_loaded_modules(pid: int) -> tuple[bool, bool]:
-    mods = [m.lower() for m in list_modules_toolhelp(pid)]
+    mods = [n.lower() for n, _ in list_modules_toolhelp(pid)]
     giu = any("giuroll" in m for m in mods)
     ap  = any("autopunch" in m for m in mods)
     return giu, ap
+
+
+def nonsystem_modules(mods: list[tuple[str, str]]) -> str:
+    """システムフォルダ以外から読まれているモジュール名を列挙する。
+
+    ゲームフォルダ同梱の DLL (ラッパー・翻訳パッチ・Mod ローダー等) を
+    洗い出す診断用。想定外の DLL がゲーム内部構造を書き換えている
+    ケースの調査に使う。
+    """
+    sysroot = os.environ.get("SystemRoot", r"C:\Windows").lower()
+    out = []
+    for name, path in mods:
+        if path and path.lower().startswith(sysroot):
+            continue
+        out.append(name)
+    return ",".join(out)
 
 
 # ========================
@@ -391,19 +410,28 @@ _PID_CACHE_TTL_SEC = 2.0
 _pid_cache: Optional[int] = None
 _tools_cache: Tuple[bool, bool] = (False, False)
 _exe_path_cache: str = ""
+_modules_cache: str = ""
 _pid_cache_ts: float = 0.0
 
 
-def _get_pid_and_tools() -> Tuple[Optional[int], bool, bool, str]:
-    global _pid_cache, _tools_cache, _exe_path_cache, _pid_cache_ts
+def _get_pid_and_tools() -> Tuple[Optional[int], bool, bool, str, str]:
+    global _pid_cache, _tools_cache, _exe_path_cache, _modules_cache, _pid_cache_ts
     now = time.monotonic()
     if (now - _pid_cache_ts) < _PID_CACHE_TTL_SEC:
-        return _pid_cache, _tools_cache[0], _tools_cache[1], _exe_path_cache
+        return _pid_cache, _tools_cache[0], _tools_cache[1], _exe_path_cache, _modules_cache
     pid = get_hisoutensoku_pid_by_process_name()
-    tools = detect_tools_from_loaded_modules(pid) if pid else (False, False)
+    mods = list_modules_toolhelp(pid) if pid else []
+    lower = [n.lower() for n, _ in mods]
+    tools = (
+        any("giuroll" in m for m in lower),
+        any("autopunch" in m for m in lower),
+    )
+    modules = nonsystem_modules(mods)
     exe_path = _get_exe_path_for_pid(pid) if pid else ""
-    _pid_cache, _tools_cache, _exe_path_cache, _pid_cache_ts = pid, tools, exe_path, now
-    return pid, tools[0], tools[1], exe_path
+    _pid_cache, _tools_cache, _exe_path_cache, _modules_cache, _pid_cache_ts = (
+        pid, tools, exe_path, modules, now
+    )
+    return pid, tools[0], tools[1], exe_path, modules
 
 
 def _invalidate_pid_cache() -> None:
@@ -515,7 +543,7 @@ def _derive_net_side(
 
 
 def read_detection_state() -> DetectionState:
-    pid, giu, ap, exe_path = _get_pid_and_tools()
+    pid, giu, ap, exe_path, modules = _get_pid_and_tools()
     if not pid:
         return DetectionState(
             alive=False,
@@ -619,6 +647,17 @@ def read_detection_state() -> DetectionState:
             f"giu={'y' if giu else 'n'} ap={'y' if ap else 'n'} mode={mode}"
         )
 
+        # 構造診断ダンプ: server チェーンが読めない異常時と、正常な
+        # host_wait 時 (比較用ベースライン) に周辺メモリを添える
+        dump = ""
+        if pnet and adrbeg and (server08 is None or mode == "host_wait"):
+            around = _read_bytes(h, pnet + ADRBEGOFS - 0x10, 0x20)
+            head = _read_bytes(h, adrbeg, 0x40)
+            dump = (
+                f"pnet+{ADRBEGOFS - 0x10:x}={(around.hex() if around else '?')} "
+                f"adr={(head.hex() if head else '?')}"
+            )
+
         # 将来、対戦募集のランクをどこかから読めたらここに入れる。
         return DetectionState(
             alive=True,
@@ -638,6 +677,8 @@ def read_detection_state() -> DetectionState:
             rwin=rwin,
             exe_path=exe_path,
             raw=raw,
+            modules=modules,
+            dump=dump,
         )
     finally:
         kernel32.CloseHandle(h)

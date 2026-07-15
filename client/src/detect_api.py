@@ -43,3 +43,9 @@ class DetectionState:
 
     # 検知に使った生の値のスナップショット (診断ログ用)
     raw: str = ""
+
+    # システムフォルダ外から読まれているモジュール名 (診断ログ用)
+    modules: str = ""
+
+    # server チェーン周辺のメモリダンプ (異常時と host_wait 時のみ)
+    dump: str = ""
