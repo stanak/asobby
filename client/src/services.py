@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 POST_TYPE_OPTIONS = [
     ("カジュアル", "casual"),
