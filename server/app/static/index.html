@@ -648,8 +648,8 @@ function buildRow(p) {
   tr.appendChild(td(rankLabel(p)));
 
   const cap = document.createElement("td");
-  if (p.giuroll) cap.appendChild(badge("G"));
-  if (p.autopunch) cap.appendChild(badge("A"));
+  if (p.giuroll) cap.appendChild(badge("Giu"));
+  if (p.autopunch) cap.appendChild(badge("AP"));
   tr.appendChild(cap);
 
   const stream = document.createElement("td");
