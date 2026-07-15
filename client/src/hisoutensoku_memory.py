@@ -513,6 +513,57 @@ def _decide_mode(server08: Optional[int], server09: Optional[int], scene_id: Opt
 
 
 # ========================
+# server object scan fallback
+# ========================
+# pnet+0x4C8 のコンテナ (0x200 バイト) 内での server オブジェクトの位置は
+# 環境によってずれることがある (+0x04 決め打ちが通用しない環境が実在する)。
+# その場合はコンテナ全域を走査し、募集シグネチャ (+0x08 == 01 02 = s08:513 /
+# s09:2) とポートの妥当性で server を特定する。
+_VECTOR_SIZE = 0x200
+_SCAN_INTERVAL_SEC = 1.0
+_scan_last_ts: float = 0.0
+_scan_hit: Optional[int] = None
+
+
+def _looks_like_recruiting_server(h: wt.HANDLE, ptr: int) -> Optional[int]:
+    """ptr が募集中の server オブジェクトならポートを返す。"""
+    head = _read_bytes(h, ptr, 16)
+    if not head or len(head) < 10:
+        return None
+    if head[8] != 0x01 or head[9] != 0x02:  # s08=513 (0x0201), s09=2
+        return None
+    pb = _read_bytes(h, ptr + SERVER_PORT_OFF, 2)
+    if not pb or len(pb) < 2:
+        return None
+    port = int.from_bytes(pb, "little")
+    if not (0 < port < 65536):
+        return None
+    return port
+
+
+def _scan_server_in_vector(h: wt.HANDLE, adrbeg: int) -> Optional[tuple[int, int]]:
+    """コンテナ内の各 dword を候補ポインタとして走査する。
+
+    戻り値: (server ポインタ, ポート)。見つからなければ None。
+    """
+    blob = _read_bytes(h, adrbeg, _VECTOR_SIZE)
+    if not blob:
+        return None
+    seen: set[int] = set()
+    for i in range(0, len(blob) - 3, 4):
+        c = int.from_bytes(blob[i:i + 4], "little")
+        if c in seen:
+            continue
+        seen.add(c)
+        if c % 4 or not (0x10000 <= c <= 0x7FFF0000):
+            continue
+        port = _looks_like_recruiting_server(h, c)
+        if port is not None:
+            return c, port
+    return None
+
+
+# ========================
 # main public API
 # ========================
 
@@ -631,6 +682,29 @@ def read_detection_state() -> DetectionState:
             server09 = None
             server08 = None
             # phase = None
+
+        # +0x04 決め打ちで募集シグネチャが取れない場合のフォールバック走査
+        global _scan_last_ts, _scan_hit
+        if pnet and adrbeg and not (server08 == 513 and server09 == 2):
+            hit_port: Optional[int] = None
+            if _scan_hit is not None:
+                # 前回ヒットの再検証 (走査より遥かに安い)
+                hit_port = _looks_like_recruiting_server(h, _scan_hit)
+                if hit_port is None:
+                    _scan_hit = None
+            if _scan_hit is None:
+                now_mono = time.monotonic()
+                if now_mono - _scan_last_ts >= _SCAN_INTERVAL_SEC:
+                    _scan_last_ts = now_mono
+                    found = _scan_server_in_vector(h, adrbeg)
+                    if found is not None:
+                        _scan_hit, hit_port = found
+            if _scan_hit is not None and hit_port is not None:
+                server = _scan_hit
+                server08, server09, port = 513, 2, hit_port
+        elif not pnet:
+            _scan_hit = None
+
         mode = _decide_mode(server08, server09, scene_id)
 
         lcid = _read_u32le(h, LCHARID)
@@ -642,7 +716,7 @@ def read_detection_state() -> DetectionState:
 
         raw = (
             f"scene={scene_id} comm={comm_mode} pnet={'y' if pnet else 'n'} "
-            f"adr={adrbeg or 0:x} srv={server or 0:x} "
+            f"adr={adrbeg or 0:x} srv={server or 0:x} scan={_scan_hit or 0:x} "
             f"s08={server08} s09={server09} port={port} "
             f"giu={'y' if giu else 'n'} ap={'y' if ap else 'n'} mode={mode}"
         )
