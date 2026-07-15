@@ -1786,7 +1786,10 @@ async def choose_initial_rank(body: ChooseRankIn, request: Request) -> dict[str,
 
 
 @app.get("/posts")
-async def list_posts() -> list[dict[str, Any]]:
+async def list_posts(request: Request) -> list[dict[str, Any]]:
+    # 募集一覧 (カジュアル/ランクマとも) の閲覧はログイン必須
+    if await resolve_session(request) is None:
+        raise HTTPException(status_code=401, detail="login required")
     return sorted_public_posts()
 
 
@@ -2217,6 +2220,9 @@ async def legacy_upsert() -> None:
 
 @app.get("/sse/posts")
 async def sse_posts(request: Request):
+    # 募集一覧の閲覧はログイン必須
+    if await resolve_session(request) is None:
+        raise HTTPException(status_code=401, detail="login required")
     q = await HUB.subscribe()
 
     async def gen():

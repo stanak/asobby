@@ -322,10 +322,13 @@
   <div id="rank-choice-error" hidden></div>
 </div>
 
-<div class="section-title">ランクマ募集</div>
-<div id="ranked-gate" class="gate" hidden>
-  ランクマ募集を見るには <a href="/auth/discord/web">Discord ログイン</a> が必要です
+<div id="login-gate" class="gate" hidden>
+  募集一覧を見るには Discord ログインが必要です。<br>
+  asobby クライアント（トレイメニュー「Discord でログイン」）からログインしてください。
 </div>
+
+<div id="lobby-body" hidden>
+<div class="section-title">ランクマ募集</div>
 <div id="ranked-section" hidden>
   <div class="count" id="ranked-count"></div>
   <main>
@@ -367,6 +370,7 @@
   </table>
   <div id="casual-empty" class="empty" hidden>現在カジュアル募集はありません</div>
 </main>
+</div>
 
 <div id="toast-container" aria-live="polite"></div>
 
@@ -429,7 +433,8 @@ const rankedEmptyEl = document.getElementById("ranked-empty");
 const casualEmptyEl = document.getElementById("casual-empty");
 const rankedCountEl = document.getElementById("ranked-count");
 const casualCountEl = document.getElementById("casual-count");
-const rankedGateEl = document.getElementById("ranked-gate");
+const loginGateEl = document.getElementById("login-gate");
+const lobbyBodyEl = document.getElementById("lobby-body");
 const rankedSectionEl = document.getElementById("ranked-section");
 const statusEl = document.getElementById("status");
 const authInfoEl = document.getElementById("auth-info");
@@ -702,6 +707,9 @@ function fillTable(tbody, list) {
 }
 
 function render() {
+  loginGateEl.hidden = loggedIn;
+  lobbyBodyEl.hidden = !loggedIn;
+  if (!loggedIn) return;
   if (openPopoverId && !posts.has(openPopoverId)) {
     closePopover();
   }
@@ -711,10 +719,8 @@ function render() {
 
   if (myRank) {
     ranked = ranked.filter((p) => (p.rank || "easy").toLowerCase() === myRank);
-    rankedGateEl.hidden = true;
     rankedSectionEl.hidden = false;
   } else {
-    rankedGateEl.hidden = false;
     rankedSectionEl.hidden = true;
     ranked = [];
   }
@@ -806,13 +812,6 @@ function showLoggedIn(user) {
   authInfoEl.hidden = false;
   authInfoEl.textContent = "";
   authInfoEl.appendChild(document.createTextNode(`${user.name} でログイン中 (${RANK_LABEL[myRank] || myRank})`));
-  const sep = document.createElement("span");
-  sep.textContent = " / ";
-  authInfoEl.appendChild(sep);
-  const logout = document.createElement("a");
-  logout.href = "/auth/logout";
-  logout.textContent = "ログアウト";
-  authInfoEl.appendChild(logout);
   statusEl.hidden = false;
   render();
 }
@@ -823,26 +822,41 @@ function showLoginRequired() {
   myName = "";
   myRank = null;
   rankChoiceBannerEl.hidden = true;
-  authInfoEl.hidden = false;
-  authInfoEl.textContent = "";
-  const login = document.createElement("a");
-  login.href = "/auth/discord/web";
-  login.textContent = "Discord でログイン";
-  authInfoEl.appendChild(login);
-  statusEl.hidden = false;
+  authInfoEl.hidden = true;
+  statusEl.hidden = true;
   render();
 }
 
-async function initAuth() {
-  connect();
+let sseStarted = false;
+let authPollTimer = null;
+
+async function checkAuth() {
   try {
     const res = await fetch("/auth/me");
     if (res.ok) {
+      if (authPollTimer) {
+        clearInterval(authPollTimer);
+        authPollTimer = null;
+      }
       showLoggedIn(await res.json());
-      return;
+      if (!sseStarted) {
+        sseStarted = true;
+        connect();  // 募集一覧 (SSE) はログイン済みのときだけ購読できる
+      }
+      return true;
     }
   } catch (_) {}
+  return false;
+}
+
+async function initAuth() {
+  if (await checkAuth()) return;
   showLoginRequired();
+  // クライアント経由でログインが完了したらリロードなしで反映する
+  authPollTimer = setInterval(checkAuth, 10000);
+  document.addEventListener("visibilitychange", () => {
+    if (!loggedIn && document.visibilityState === "visible") checkAuth();
+  });
 }
 
 function connect() {
