@@ -96,22 +96,22 @@ async def test_message_unauthorized():
         post, _ = await create_post(client)
         res = await client.post(
             f"/posts/{post['id']}/message",
-            json={"type": "thanks"},
+            json={"type": "giuroll_request"},
         )
         assert res.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_thanks_delivered_via_update():
+async def test_giuroll_request_delivered_via_update():
     async with app_client() as client:
         await create_user("host1", name="host")
         await create_user("viewer1", name="viewer")
-        post, owner_token = await create_post(client)
+        post, owner_token = await create_post(client, giuroll=False)
 
         viewer_token = bearer_token("viewer1", "viewer")
         res = await client.post(
             f"/posts/{post['id']}/message",
-            json={"type": "thanks"},
+            json={"type": "giuroll_request"},
             headers={"Authorization": f"Bearer {viewer_token}"},
         )
         assert res.status_code == 200
@@ -129,7 +129,7 @@ async def test_thanks_delivered_via_update():
         assert upd.status_code == 200
         data = upd.json()
         assert len(data["messages"]) == 1
-        assert data["messages"][0]["type"] == "thanks"
+        assert data["messages"][0]["type"] == "giuroll_request"
         assert data["messages"][0]["from_name"] == "viewer"
 
         upd2 = await client.post(
@@ -208,12 +208,12 @@ async def test_message_cooldown():
     async with app_client() as client:
         await create_user("host1", name="host")
         await create_user("viewer1", name="viewer")
-        post, _ = await create_post(client)
+        post, _ = await create_post(client, giuroll=False)
         viewer_token = bearer_token("viewer1", "viewer")
 
         res1 = await client.post(
             f"/posts/{post['id']}/message",
-            json={"type": "thanks"},
+            json={"type": "giuroll_request"},
             headers={"Authorization": f"Bearer {viewer_token}"},
         )
         assert res1.status_code == 200
@@ -222,7 +222,7 @@ async def test_message_cooldown():
 
         res2 = await client.post(
             f"/posts/{post['id']}/message",
-            json={"type": "thanks"},
+            json={"type": "giuroll_request"},
             headers={"Authorization": f"Bearer {viewer_token}"},
         )
         assert res2.status_code == 429
@@ -234,12 +234,12 @@ async def test_message_not_found_and_own_post():
     async with app_client() as client:
         await create_user("host1", name="host")
         await create_user("viewer1", name="viewer")
-        post, _ = await create_post(client, user_id="host1", name="host")
+        post, _ = await create_post(client, user_id="host1", name="host", giuroll=False)
 
         viewer_token = bearer_token("viewer1", "viewer")
         res = await client.post(
             "/posts/nonexistent/message",
-            json={"type": "thanks"},
+            json={"type": "giuroll_request"},
             headers={"Authorization": f"Bearer {viewer_token}"},
         )
         assert res.status_code == 404
@@ -247,7 +247,7 @@ async def test_message_not_found_and_own_post():
         host_token = bearer_token("host1", "host")
         res = await client.post(
             f"/posts/{post['id']}/message",
-            json={"type": "thanks"},
+            json={"type": "giuroll_request"},
             headers={"Authorization": f"Bearer {host_token}"},
         )
         assert res.status_code == 400
@@ -427,41 +427,3 @@ async def test_reply_auth_and_not_found():
             },
         )
         assert unknown.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_thanks_not_replyable():
-    async with app_client() as client:
-        await create_user("host1", name="host")
-        await create_user("viewer1", name="viewer")
-        post, owner_token = await create_post(client)
-        viewer_token = bearer_token("viewer1", "viewer")
-
-        await client.post(
-            f"/posts/{post['id']}/message",
-            json={"type": "thanks"},
-            headers={"Authorization": f"Bearer {viewer_token}"},
-        )
-        upd = await client.post(
-            "/posts/update",
-            json={
-                "id": post["id"],
-                "owner_token": owner_token,
-                "post_type": "casual",
-                "addr": "1.2.3.4:10800",
-            },
-        )
-        message_id = upd.json()["messages"][0]["id"]
-        rec = main.RECORDS[post["id"]]
-        assert message_id not in rec.sent_log
-
-        res = await client.post(
-            "/posts/reply",
-            json={
-                "id": post["id"],
-                "owner_token": owner_token,
-                "message_id": message_id,
-                "reply": "accept",
-            },
-        )
-        assert res.status_code == 404

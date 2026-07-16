@@ -56,7 +56,6 @@ Discord ログイン済みの Web ロビー閲覧者が、募集中のホスト�
 | --- | --- | --- |
 | `giuroll_request` | Giuroll を使ってほしい | 対象投稿の `giuroll` が false のときのみ |
 | `casual_invite` | カジュアル対戦のお誘い | 対象投稿の `post_type` が `ranked` のときのみ |
-| `thanks` | 対戦ありがとうございました | 常に送信可 |
 
 - `POST /posts/{id}/message` は Discord セッション必須（未ログイン 401）
 - 自分の投稿へは 400。条件不一致は 409
@@ -68,7 +67,7 @@ Discord ログイン済みの Web ロビー閲覧者が、募集中のホスト�
 - ホストクライアントは `POST /posts/reply` で `accept` または `decline` を返す
 - 送信時に付与された `message_id`（ハートビート応答 `messages[].id`）が必要
 - 返信は SSE `message_reply` イベントで送信者の Web ロビーページへ配信される
-- 同一 `message_id` への再返信は 409。`thanks` は返信対象外（`sent_log` に載らず reply は 404）
+- 同一 `message_id` への再返信は 409
 
 ## 永続化 (PostgreSQL)
 

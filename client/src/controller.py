@@ -365,11 +365,6 @@ class Controller:
             )
         if msg_type == "casual_invite":
             return f"{from_name} さんからカジュアル対戦のお誘いが届きました"
-        if msg_type == "thanks":
-            return (
-                f"{from_name} さんから「対戦ありがとうございました」"
-                "が届きました"
-            )
         return f"{from_name} さんからメッセージが届きました"
 
     async def reply_request(self, message_id: str, reply: str) -> None:
@@ -528,9 +523,6 @@ class Controller:
                                 )
                             else:
                                 self.notify_sink(text)
-                            self.log_sink("info", text)
-                        elif msg_type == "thanks":
-                            self.notify_sink(text)
                             self.log_sink("info", text)
                     guest_connected = resp.get("guest_connected")
                     if not guest_connected:

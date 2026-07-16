@@ -273,7 +273,7 @@ class ChooseRankIn(BaseModel):
 
 
 class PostMessageIn(BaseModel):
-    type: Literal["giuroll_request", "casual_invite", "thanks"]
+    type: Literal["giuroll_request", "casual_invite"]
 
 
 class PostReplyIn(BaseModel):
