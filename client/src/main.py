@@ -8,11 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from time import sleep
 
-import pystray
 from PIL import Image, ImageDraw
 from pystray import Menu, MenuItem
 
 from controller import Controller
+from tray_icon import TrayIcon
 from services import (
     Post,
     POST_TYPE_LABEL,
@@ -50,7 +50,7 @@ class TrayApp:
     """
 
     def __init__(self) -> None:
-        self.icon: pystray.Icon | None = None
+        self.icon: TrayIcon | None = None
         self.tk_root = None  # run() で作る tkinter のルート (非表示)
         self.post: Post = Post()
 
@@ -527,7 +527,7 @@ class TrayApp:
 
         threading.Thread(target=self._run_loop, daemon=True, name="asyncio-loop").start()
 
-        self.icon = pystray.Icon(
+        self.icon = TrayIcon(
             "asobby",
             icon=self._icons["idle"],
             title=f"asobby v{__version__} - {self._status_text()}",
