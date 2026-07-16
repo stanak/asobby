@@ -31,6 +31,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 import db
+import geoip
 
 ALLOWED_STREAM_DOMAINS = {
     "youtube.com",
@@ -194,6 +195,8 @@ class Post:
     guest_avatar: str = ""
     guest_connected: bool = False  # プローブでゲスト検出中
     ranked_active: bool = False  # 現在のゲストとのセッションがランクマ扱いか
+    country_code: str = ""  # addr の IP から推定した ISO 3166-1 alpha-2
+    country_name: str = ""  # 表示用国名（日本語優先）
 
 
 @dataclass
@@ -596,6 +599,8 @@ async def lifespan(app: FastAPI):
     if DATABASE_URL:
         await asyncio.to_thread(run_migrations)
         db.init_engine(DATABASE_URL)
+    if await asyncio.to_thread(geoip.ensure_geoip_db):
+        await asyncio.to_thread(geoip.init_geoip)
     cleanup_task = asyncio.create_task(cleanup_loop())
     guest_probe_task = asyncio.create_task(guest_probe_loop())
     try:
@@ -1848,6 +1853,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         updated_at=now,
         created_at=now,
     )
+    geoip.apply_country_from_addr(post, addr=post.addr)
     rec = PostRecord(
         post=post,
         owner_token=secrets.token_urlsafe(24),
@@ -1886,6 +1892,7 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     p.match_status = body.match_status
     p.net_status = body.net_status
     p.updated_at = now_ts()
+    geoip.apply_country_from_addr(p, addr=p.addr)
 
     messages = list(rec.pending_messages)
     rec.pending_messages.clear()

@@ -132,6 +132,16 @@
   }
   button.copy:hover { border-color: var(--accent); }
   button.copy.copied { color: var(--ok); border-color: var(--ok); }
+  td.addr-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .country-flag {
+    cursor: help;
+    font-size: 16px;
+    line-height: 1;
+  }
   .empty {
     padding: 24px 0;
     text-align: center;
@@ -404,6 +414,14 @@ const REQ_TYPE_LABEL = {
   casual_invite: "カジュアル対戦のお誘い",
 };
 
+function countryFlag(code) {
+  if (!code || code.length !== 2) return "";
+  const upper = code.toUpperCase();
+  return String.fromCodePoint(
+    ...[...upper].map((c) => 0x1f1e6 - 65 + c.charCodeAt(0))
+  );
+}
+
 function showReplyToast(data) {
   if (!loggedIn || !myUserId || data.to_user_id !== myUserId) return;
 
@@ -669,6 +687,15 @@ function buildRow(p) {
   tr.appendChild(comment);
 
   const addr = document.createElement("td");
+  addr.className = "addr-cell";
+  if (p.country_code) {
+    const flag = document.createElement("span");
+    flag.className = "country-flag";
+    flag.textContent = countryFlag(p.country_code);
+    flag.title = p.country_name || p.country_code;
+    flag.setAttribute("aria-label", p.country_name || p.country_code);
+    addr.appendChild(flag);
+  }
   const btn = document.createElement("button");
   btn.className = "copy";
   btn.textContent = p.addr;

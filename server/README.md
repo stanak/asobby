@@ -43,6 +43,23 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 - autopunch ホストは AutoPunch リレー経由で検証する（リレー lookup → hole punch → soku echo）。リレー先は環境変数 `ASOBBY_AUTOPUNCH_RELAY` で変更可能（既定 `delthas.fr:14763`）。リレー自体に到達できない場合は検証をスキップする（fail-open）
 - 作成レート制限: IP あたり 2 秒間隔・同時 2 件まで
 - 旧 `POST /posts/upsert` は 410 Gone を返す（旧クライアントへの更新案内）
+- 募集の `addr` IP から国コードを推定し、Web ロビーのアドレス横に国旗を表示する（マウスオーバーで国名）。MaxMind GeoLite2-Country を使用
+
+### GeoIP（国旗表示）
+
+起動時に `GeoLite2-Country.mmdb` を読み込む。ファイルが無い場合は
+`GEOIP_MAXMIND_ACCOUNT_ID` / `GEOIP_MAXMIND_LICENSE_KEY` が設定されていれば
+MaxMind から自動ダウンロードする（[無料アカウント](https://www.maxmind.com/en/geolite2/signup) が必要）。
+
+```sh
+fly secrets set \
+  GEOIP_MAXMIND_ACCOUNT_ID=<Account ID> \
+  GEOIP_MAXMIND_LICENSE_KEY=<License key>
+```
+
+- 任意: `GEOIP_COUNTRY_DB` で DB ファイルのパスを上書き（既定 `app/GeoLite2-Country.mmdb`）
+- DB 未設定時は国旗は表示されず、他機能は通常動作
+- GeoLite2 利用時は MaxMind への帰属表示が必要（[利用規約](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data)）
 
 ### Web ロビーからホストへのメッセージ
 

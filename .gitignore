@@ -39,3 +39,6 @@ server/redis_data/
 
 # ローカル戦績 DB
 matches.db
+
+# GeoIP (MaxMind GeoLite2, download at runtime)
+GeoLite2-Country.mmdb
