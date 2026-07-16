@@ -558,6 +558,10 @@ function buildMessageCell(p) {
   const cell = document.createElement("td");
   cell.className = "msg-cell";
 
+  if (p.net_status === NET_BATTLE) {
+    return cell;
+  }
+
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "msg-btn";
@@ -746,8 +750,11 @@ function render() {
   loginGateEl.hidden = loggedIn;
   lobbyBodyEl.hidden = !loggedIn;
   if (!loggedIn) return;
-  if (openPopoverId && !posts.has(openPopoverId)) {
-    closePopover();
+  if (openPopoverId) {
+    const openPost = posts.get(openPopoverId);
+    if (!openPost || openPost.net_status === NET_BATTLE) {
+      closePopover();
+    }
   }
   const all = [...posts.values()];
   let ranked = all.filter((p) => (p.post_type || "casual") === "ranked");
