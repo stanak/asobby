@@ -249,3 +249,54 @@ async def test_replay_filename_sanitized():
         assert "/" not in filename
         assert "\\" not in filename
         assert ":" not in filename
+
+
+@pytest.mark.asyncio
+async def test_replay_upload_profile_fallback_for_host():
+    """ゲスト報告のみの match に、プロファイル照合でホストリプレイを紐付ける。"""
+    async with app_client() as client:
+        await create_user("100", name="host", last_ip="1.2.3.4")
+        await create_user("200", name="guest", last_ip="5.6.7.8")
+
+        guest_token = bearer_token("200", "guest")
+        gr = await client.post(
+            "/matches/report",
+            json={
+                "winner": "guest",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "HostP",
+                "guest_profile": "GuestP",
+            },
+            headers={"Authorization": f"Bearer {guest_token}"},
+        )
+        assert gr.status_code == 200
+        assert gr.json()["recorded"] is True
+
+        host_token = bearer_token("100", "host")
+        up = await client.post(
+            "/replays/upload",
+            params={
+                "battle_ts": main.time.time(),
+                "host_profile": "HostP",
+                "guest_profile": "GuestP",
+                "winner": "guest",
+                "my_side": "host",
+            },
+            content=REPLAY_DATA,
+            headers={
+                "Authorization": f"Bearer {host_token}",
+                "Content-Type": "application/octet-stream",
+            },
+        )
+        assert up.status_code == 200
+        data = up.json()
+        assert data["stored"] is True
+
+        async with db.session() as s:
+            from sqlalchemy import select
+
+            res = await s.execute(select(db.Match))
+            match = res.scalar_one()
+            assert match.host_user_id == "100"
+            assert await db.replay_count_for_match(match.id) == 1

@@ -569,6 +569,40 @@ async def find_match_for_replay(
         return res.scalar_one_or_none()
 
 
+async def find_match_for_replay_by_profiles(
+    user_id: str,
+    around_ts: datetime,
+    window_sec: int,
+    *,
+    host_profile: str,
+    guest_profile: str,
+    winner: str,
+    my_side: str,
+) -> Optional[Match]:
+    """user_id 一致で見つからない場合、プロファイル一致の未リプレイ match を返す。
+
+    ゲスト報告が先行し host_user_id が未設定の行に、ホスト側リプレイを
+    紐付けるためのフォールバック。"""
+    near = await find_near_match_by_profiles(
+        around_ts, winner, host_profile, guest_profile, window_sec=window_sec
+    )
+    if near is None:
+        return None
+    if await replay_count_for_match(near.id) > 0:
+        return None
+    if near.host_user_id == user_id or near.guest_user_id == user_id:
+        return near
+    if my_side == "host" and not near.host_user_id:
+        if await claim_match_side(near.id, "host", user_id):
+            async with session() as s:
+                return await s.get(Match, near.id)
+    if my_side == "client" and not near.guest_user_id:
+        if await claim_match_side(near.id, "guest", user_id):
+            async with session() as s:
+                return await s.get(Match, near.id)
+    return None
+
+
 async def insert_replay(match_id: str, filename: str, data: bytes) -> bool:
     """リプレイを insert する。unique 制約違反時は False。"""
     async with session() as s:

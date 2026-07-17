@@ -2058,7 +2058,14 @@ def build_replay_filename(match: db.Match) -> str:
 
 
 @app.post("/replays/upload")
-async def upload_replay(request: Request, battle_ts: float = 0) -> dict[str, Any]:
+async def upload_replay(
+    request: Request,
+    battle_ts: float = 0,
+    host_profile: str = "",
+    guest_profile: str = "",
+    winner: str = "",
+    my_side: str = "",
+) -> dict[str, Any]:
     """ログインユーザーの直近対戦リプレイを受け取る。
 
     battle_ts (unix 秒; 対戦終了時刻) が付いていればその時刻の周辺で
@@ -2086,8 +2093,18 @@ async def upload_replay(request: Request, battle_ts: float = 0) -> dict[str, Any
             around = candidate
 
     # battle_ts なし (旧クライアント) はアップロード遅延分だけ窓を広げる
-    window = 90 if battle_ts > 0 else 180
+    window = 180 if battle_ts > 0 else 240
     match = await db.find_match_for_replay(sess["id"], around, window_sec=window)
+    if match is None and host_profile and guest_profile and winner in ("host", "guest"):
+        match = await db.find_match_for_replay_by_profiles(
+            sess["id"],
+            around,
+            window_sec=window,
+            host_profile=host_profile,
+            guest_profile=guest_profile,
+            winner=winner,
+            my_side=my_side,
+        )
     if match is None:
         recent = await db.find_match_for_replay(
             sess["id"], around, window_sec=window, require_no_replay=False

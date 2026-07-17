@@ -36,8 +36,9 @@ DETECT_INTERVAL_SEC = 0.05
 REPLAY_MAX_BYTES = 300 * 1024
 REPLAY_POLL_INTERVAL_SEC = 2.0
 REPLAY_POLL_TIMEOUT_SEC = 60.0
-REPLAY_UPLOAD_RETRIES = 3
-REPLAY_UPLOAD_RETRY_DELAY_SEC = 15.0
+REPLAY_UPLOAD_RETRIES = 6
+REPLAY_UPLOAD_RETRY_DELAY_SEC = 10.0
+REPLAY_RESULT_WAIT_SEC = 30.0
 REPLAY_MTIME_MARGIN_SEC = 10.0
 
 STATS_SYNC_INITIAL_DELAY_SEC = 10.0
@@ -131,8 +132,10 @@ class Controller:
 
         self._battle_start_ts = 0.0
         self._replay_pending = False
-        self._uploaded_replays: set[str] = set()
-        self._pending_replay_upload: Optional[Tuple[float, str]] = None
+        self._uploaded_replay_keys: set[tuple[str, int]] = set()
+        self._replay_result_reported = False
+        self._replay_match_meta: Optional[dict[str, str]] = None
+        self._replay_upload_lock = asyncio.Lock()
 
         self.pending_requests: list[PendingRequest] = []
 
@@ -489,10 +492,6 @@ class Controller:
             act = self.on_detect(st, my_ip=my_ip)
             if act:
                 await self._action_q.put(act)
-            if self._pending_replay_upload is not None:
-                battle_start_ts, exe_path = self._pending_replay_upload
-                self._pending_replay_upload = None
-                asyncio.create_task(self._upload_replay(battle_start_ts, exe_path))
             if self._pending_local_match is not None:
                 payload = self._pending_local_match
                 self._pending_local_match = None
@@ -567,6 +566,7 @@ class Controller:
                             host_profile=act.payload.get("host_profile", ""),
                             guest_profile=act.payload.get("guest_profile", ""),
                         )
+                        self._replay_result_reported = True
                         self.log_sink(
                             "info",
                             f"Match result reported: {act.payload['winner']}",
@@ -583,6 +583,8 @@ class Controller:
                             host_profile=act.payload.get("host_profile", ""),
                             guest_profile=act.payload.get("guest_profile", ""),
                         )
+                        if resp.get("recorded") or resp.get("reason") == "duplicate":
+                            self._replay_result_reported = True
                         if resp.get("recorded"):
                             self.log_sink(
                                 "info",
@@ -760,6 +762,7 @@ class Controller:
         if is_net_battle and self._battle_start_ts == 0.0:
             if self._stable_for("battle_enter", 0.5, seen=True):
                 self._battle_start_ts = now
+                self._replay_result_reported = False
 
         if (
             is_net_battle
@@ -771,11 +774,22 @@ class Controller:
             and (st.lwin == 2 or st.rwin == 2)
         ):
             self._replay_pending = True
+            self._replay_match_meta = {
+                "host_profile": (st.lprof or ""),
+                "guest_profile": (st.rprof or ""),
+                "winner": "host" if st.lwin == 2 else "guest",
+                "my_side": st.net_side or "",
+            }
 
         if self._replay_pending and not is_net_battle:
             self._replay_pending = False
-            self._pending_replay_upload = (self._battle_start_ts, st.exe_path)
+            battle_start_ts = self._battle_start_ts
+            battle_end_ts = now
+            exe_path = st.exe_path
             self._battle_start_ts = 0.0
+            asyncio.create_task(
+                self._schedule_replay_upload(battle_start_ts, battle_end_ts, exe_path)
+            )
 
         # -----------------
         # ホスト検知時の IP:Port クリップボードコピー (設定 ON のときのみ)。
@@ -907,53 +921,23 @@ class Controller:
         return dirs
 
     @staticmethod
-    def _newest_dir_chain(root: Path, max_depth: int = 4) -> list[Path]:
-        """root から「更新日時が最新のサブフォルダ」を辿ったフォルダ一覧を返す。
-
-        リプレイ整理 Mod は replay/YY/MM/DD/ のようなサブフォルダに保存する。
-        全体を再帰探索するとリプレイ数によっては重いため、直近の対戦が
-        入っているとみられる最新フォルダの系列だけを探索対象にする。
-        """
-        out = [root]
-        cur = root
-        for _ in range(max_depth):
-            try:
-                subs = [c for c in cur.iterdir() if c.is_dir()]
-            except OSError:
-                break
-            if not subs:
-                break
-
-            def _mtime(p: Path) -> float:
-                try:
-                    return p.stat().st_mtime
-                except OSError:
-                    return 0.0
-
-            cur = max(subs, key=_mtime)
-            out.append(cur)
-        return out
+    def _replay_upload_key(path: Path) -> tuple[str, int]:
+        try:
+            return (str(path), int(path.stat().st_mtime))
+        except OSError:
+            return (str(path), 0)
 
     def _find_latest_replay(
-        self, dirs: list[Path], battle_start_ts: float, *, deep: bool = False
+        self, dirs: list[Path], battle_start_ts: float
     ) -> Optional[Path]:
-        cutoff = battle_start_ts - REPLAY_MTIME_MARGIN_SEC
+        cutoff = battle_start_ts - REPLAY_MTIME_MARGIN_SEC if battle_start_ts > 0 else 0.0
         candidates: list[Path] = []
         for d in dirs:
             if not d.is_dir():
                 continue
             try:
-                if deep:
-                    # 最終手段: 全体を再帰探索 (想定外のフォルダ構成向け)
-                    reps = d.rglob("*.rep")
-                else:
-                    reps = (
-                        rep
-                        for sub in self._newest_dir_chain(d)
-                        for rep in sub.glob("*.rep")
-                    )
-                for rep in reps:
-                    if str(rep) in self._uploaded_replays:
+                for rep in d.glob("*.rep"):
+                    if self._replay_upload_key(rep) in self._uploaded_replay_keys:
                         continue
                     try:
                         if rep.stat().st_mtime >= cutoff:
@@ -966,8 +950,26 @@ class Controller:
             return None
         return max(candidates, key=lambda p: p.stat().st_mtime)
 
-    async def _upload_replay(self, battle_start_ts: float, exe_path: str) -> None:
-        battle_end_ts = time.time()
+    async def _schedule_replay_upload(
+        self, battle_start_ts: float, battle_end_ts: float, exe_path: str
+    ) -> None:
+        deadline = time.time() + REPLAY_RESULT_WAIT_SEC
+        while time.time() < deadline and not self._replay_result_reported:
+            await asyncio.sleep(0.25)
+        async with self._replay_upload_lock:
+            meta = dict(self._replay_match_meta or {})
+            self._replay_match_meta = None
+            await self._upload_replay(
+                battle_start_ts, battle_end_ts, exe_path, meta
+            )
+
+    async def _upload_replay(
+        self,
+        battle_start_ts: float,
+        battle_end_ts: float,
+        exe_path: str,
+        meta: dict[str, str],
+    ) -> None:
         if not self.is_logged_in():
             self.log_sink("info", "Replay upload skipped: not logged in")
             return
@@ -984,12 +986,6 @@ class Controller:
             if chosen is not None:
                 break
             await asyncio.sleep(REPLAY_POLL_INTERVAL_SEC)
-
-        if chosen is None:
-            # 最新フォルダ系列で見つからない場合のみ全体を再帰探索する
-            chosen = await asyncio.to_thread(
-                self._find_latest_replay, dirs, battle_start_ts, deep=True
-            )
 
         if chosen is None:
             self.log_sink("info", "Replay file not found after battle")
@@ -1017,6 +1013,8 @@ class Controller:
             self.log_sink("error", f"Replay read failed: {e}")
             return
 
+        upload_key = self._replay_upload_key(chosen)
+
         # 対戦相手側の報告 (host result / guest report) がまだ届いておらず
         # no_match になることがあるためリトライする
         resp: dict = {}
@@ -1024,7 +1022,14 @@ class Controller:
             if attempt > 0:
                 await asyncio.sleep(REPLAY_UPLOAD_RETRY_DELAY_SEC)
             try:
-                resp = await self.api.upload_replay(data, battle_ts=battle_end_ts)
+                resp = await self.api.upload_replay(
+                    data,
+                    battle_ts=battle_end_ts,
+                    host_profile=meta.get("host_profile", ""),
+                    guest_profile=meta.get("guest_profile", ""),
+                    winner=meta.get("winner", ""),
+                    my_side=meta.get("my_side", ""),
+                )
             except httpx.HTTPError as e:
                 self.log_sink("error", f"Replay upload failed: {e}")
                 return
@@ -1036,11 +1041,12 @@ class Controller:
                 "info",
                 f"Replay uploaded: {resp.get('filename', chosen.name)}",
             )
+            self._uploaded_replay_keys.add(upload_key)
         else:
             reason = resp.get("reason", "unknown")
             self.log_sink("info", f"Replay not stored: {reason}")
-
-        self._uploaded_replays.add(str(chosen))
+            if reason == "duplicate":
+                self._uploaded_replay_keys.add(upload_key)
 
     async def _record_local_match(self, payload: dict) -> None:
         try:
