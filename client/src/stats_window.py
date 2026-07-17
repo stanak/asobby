@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
 
+from i18n import t
 from local_store import LocalStore
 from services import RANK_LABEL
 
@@ -175,11 +176,20 @@ def compute_summary(rows: list[dict], recent_sizes: tuple[int, ...] = (30, 50, 1
 
 def format_summary_text(summary: MatchSummary) -> str:
     parts = [
-        f"{summary.total} 戦 {summary.wins} 勝 {summary.losses} 敗",
-        f"勝率 {summary.win_rate:.1f}% (引分 {summary.draws})",
+        t(
+            "stats.summary_line",
+            total=summary.total,
+            wins=summary.wins,
+            losses=summary.losses,
+        ),
+        t(
+            "stats.summary_rate",
+            rate=summary.win_rate,
+            draws=summary.draws,
+        ),
     ]
     recent_parts = [
-        f"直近{n}: {summary.recent_rates.get(n, 0.0):.1f}%"
+        t("stats.recent_rate", n=n, rate=summary.recent_rates.get(n, 0.0))
         for n in (30, 50, 100)
     ]
     return "　".join([" ".join(parts), " / ".join(recent_parts)])
@@ -265,26 +275,26 @@ def aggregate_by_opp_profile(rows: list[dict]) -> list[AggRow]:
     return _aggregate_rows(
         rows,
         key_fn=lambda r: LocalStore.opp_profile(r) or "",
-        label_fn=lambda p: p or "(不明)",
+        label_fn=lambda p: p or t("stats.unknown_paren"),
     )
 
 
 def format_filter_label(state: FilterState) -> str:
     parts: list[str] = []
     if state.my_char is not None:
-        parts.append(f"自キャラ={_char_label(state.my_char)}")
+        parts.append(t("stats.filter_my_char", char=_char_label(state.my_char)))
     if state.opp_char is not None:
-        parts.append(f"相手={_char_label(state.opp_char)}")
+        parts.append(t("stats.filter_opp_char", char=_char_label(state.opp_char)))
     if state.opp_profile is not None:
-        label = state.opp_profile or "(不明)"
-        parts.append(f"相手プロファイル={label}")
+        label = state.opp_profile or t("stats.unknown_paren")
+        parts.append(t("stats.filter_opp_profile", profile=label))
     if state.profile_search:
-        parts.append(f"プロファイル検索={state.profile_search}")
+        parts.append(t("stats.filter_profile_search", query=state.profile_search))
     if state.ranked_only:
-        parts.append("ランクマのみ")
+        parts.append(t("stats.filter_ranked_only"))
     if not parts:
-        return "絞り込みなし"
-    return "絞り込み: " + " / ".join(parts)
+        return t("stats.filter_none")
+    return t("stats.filter_prefix") + " / ".join(parts)
 
 
 def open_stats_window(parent, local_store: LocalStore) -> None:
@@ -308,7 +318,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
             pass
 
     win = tk.Toplevel(parent)
-    win.title("asobby 戦績")
+    win.title(t("stats.title"))
     win.geometry("1100x700")
     _open_window = win
 
@@ -316,7 +326,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
     filter_state = FilterState()
     history_limit = [HISTORY_PAGE]  # 「さらに表示」で増える表示上限
 
-    filter_label_var = tk.StringVar(value="絞り込みなし")
+    filter_label_var = tk.StringVar(value=t("stats.filter_none"))
     summary_var = tk.StringVar(value="")
     ranked_var = tk.BooleanVar(value=False)
     profile_search_var = tk.StringVar(value="")
@@ -334,12 +344,12 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         history_limit[0] = HISTORY_PAGE
         refresh_view()
 
-    ttk.Button(top_frame, text="クリア", command=clear_filters).pack(side="left", padx=(0, 8))
+    ttk.Button(top_frame, text=t("stats.clear"), command=clear_filters).pack(side="left", padx=(0, 8))
 
-    ranked_chk = ttk.Checkbutton(top_frame, text="ランクマのみ", variable=ranked_var)
+    ranked_chk = ttk.Checkbutton(top_frame, text=t("stats.ranked_only"), variable=ranked_var)
     ranked_chk.pack(side="left", padx=(0, 8))
 
-    ttk.Label(top_frame, text="プロファイル検索:").pack(side="left", padx=(8, 4))
+    ttk.Label(top_frame, text=t("stats.profile_search")).pack(side="left", padx=(8, 4))
     profile_search_entry = ttk.Entry(top_frame, textvariable=profile_search_var, width=16)
     profile_search_entry.pack(side="left", padx=(0, 8))
 
@@ -350,7 +360,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
 
     profile_search_entry.bind("<Return>", apply_profile_search)
 
-    ttk.Button(top_frame, text="更新", command=lambda: reload_data()).pack(side="right")
+    ttk.Button(top_frame, text=t("stats.refresh"), command=lambda: reload_data()).pack(side="right")
 
     # --- サマリ行 ---
     summary_label = ttk.Label(win, textvariable=summary_var, padding=(8, 4))
@@ -361,8 +371,24 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
     facet_pane.pack(fill="both", expand=True, padx=8, pady=(0, 4))
 
     stat_cols = ("label", "total", "wins", "losses", "rate")
-    stat_headings = ("キャラ", "対戦数", "勝", "負", "勝率")
-    prof_headings = ("プロファイル", "対戦数", "勝", "負", "勝率")
+
+    def _stat_headings() -> tuple[str, ...]:
+        return (
+            t("stats.col.char"),
+            t("stats.col.games"),
+            t("stats.col.wins"),
+            t("stats.col.losses"),
+            t("stats.col.win_rate"),
+        )
+
+    def _prof_headings() -> tuple[str, ...]:
+        return (
+            t("stats.col.profile"),
+            t("stats.col.games"),
+            t("stats.col.wins"),
+            t("stats.col.losses"),
+            t("stats.col.win_rate"),
+        )
 
     # ファセットごとのソート状態（絞り込み変更後も維持）
     my_char_sort = FacetSortState(col="label", asc=True)
@@ -415,23 +441,23 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         refresh_view()
 
     _, my_char_tree = _make_facet_frame(
-        "自キャラ別",
+        t("stats.my_char"),
         sort_state=my_char_sort,
-        headings=stat_headings,
+        headings=_stat_headings(),
         on_sort=lambda col: _toggle_facet_sort(my_char_sort, col),
     )
     _, opp_char_tree = _make_facet_frame(
-        "相手キャラ別",
+        t("stats.opp_char"),
         sort_state=opp_char_sort,
-        headings=stat_headings,
+        headings=_stat_headings(),
         on_sort=lambda col: _toggle_facet_sort(opp_char_sort, col),
     )
 
-    prof_frame = ttk.LabelFrame(facet_pane, text="相手プロファイル別", padding=4)
+    prof_frame = ttk.LabelFrame(facet_pane, text=t("stats.opp_profile"), padding=4)
     facet_pane.add(prof_frame, weight=1)
     prof_cols = ("label", "total", "wins", "losses", "rate")
     opp_prof_tree = ttk.Treeview(prof_frame, columns=prof_cols, show="headings", height=10)
-    for col, text in zip(prof_cols, prof_headings):
+    for col, text in zip(prof_cols, _prof_headings()):
         opp_prof_tree.heading(
             col,
             text=text,
@@ -450,14 +476,14 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
     opp_prof_tree.tag_configure("low", foreground="#cf222e")
 
     # --- 下段: 対戦履歴 ---
-    history_frame = ttk.LabelFrame(win, text="対戦履歴", padding=4)
+    history_frame = ttk.LabelFrame(win, text=t("stats.history"), padding=4)
     history_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
     history_bar = ttk.Frame(history_frame)
     history_bar.pack(fill="x", pady=(0, 4))
     history_count_var = tk.StringVar(value="")
     ttk.Label(history_bar, textvariable=history_count_var).pack(side="left")
-    more_btn = ttk.Button(history_bar, text="さらに表示")
+    more_btn = ttk.Button(history_bar, text=t("stats.more"))
     more_btn.pack(side="right")
 
     history_body = ttk.Frame(history_frame)
@@ -467,12 +493,12 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
     history_tree = ttk.Treeview(
         history_body, columns=history_cols, show="headings", height=12
     )
-    history_tree.heading("played_at", text="日時")
-    history_tree.heading("my_char", text="自キャラ")
-    history_tree.heading("opp_char", text="相手キャラ")
-    history_tree.heading("opp_profile", text="相手プロファイル")
-    history_tree.heading("result", text="勝敗")
-    history_tree.heading("ranked", text="ランクマ")
+    history_tree.heading("played_at", text=t("stats.col.played_at"))
+    history_tree.heading("my_char", text=t("stats.col.my_char"))
+    history_tree.heading("opp_char", text=t("stats.col.opp_char"))
+    history_tree.heading("opp_profile", text=t("stats.col.opp_profile"))
+    history_tree.heading("result", text=t("stats.col.result"))
+    history_tree.heading("ranked", text=t("stats.col.ranked"))
     history_tree.column("played_at", width=90, anchor="w")
     history_tree.column("my_char", width=80, anchor="w")
     history_tree.column("opp_char", width=80, anchor="w")
@@ -514,7 +540,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
             "",
             "end",
             iid=_ALL_IID,
-            values=("(すべて)", "", "", "", ""),
+            values=(t("stats.all"), "", "", "", ""),
         )
         select_iid = _ALL_IID
         for agg in agg_rows:
@@ -560,9 +586,9 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
             aggregate_by_opp_profile(prof_rows), opp_prof_sort, char_facet=False
         )
 
-        _update_facet_headings(my_char_tree, my_char_sort, stat_headings)
-        _update_facet_headings(opp_char_tree, opp_char_sort, stat_headings)
-        _update_facet_headings(opp_prof_tree, opp_prof_sort, prof_headings)
+        _update_facet_headings(my_char_tree, my_char_sort, _stat_headings())
+        _update_facet_headings(opp_char_tree, opp_char_sort, _stat_headings())
+        _update_facet_headings(opp_prof_tree, opp_prof_sort, _prof_headings())
 
         _populate_facet_tree(
             my_char_tree,
@@ -609,7 +635,9 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
                 ),
             )
         shown = min(limit, len(history_sorted))
-        history_count_var.set(f"{shown} / {len(history_sorted)} 件を表示")
+        history_count_var.set(
+            t("stats.history_count", shown=shown, total=len(history_sorted))
+        )
         if len(history_sorted) > limit:
             more_btn.state(["!disabled"])
         else:
@@ -625,7 +653,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         """DB 読み込みをワーカースレッドで行い、UI を固めない。"""
         import threading
 
-        summary_var.set("読み込み中...")
+        summary_var.set(t("stats.loading"))
         result: list[list[dict]] = []
 
         def worker() -> None:

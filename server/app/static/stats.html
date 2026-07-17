@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>asobby - 戦績</title>
+<title data-i18n="stats.pageTitle">asobby - 戦績</title>
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-RJSLH3FRBR"></script>
 <script>
@@ -12,6 +12,7 @@
   gtag('js', new Date());
   gtag('config', 'G-RJSLH3FRBR');
 </script>
+<script src="/static/i18n.js"></script>
 <style>
   :root {
     --bg: #14171c;
@@ -58,6 +59,17 @@
     text-decoration: none;
   }
   header nav a:hover { text-decoration: underline; }
+  header nav button#lang-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--accent);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 2px 8px;
+    font-family: inherit;
+  }
+  header nav button#lang-toggle:hover { border-color: var(--accent); }
   main { padding: 8px 20px 32px; max-width: 1280px; }
   .panel {
     background: var(--panel);
@@ -254,34 +266,35 @@
 </head>
 <body>
 <header>
-  <h1>asobby 戦績</h1>
-  <span class="sub">非想天則 対戦記録</span>
+  <h1 data-i18n="stats.title">asobby 戦績</h1>
+  <span class="sub" data-i18n="stats.subtitle">非想天則 対戦記録</span>
   <nav>
-    <a href="/">ロビー</a>
-    <a href="/replays">リプレイ検索</a>
-    <a href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer">クライアント DL</a>
-    <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer">ご支援</a>
+    <a href="/" data-i18n="nav.lobby">ロビー</a>
+    <a href="/replays" data-i18n="nav.replays">リプレイ検索</a>
+    <a href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
+    <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
+    <button type="button" id="lang-toggle">日本語</button>
   </nav>
 </header>
 
 <main>
-  <div id="loading">読み込み中...</div>
+  <div id="loading" data-i18n="common.loading">読み込み中...</div>
   <div id="gate" hidden>
-    <p>戦績を見るには Discord ログインが必要です</p>
-    <p>asobby クライアント（トレイメニュー「Discord でログイン」）からログインしてください</p>
+    <p data-i18n="stats.gateLine1">戦績を見るには Discord ログインが必要です</p>
+    <p data-i18n="common.loginGateClientHint">asobby クライアント（トレイメニュー「Discord でログイン」）からログインしてください</p>
   </div>
   <div id="content" hidden>
     <div class="sync-bar">
-      <button type="button" class="btn-more" id="resync-btn">サーバーと再同期</button>
+      <button type="button" class="btn-more" id="resync-btn" data-i18n="stats.resync">サーバーと再同期</button>
       <span id="resync-status"></span>
     </div>
     <div class="panel" id="overview"></div>
     <div class="panel" id="ranked-panel">
-      <h2>ランクマ</h2>
+      <h2 data-i18n="stats.ranked">ランクマ</h2>
       <div id="ranked-summary"></div>
     </div>
     <div class="panel" id="filter-panel">
-      <h2>絞り込み</h2>
+      <h2 data-i18n="stats.filter">絞り込み</h2>
       <div class="filter-bar" id="filter-bar"></div>
     </div>
     <div class="panel" id="summary-panel">
@@ -289,72 +302,77 @@
     </div>
     <div class="facets" id="facets">
       <div class="facet">
-        <h2>自キャラ別</h2>
+        <h2 data-i18n="stats.facetMyChar">自キャラ別</h2>
         <div class="facet-scroll">
           <table>
             <thead><tr data-facet="myChar">
-              <th class="sortable" data-col="char">キャラ</th>
-              <th class="sortable" data-col="games">対戦</th>
-              <th class="sortable" data-col="wins">勝</th>
-              <th class="sortable" data-col="losses">負</th>
-              <th class="sortable" data-col="winRate">勝率</th>
+              <th class="sortable" data-col="char" data-i18n="stats.colChar">キャラ</th>
+              <th class="sortable" data-col="games" data-i18n="stats.colGames">対戦</th>
+              <th class="sortable" data-col="wins" data-i18n="stats.colWins">勝</th>
+              <th class="sortable" data-col="losses" data-i18n="stats.colLosses">負</th>
+              <th class="sortable" data-col="winRate" data-i18n="stats.colWinRate">勝率</th>
             </tr></thead>
             <tbody id="facet-my-char"></tbody>
           </table>
         </div>
       </div>
       <div class="facet">
-        <h2>相手キャラ別</h2>
+        <h2 data-i18n="stats.facetOppChar">相手キャラ別</h2>
         <div class="facet-scroll">
           <table>
             <thead><tr data-facet="oppChar">
-              <th class="sortable" data-col="char">キャラ</th>
-              <th class="sortable" data-col="games">対戦</th>
-              <th class="sortable" data-col="wins">勝</th>
-              <th class="sortable" data-col="losses">負</th>
-              <th class="sortable" data-col="winRate">勝率</th>
+              <th class="sortable" data-col="char" data-i18n="stats.colChar">キャラ</th>
+              <th class="sortable" data-col="games" data-i18n="stats.colGames">対戦</th>
+              <th class="sortable" data-col="wins" data-i18n="stats.colWins">勝</th>
+              <th class="sortable" data-col="losses" data-i18n="stats.colLosses">負</th>
+              <th class="sortable" data-col="winRate" data-i18n="stats.colWinRate">勝率</th>
             </tr></thead>
             <tbody id="facet-opp-char"></tbody>
           </table>
         </div>
       </div>
       <div class="facet">
-        <h2>相手プロファイル別</h2>
+        <h2 data-i18n="stats.facetOppProfile">相手プロファイル別</h2>
         <div class="facet-scroll">
           <table>
             <thead><tr data-facet="oppProfile">
-              <th class="sortable" data-col="profile">プロファイル</th>
-              <th class="sortable" data-col="games">対戦</th>
-              <th class="sortable" data-col="wins">勝</th>
-              <th class="sortable" data-col="losses">負</th>
-              <th class="sortable" data-col="winRate">勝率</th>
+              <th class="sortable" data-col="profile" data-i18n="stats.colProfile">プロファイル</th>
+              <th class="sortable" data-col="games" data-i18n="stats.colGames">対戦</th>
+              <th class="sortable" data-col="wins" data-i18n="stats.colWins">勝</th>
+              <th class="sortable" data-col="losses" data-i18n="stats.colLosses">負</th>
+              <th class="sortable" data-col="winRate" data-i18n="stats.colWinRate">勝率</th>
             </tr></thead>
             <tbody id="facet-opp-profile"></tbody>
           </table>
         </div>
-        <button type="button" class="btn-more" id="profile-more" hidden>もっと見る</button>
+        <button type="button" class="btn-more" id="profile-more" hidden data-i18n="common.more">もっと見る</button>
       </div>
     </div>
     <div class="panel" id="history-panel">
-      <h2>対戦履歴</h2>
+      <h2 data-i18n="stats.history">対戦履歴</h2>
       <div class="history-scroll">
         <table>
           <thead><tr>
-            <th>日時</th><th>自キャラ</th><th>相手キャラ</th><th>相手プロファイル</th>
-            <th>勝敗</th><th>ランクマ</th><th>リプレイ</th>
+            <th data-i18n="stats.colDateTime">日時</th>
+            <th data-i18n="stats.colMyChar">自キャラ</th>
+            <th data-i18n="stats.colOppChar">相手キャラ</th>
+            <th data-i18n="stats.colOppProfile">相手プロファイル</th>
+            <th data-i18n="stats.colResult">勝敗</th>
+            <th data-i18n="stats.colRanked">ランクマ</th>
+            <th data-i18n="stats.colReplay">リプレイ</th>
           </tr></thead>
           <tbody id="history-rows"></tbody>
         </table>
       </div>
     </div>
     <div class="panel" id="import-panel">
-      <h2>天則観インポート</h2>
-      <p style="color:var(--muted);font-size:14px;margin:0 0 12px;line-height:1.5">
+      <h2 data-i18n="stats.importTitle">天則観インポート</h2>
+      <p style="color:var(--muted);font-size:14px;margin:0 0 12px;line-height:1.5" data-i18n="stats.importDesc">
         天則観 (tsk) の戦績DB (.db) をアップロードすると過去の対戦が取り込まれます。
         同じファイルを再アップロードしても重複しません。
       </p>
       <input type="file" id="tsk-file" accept=".db,application/x-sqlite3,application/octet-stream">
-      <button id="tsk-upload" style="margin-left:8px;padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">アップロード</button>
+      <button id="tsk-upload" style="margin-left:8px;padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px" data-i18n="common.upload">アップロード</button>
       <div id="tsk-result" style="margin-top:12px;font-size:14px"></div>
     </div>
   </div>
@@ -407,13 +425,30 @@ const SORT_FIRST_ASC = {
 };
 
 const SORT_COL_LABEL = {
-  char: "キャラ",
-  profile: "プロファイル",
-  games: "対戦",
-  wins: "勝",
-  losses: "負",
-  winRate: "勝率",
+  char: "stats.colChar",
+  profile: "stats.colProfile",
+  games: "stats.colGames",
+  wins: "stats.colWins",
+  losses: "stats.colLosses",
+  winRate: "stats.colWinRate",
 };
+
+function sortColLabel(col) {
+  const key = SORT_COL_LABEL[col];
+  return key ? t(key) : col;
+}
+
+function noneLabel() {
+  return t("common.none");
+}
+
+function localeTag() {
+  return getLang() === "ja" ? "ja-JP" : "en-US";
+}
+
+function compareLocale() {
+  return getLang() === "ja" ? "ja" : "en";
+}
 
 function charName(id) {
   return CHAR_NAME[id] || `CHAR_${id}`;
@@ -512,8 +547,9 @@ function groupByChar(matches, pickChar) {
 
 function groupByProfile(matches) {
   const map = new Map();
+  const none = noneLabel();
   for (const m of matches) {
-    const prof = oppProfile(m) || "(なし)";
+    const prof = oppProfile(m) || none;
     let row = map.get(prof);
     if (!row) {
       row = { profile: prof, wins: 0, losses: 0, draws: 0, games: 0 };
@@ -553,15 +589,16 @@ function sortCharFacetRows(rows, sortState) {
 function sortProfileFacetRows(rows, sortState) {
   const dir = sortState.asc ? 1 : -1;
   const col = sortState.col;
+  const loc = compareLocale();
   return rows.slice().sort((a, b) => {
     let cmp = 0;
-    if (col === "profile") cmp = a.profile.localeCompare(b.profile, "ja");
+    if (col === "profile") cmp = a.profile.localeCompare(b.profile, loc);
     else if (col === "games") cmp = a.games - b.games;
     else if (col === "wins") cmp = a.wins - b.wins;
     else if (col === "losses") cmp = a.losses - b.losses;
     else if (col === "winRate") cmp = a.winRate - b.winRate;
     if (cmp !== 0) return cmp * dir;
-    return a.profile.localeCompare(b.profile, "ja");
+    return a.profile.localeCompare(b.profile, loc);
   });
 }
 
@@ -571,9 +608,9 @@ function updateFacetSortHeaders() {
     const state = facetSort[facetKey];
     for (const th of tr.querySelectorAll("th.sortable")) {
       const col = th.dataset.col;
-      const label = SORT_COL_LABEL[col];
+      const label = sortColLabel(col);
       if (state.col === col) {
-        th.textContent = label + (state.asc ? " ▲" : " ▼");
+        th.textContent = label + (state.asc ? t("common.sortAsc") : t("common.sortDesc"));
       } else {
         th.textContent = label;
       }
@@ -609,7 +646,7 @@ function recentWinRates(matches, counts) {
 
 function formatJst(unixSec) {
   const d = new Date(unixSec * 1000);
-  return d.toLocaleString("ja-JP", {
+  return d.toLocaleString(localeTag(), {
     timeZone: "Asia/Tokyo",
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit",
@@ -618,10 +655,10 @@ function formatJst(unixSec) {
 }
 
 function resultSymbol(m) {
-  if (m.winner === "draw") return { text: "△", cls: "result-draw" };
+  if (m.winner === "draw") return { text: t("common.resultDraw"), cls: "result-draw" };
   return matchWon(m)
-    ? { text: "○", cls: "result-win" }
-    : { text: "×", cls: "result-loss" };
+    ? { text: t("common.resultWin"), cls: "result-win" }
+    : { text: t("common.resultLoss"), cls: "result-loss" };
 }
 
 function appendTextCell(tr, text, cls) {
@@ -661,7 +698,7 @@ function fillFacetCharTable(tbody, rows, dim, selected) {
     const td = document.createElement("td");
     td.colSpan = 5;
     td.style.color = "var(--muted)";
-    td.textContent = "データなし";
+    td.textContent = t("common.noData");
     tr.appendChild(td);
     frag.appendChild(tr);
   }
@@ -673,7 +710,7 @@ function fillFacetProfileTable(tbody, rows, selected) {
   for (const r of rows) {
     const tr = document.createElement("tr");
     tr.className = "facet-row";
-    const value = r.profile === "(なし)" ? "" : r.profile;
+    const value = r.profile === noneLabel() ? "" : r.profile;
     if (selected === value) tr.classList.add("selected");
     tr.dataset.dim = "oppProfile";
     tr.dataset.value = value;
@@ -689,7 +726,7 @@ function fillFacetProfileTable(tbody, rows, selected) {
     const td = document.createElement("td");
     td.colSpan = 5;
     td.style.color = "var(--muted)";
-    td.textContent = "データなし";
+    td.textContent = t("common.noData");
     tr.appendChild(td);
     frag.appendChild(tr);
   }
@@ -702,14 +739,14 @@ function renderFilterBar() {
 
   const chips = [];
   if (filter.myChar !== null) {
-    chips.push({ key: "myChar", label: `自キャラ: ${charName(filter.myChar)}` });
+    chips.push({ key: "myChar", label: t("stats.filterMyChar", { name: charName(filter.myChar) }) });
   }
   if (filter.oppChar !== null) {
-    chips.push({ key: "oppChar", label: `相手: ${charName(filter.oppChar)}` });
+    chips.push({ key: "oppChar", label: t("stats.filterOppChar", { name: charName(filter.oppChar) }) });
   }
   if (filter.oppProfile !== null) {
-    const prof = filter.oppProfile || "(なし)";
-    chips.push({ key: "oppProfile", label: `相手プロファイル: ${prof}` });
+    const prof = filter.oppProfile || noneLabel();
+    chips.push({ key: "oppProfile", label: t("stats.filterOppProfile", { profile: prof }) });
   }
 
   for (const chip of chips) {
@@ -721,7 +758,7 @@ function renderFilterBar() {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = "×";
-    btn.title = "解除";
+    btn.title = t("common.removeFilter");
     btn.addEventListener("click", () => {
       filter[chip.key] = null;
       if (chip.key === "oppProfile") profileShowAll = false;
@@ -735,7 +772,7 @@ function renderFilterBar() {
     const hint = document.createElement("span");
     hint.style.color = "var(--muted)";
     hint.style.fontSize = "13px";
-    hint.textContent = "ファセットをクリックして絞り込み";
+    hint.textContent = t("stats.filterHint");
     bar.appendChild(hint);
   }
 
@@ -752,13 +789,13 @@ function renderFilterBar() {
     renderAll();
   });
   rankedLabel.appendChild(rankedCb);
-  rankedLabel.appendChild(document.createTextNode("ランクマのみ"));
+  rankedLabel.appendChild(document.createTextNode(t("stats.rankedOnly")));
   actions.appendChild(rankedLabel);
 
   const clearBtn = document.createElement("button");
   clearBtn.type = "button";
   clearBtn.className = "btn-clear";
-  clearBtn.textContent = "すべてクリア";
+  clearBtn.textContent = t("common.clearAll");
   clearBtn.addEventListener("click", () => {
     filter.myChar = null;
     filter.oppChar = null;
@@ -783,8 +820,13 @@ function renderSummary() {
   main.className = "summary-main";
   const decisive = bucket.wins + bucket.losses;
   const rateText = decisive > 0 ? pct(bucket.winRate) : "-";
-  main.textContent =
-    `${bucket.games} 戦 ${bucket.wins} 勝 ${bucket.losses} 敗 勝率 ${rateText} (引分 ${bucket.draws})`;
+  main.textContent = t("stats.summaryMain", {
+    games: bucket.games,
+    wins: bucket.wins,
+    losses: bucket.losses,
+    rate: rateText,
+    draws: bucket.draws,
+  });
   el.appendChild(main);
 
   const recentEl = document.createElement("div");
@@ -794,10 +836,10 @@ function renderSummary() {
     const span = document.createElement("span");
     const strong = document.createElement("strong");
     strong.textContent = r.games > 0 ? pct(r.winRate) : "-";
-    span.appendChild(document.createTextNode(`直近${n}: `));
+    span.appendChild(document.createTextNode(t("stats.summaryRecent", { n })));
     span.appendChild(strong);
     if (r.games < n) {
-      span.appendChild(document.createTextNode(` (${r.games}戦)`));
+      span.appendChild(document.createTextNode(t("stats.summaryRecentPartial", { games: r.games })));
     }
     recentEl.appendChild(span);
   }
@@ -874,7 +916,7 @@ async function downloadReplayBlob(matchId, linkEl) {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     linkEl.textContent = orig;
   } catch (_) {
-    linkEl.textContent = "失敗";
+    linkEl.textContent = t("common.failed");
     setTimeout(() => { linkEl.textContent = orig; }, 3000);
   } finally {
     delete linkEl.dataset.busy;
@@ -894,7 +936,7 @@ function renderHistory() {
     appendTextCell(tr, formatJst(m.played_at));
     appendTextCell(tr, charName(myChar(m)));
     appendTextCell(tr, charName(oppChar(m)));
-    appendTextCell(tr, oppProfile(m) || "(なし)");
+    appendTextCell(tr, oppProfile(m) || noneLabel());
 
     const res = resultSymbol(m);
     appendTextCell(tr, res.text, res.cls);
@@ -905,7 +947,7 @@ function renderHistory() {
     if (m.has_replay) {
       const a = document.createElement("a");
       a.href = "#";
-      a.textContent = "DL";
+      a.textContent = t("common.dl");
       a.addEventListener("click", (e) => {
         e.preventDefault();
         downloadReplayBlob(m.id, a);
@@ -923,7 +965,7 @@ function renderHistory() {
     const td = document.createElement("td");
     td.colSpan = 7;
     td.style.color = "var(--muted)";
-    td.textContent = "データなし";
+    td.textContent = t("common.noData");
     tr.appendChild(td);
     frag.appendChild(tr);
   }
@@ -954,7 +996,7 @@ function renderOverview() {
   count.className = "summary";
   count.style.color = "var(--muted)";
   count.style.fontSize = "14px";
-  count.textContent = `全 ${allMatches.length} 戦`;
+  count.textContent = t("common.totalGames", { n: allMatches.length });
   ov.appendChild(count);
 }
 
@@ -971,22 +1013,37 @@ function renderRanked() {
   const rankLine = document.createElement("div");
   rankLine.className = "summary";
   rankLine.style.marginBottom = "10px";
-  rankLine.textContent = `現在ランク: ${rankText}`;
+  rankLine.textContent = t("stats.currentRank", { rank: rankText });
   rankedEl.appendChild(rankLine);
 
   const rt = ranked.total || { games: 0, wins: 0, losses: 0, draws: 0, win_rate: 0 };
   const rTotal = document.createElement("div");
   rTotal.className = "summary";
   rTotal.style.marginBottom = "8px";
-  rTotal.innerHTML =
-    `ランクマ総合成績: <strong>${rt.wins}-${rt.losses}-${rt.draws}</strong>　勝率: <span class="win-rate">${pct(rt.win_rate)}</span>（${rt.games} 戦）`;
+  rTotal.appendChild(document.createTextNode(t("stats.rankedTotalLabel") + " "));
+  const recordStrong = document.createElement("strong");
+  recordStrong.textContent = t("stats.rankedTotalRecord", {
+    wins: rt.wins,
+    losses: rt.losses,
+    draws: rt.draws,
+  });
+  rTotal.appendChild(recordStrong);
+  rTotal.appendChild(document.createTextNode(" " + t("stats.winRateLabel") + " "));
+  const rateSpan = document.createElement("span");
+  rateSpan.className = "win-rate";
+  rateSpan.textContent = pct(rt.win_rate);
+  rTotal.appendChild(rateSpan);
+  rTotal.appendChild(document.createTextNode(" " + t("stats.rankedTotalGames", { games: rt.games })));
   rankedEl.appendChild(rTotal);
 
   const r30 = ranked.recent30 || { games: 0, wins: 0, win_rate: 0 };
   const rRecent = document.createElement("div");
   rRecent.className = "summary";
-  rRecent.innerHTML =
-    `直近 30 戦: <span class="win-rate">${pct(r30.win_rate)}</span>（${r30.wins}勝 / ${r30.games}戦）`;
+  rRecent.textContent = t("stats.rankedRecent30", {
+    rate: pct(r30.win_rate),
+    wins: r30.wins,
+    games: r30.games,
+  });
   rankedEl.appendChild(rRecent);
 }
 
@@ -1127,14 +1184,16 @@ function setupResync() {
 
   btn.addEventListener("click", async () => {
     btn.disabled = true;
-    statusEl.textContent = "再同期中...";
+    statusEl.textContent = t("stats.resyncing");
     try {
       // キャッシュを破棄してサーバーDBから全件取り直す
       await reloadData(true);
-      statusEl.textContent =
-        `再同期しました（全 ${allMatches.length} 件, ${new Date().toLocaleTimeString("ja-JP")}）`;
+      statusEl.textContent = t("stats.resyncDone", {
+        n: allMatches.length,
+        time: new Date().toLocaleTimeString(localeTag()),
+      });
     } catch (_) {
-      statusEl.textContent = "再同期に失敗しました";
+      statusEl.textContent = t("stats.resyncFailed");
     } finally {
       btn.disabled = false;
     }
@@ -1153,7 +1212,7 @@ function setupTskImport() {
     resultEl.textContent = "";
     if (!file) {
       resultEl.style.color = "var(--err)";
-      resultEl.textContent = "ファイルを選択してください";
+      resultEl.textContent = t("stats.selectFile");
       return;
     }
     btn.disabled = true;
@@ -1172,13 +1231,20 @@ function setupTskImport() {
         } catch (_) {
           detail = res.statusText;
         }
-        resultEl.textContent = `エラー (${res.status}): ${detail}`;
+        resultEl.textContent = t("common.errorWithStatusDetail", {
+          status: res.status,
+          detail: tError(detail),
+        });
         return;
       }
       const data = await res.json();
       resultEl.style.color = "var(--ok)";
-      resultEl.textContent =
-        `取り込み: ${data.imported} 件 / 重複スキップ: ${data.skipped_duplicate} 件 / 不正スキップ: ${data.skipped_invalid} 件（全 ${data.total} 行）`;
+      resultEl.textContent = t("stats.importResult", {
+        imported: data.imported,
+        skippedDup: data.skipped_duplicate,
+        skippedInvalid: data.skipped_invalid,
+        total: data.total,
+      });
       if (data.imported > 0) {
         filter.myChar = null;
         filter.oppChar = null;
@@ -1189,7 +1255,7 @@ function setupTskImport() {
       }
     } catch (_) {
       resultEl.style.color = "var(--err)";
-      resultEl.textContent = "アップロードに失敗しました";
+      resultEl.textContent = t("stats.uploadFailed");
     } finally {
       btn.disabled = false;
     }
@@ -1208,11 +1274,11 @@ async function init() {
       return;
     }
     if (!probe.ok) {
-      loading.textContent = "読み込みに失敗しました";
+      loading.textContent = t("common.loadFailed");
       return;
     }
     statsData = await probe.json();
-    loading.textContent = "対戦データを読み込み中...";
+    loading.textContent = t("stats.loadingMatches");
     allMatches = await loadAllMatches();
     loading.hidden = true;
     content.hidden = false;
@@ -1224,10 +1290,12 @@ async function init() {
     setupResync();
     setupTskImport();
   } catch (_) {
-    loading.textContent = "読み込みに失敗しました";
+    loading.textContent = t("common.loadFailed");
   }
 }
 
+applyDocumentI18n();
+initLangToggle();
 init();
 </script>
 </body>

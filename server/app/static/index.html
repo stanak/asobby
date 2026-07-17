@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>asobby - 非想天則ロビー</title>
+<title data-i18n="lobby.pageTitle">asobby - 非想天則ロビー</title>
+<script src="/static/i18n.js"></script>
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-RJSLH3FRBR"></script>
 <script>
@@ -49,12 +50,26 @@
     font-size: 13px;
     display: flex;
     gap: 12px;
+    align-items: center;
   }
   header nav a {
     color: var(--accent);
     text-decoration: none;
   }
   header nav a:hover { text-decoration: underline; }
+  header nav .lang-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--accent);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 2px 8px;
+  }
+  header nav .lang-btn:hover {
+    border-color: var(--accent);
+  }
   #status {
     font-size: 13px;
     color: var(--muted);
@@ -318,71 +333,72 @@
 </head>
 <body>
 <header>
-  <h1>asobby</h1>
-  <span class="sub">非想天則 対戦募集ロビー</span>
+  <h1 data-i18n="common.appName">asobby</h1>
+  <span class="sub" data-i18n="lobby.subtitle">非想天則 対戦募集ロビー</span>
   <nav>
-    <a href="/stats">戦績</a>
-    <a href="/replays">リプレイ検索</a>
-    <a href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer">クライアント DL</a>
-    <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer">ご支援</a>
+    <a href="/stats" data-i18n="nav.stats">戦績</a>
+    <a href="/replays" data-i18n="nav.replays">リプレイ検索</a>
+    <a href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
+    <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
+    <button type="button" id="lang-toggle" class="lang-btn"></button>
   </nav>
   <span id="auth-info" hidden></span>
-  <span id="status" class="disconnected" hidden>接続中...</span>
+  <span id="status" class="disconnected" hidden data-i18n="common.connecting">接続中...</span>
 </header>
 
 <div id="rank-choice-banner" hidden>
-  <h2>ランクマの開始ランクを選択できます（初回のみ・未選択なら N）</h2>
+  <h2 data-i18n="lobby.rankChoiceTitle">ランクマの開始ランクを選択できます（初回のみ・未選択なら N）</h2>
   <div class="rank-choice-btns" id="rank-choice-btns"></div>
   <div id="rank-choice-error" hidden></div>
 </div>
 
 <div id="login-gate" class="gate" hidden>
-  募集一覧を見るには Discord ログインが必要です。<br>
-  asobby クライアント（トレイメニュー「Discord でログイン」）からログインしてください。
+  <span data-i18n="lobby.loginGateLine1">募集一覧を見るには Discord ログインが必要です。</span><br>
+  <span data-i18n="common.loginGateClientHint">asobby クライアント（トレイメニュー「Discord でログイン」）からログインしてください。</span>
 </div>
 
 <div id="lobby-body" hidden>
-<div class="section-title">ランクマ募集</div>
+<div class="section-title" data-i18n="lobby.sectionRanked">ランクマ募集</div>
 <div id="ranked-section" hidden>
   <div class="count" id="ranked-count"></div>
   <main>
     <table>
       <thead>
         <tr>
-          <th>Match</th>
-          <th>User</th>
-          <th>Rank</th>
-          <th>Cap</th>
-          <th>Stream</th>
-          <th>Comment</th>
-          <th>Addr</th>
+          <th data-i18n="lobby.colMatch">Match</th>
+          <th data-i18n="lobby.colUser">User</th>
+          <th data-i18n="lobby.colRank">Rank</th>
+          <th data-i18n="lobby.colCap">Cap</th>
+          <th data-i18n="lobby.colStream">Stream</th>
+          <th data-i18n="lobby.colComment">Comment</th>
+          <th data-i18n="lobby.colAddr">Addr</th>
           <th></th>
         </tr>
       </thead>
       <tbody id="ranked-rows"></tbody>
     </table>
-    <div id="ranked-empty" class="empty" hidden>現在ランクマ募集はありません</div>
+    <div id="ranked-empty" class="empty" hidden data-i18n="lobby.emptyRanked">現在ランクマ募集はありません</div>
   </main>
 </div>
 
-<div class="section-title">カジュアル募集</div>
+<div class="section-title" data-i18n="lobby.sectionCasual">カジュアル募集</div>
 <div class="count" id="casual-count"></div>
 <main>
   <table>
     <thead>
       <tr>
-        <th>Match</th>
-        <th>User</th>
-        <th>Rank</th>
-        <th>Cap</th>
-        <th>Stream</th>
-        <th>Comment</th>
-        <th>Addr</th>
+        <th data-i18n="lobby.colMatch">Match</th>
+        <th data-i18n="lobby.colUser">User</th>
+        <th data-i18n="lobby.colRank">Rank</th>
+        <th data-i18n="lobby.colCap">Cap</th>
+        <th data-i18n="lobby.colStream">Stream</th>
+        <th data-i18n="lobby.colComment">Comment</th>
+        <th data-i18n="lobby.colAddr">Addr</th>
       </tr>
     </thead>
     <tbody id="casual-rows"></tbody>
   </table>
-  <div id="casual-empty" class="empty" hidden>現在カジュアル募集はありません</div>
+  <div id="casual-empty" class="empty" hidden data-i18n="lobby.emptyCasual">現在カジュアル募集はありません</div>
 </main>
 </div>
 
@@ -396,11 +412,11 @@ const RANK_LABEL = {
   easy: "E", normal: "N", ex: "Ex", hard: "H", luna: "L", ph: "Ph",
 };
 const INITIAL_RANK_CHOICES = [
-  { rank: "easy", label: "E", desc: "初心者にお勧め" },
-  { rank: "normal", label: "N", desc: "通常のスタート地点・初級者以上" },
-  { rank: "ex", label: "Ex", desc: "中級者層" },
-  { rank: "hard", label: "H", desc: "中級者以上" },
-  { rank: "luna", label: "L", desc: "上級者以上" },
+  { rank: "easy", label: "E", descKey: "lobby.rankDescEasy" },
+  { rank: "normal", label: "N", descKey: "lobby.rankDescNormal" },
+  { rank: "ex", label: "Ex", descKey: "lobby.rankDescEx" },
+  { rank: "hard", label: "H", descKey: "lobby.rankDescHard" },
+  { rank: "luna", label: "L", descKey: "lobby.rankDescLuna" },
 ];
 
 const posts = new Map();
@@ -411,10 +427,15 @@ let myName = "";
 let openPopoverId = null;
 const messageCooldowns = new Map();
 
-const REQ_TYPE_LABEL = {
-  giuroll_request: "Giuroll リクエスト",
-  casual_invite: "カジュアル対戦のお誘い",
+const REQ_TYPE_KEYS = {
+  giuroll_request: "msg.typeGiurollRequest",
+  casual_invite: "msg.typeCasualInvite",
 };
+
+function reqTypeLabel(reqType) {
+  const key = REQ_TYPE_KEYS[reqType];
+  return key ? t(key) : reqType;
+}
 
 function countryFlagElement(code) {
   if (!code || code.length !== 2) return null;
@@ -437,16 +458,16 @@ function countryFlagElement(code) {
 function showReplyToast(data) {
   if (!loggedIn || !myUserId || data.to_user_id !== myUserId) return;
 
-  const fromName = data.from_name || "ホスト";
+  const fromName = data.from_name || t("msg.hostDefault");
   const reqType = data.req_type || "";
-  const reqLabel = REQ_TYPE_LABEL[reqType] || reqType;
+  const reqLabel = reqTypeLabel(reqType);
   let text = "";
   if (data.reply === "accept" && reqType === "giuroll_request") {
-    text = `ホスト ${fromName} さんが Giuroll リクエストを承諾しました`;
+    text = t("msg.toastAcceptGiuroll", { name: fromName });
   } else if (data.reply === "accept" && reqType === "casual_invite") {
-    text = `ホスト ${fromName} さんがカジュアル対戦のお誘いを承諾しました`;
+    text = t("msg.toastAcceptCasual", { name: fromName });
   } else if (data.reply === "decline") {
-    text = `ホスト ${fromName} さん: ごめんなさい（${reqLabel}は見送り）`;
+    text = t("msg.toastDecline", { name: fromName, reqLabel });
   } else {
     return;
   }
@@ -523,33 +544,35 @@ async function sendMessage(postId, type, statusEl, btn) {
       const data = await res.json().catch(() => ({}));
       const sec = data.cooldown_sec || 60;
       setMessageCooldown(postId, sec);
-      statusEl.textContent = "送信しました";
+      statusEl.textContent = t("msg.sentOk");
       statusEl.className = "msg-status ok";
       if (btn) {
         btn.disabled = true;
         btn.classList.add("sent");
-        btn.textContent = "✉ 送信済";
+        btn.textContent = t("msg.sent");
         setTimeout(() => {
           if (isMessageCooldown(postId)) return;
           btn.disabled = false;
           btn.classList.remove("sent");
-          btn.textContent = "✉ 送る";
+          btn.textContent = t("msg.send");
         }, sec * 1000);
       }
       closePopover();
       return;
     }
     if (res.status === 429) {
-      statusEl.textContent = "しばらく待ってから送ってください";
+      statusEl.textContent = t("msg.cooldown");
       statusEl.className = "msg-status err";
       setMessageCooldown(postId, 60);
       return;
     }
     const data = await res.json().catch(() => ({}));
-    statusEl.textContent = data.detail || `エラー (${res.status})`;
+    statusEl.textContent = data.detail
+      ? tError(data.detail)
+      : t("common.errorWithStatus", { status: res.status });
     statusEl.className = "msg-status err";
   } catch (_) {
-    statusEl.textContent = "通信に失敗しました";
+    statusEl.textContent = t("common.networkError");
     statusEl.className = "msg-status err";
   }
 }
@@ -567,9 +590,9 @@ function buildMessageCell(p) {
   btn.className = "msg-btn";
 
   if (!loggedIn) {
-    btn.textContent = "✉ 送る";
+    btn.textContent = t("msg.send");
     btn.disabled = true;
-    btn.title = "Discord ログインが必要です";
+    btn.title = t("common.discordLoginRequired");
     cell.appendChild(btn);
     return cell;
   }
@@ -579,7 +602,7 @@ function buildMessageCell(p) {
   }
 
   const onCooldown = isMessageCooldown(p.id);
-  btn.textContent = onCooldown ? "✉ 待機中" : "✉ 送る";
+  btn.textContent = onCooldown ? t("msg.waiting") : t("msg.send");
   btn.disabled = onCooldown;
   if (onCooldown) btn.classList.add("wait");
 
@@ -607,12 +630,12 @@ function buildMessageCell(p) {
     const options = [
       {
         type: "giuroll_request",
-        label: "Giuroll をお願いする",
+        label: t("msg.askGiuroll"),
         show: !p.giuroll,
       },
       {
         type: "casual_invite",
-        label: "カジュアル対戦に誘う",
+        label: t("msg.inviteCasual"),
         show: (p.post_type || "casual") === "ranked",
       },
     ];
@@ -663,9 +686,9 @@ function buildRow(p) {
   }
   if (p.guest_name) {
     if (p.owner_name) {
-      userCell.appendChild(document.createTextNode(" vs "));
+      userCell.appendChild(document.createTextNode(t("common.vs")));
     } else {
-      userCell.appendChild(document.createTextNode("vs "));
+      userCell.appendChild(document.createTextNode(t("common.vsLower")));
     }
     if (p.guest_avatar) {
       const gimg = document.createElement("img");
@@ -682,8 +705,8 @@ function buildRow(p) {
   tr.appendChild(td(rankLabel(p)));
 
   const cap = document.createElement("td");
-  if (p.giuroll) cap.appendChild(badge("Giu"));
-  if (p.autopunch) cap.appendChild(badge("AP"));
+  if (p.giuroll) cap.appendChild(badge(t("common.badgeGiu")));
+  if (p.autopunch) cap.appendChild(badge(t("common.badgeAp")));
   tr.appendChild(cap);
 
   const stream = document.createElement("td");
@@ -693,7 +716,7 @@ function buildRow(p) {
     a.href = p.stream_url;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
-    a.textContent = "▶ 配信";
+    a.textContent = t("common.stream");
     stream.appendChild(a);
   }
   tr.appendChild(stream);
@@ -711,7 +734,7 @@ function buildRow(p) {
   const btn = document.createElement("button");
   btn.className = "copy";
   btn.textContent = p.addr;
-  btn.title = "クリックでコピー";
+  btn.title = t("common.clickToCopy");
   btn.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(p.addr);
@@ -725,7 +748,7 @@ function buildRow(p) {
     }
     btn.classList.add("copied");
     const orig = btn.textContent;
-    btn.textContent = "コピーしました";
+    btn.textContent = t("common.copied");
     setTimeout(() => {
       btn.classList.remove("copied");
       btn.textContent = orig;
@@ -776,8 +799,8 @@ function render() {
 
   rankedEmptyEl.hidden = ranked.length > 0 || !myRank;
   casualEmptyEl.hidden = casual.length > 0;
-  rankedCountEl.textContent = `${ranked.length} 件`;
-  casualCountEl.textContent = `${casual.length} 件`;
+  rankedCountEl.textContent = t("common.countItems", { n: ranked.length });
+  casualCountEl.textContent = t("common.countItems", { n: casual.length });
 }
 
 function badge(text) {
@@ -799,7 +822,7 @@ function showRankChoiceError(msg) {
 }
 
 async function chooseInitialRank(rank, label) {
-  if (!confirm(`開始ランクを ${label} にします。この選択は一度だけです。よろしいですか？`)) {
+  if (!confirm(t("lobby.rankConfirm", { label }))) {
     return;
   }
   showRankChoiceError("");
@@ -815,9 +838,13 @@ async function chooseInitialRank(rank, label) {
       return;
     }
     const data = await res.json().catch(() => ({}));
-    showRankChoiceError(data.detail || `エラー (${res.status})`);
+    showRankChoiceError(
+      data.detail
+        ? tError(data.detail)
+        : t("common.errorWithStatus", { status: res.status })
+    );
   } catch (_) {
-    showRankChoiceError("通信に失敗しました");
+    showRankChoiceError(t("common.networkError"));
   }
 }
 
@@ -838,7 +865,7 @@ function setupRankChoiceBanner(user) {
     lbl.textContent = c.label;
     const desc = document.createElement("span");
     desc.className = "rank-desc";
-    desc.textContent = c.desc;
+    desc.textContent = t(c.descKey);
     btn.appendChild(lbl);
     btn.appendChild(desc);
     btn.addEventListener("click", () => chooseInitialRank(c.rank, c.label));
@@ -854,7 +881,12 @@ function showLoggedIn(user) {
   setupRankChoiceBanner(user);
   authInfoEl.hidden = false;
   authInfoEl.textContent = "";
-  authInfoEl.appendChild(document.createTextNode(`${user.name} でログイン中 (${RANK_LABEL[myRank] || myRank})`));
+  authInfoEl.appendChild(document.createTextNode(
+    t("lobby.loggedInAs", {
+      name: user.name,
+      rank: RANK_LABEL[myRank] || myRank,
+    })
+  ));
   statusEl.hidden = false;
   render();
 }
@@ -907,7 +939,7 @@ function connect() {
 
   es.addEventListener("open", () => {
     statusEl.className = "connected";
-    statusEl.textContent = "リアルタイム更新中";
+    statusEl.textContent = t("common.realtimeUpdating");
   });
 
   es.addEventListener("snapshot", (e) => {
@@ -934,10 +966,12 @@ function connect() {
 
   es.addEventListener("error", () => {
     statusEl.className = "disconnected";
-    statusEl.textContent = "再接続中...";
+    statusEl.textContent = t("common.reconnecting");
   });
 }
 
+applyDocumentI18n();
+initLangToggle();
 initAuth();
 
 document.addEventListener("click", () => {

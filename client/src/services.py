@@ -3,17 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__version__ = "0.4.11"
+from i18n import post_type_label, post_type_options, t
 
-POST_TYPE_OPTIONS = [
-    ("カジュアル", "casual"),
-    ("ランクマ", "ranked"),
-]
-
-POST_TYPE_LABEL = {
-    "casual": "カジュアル",
-    "ranked": "ランクマ",
-}
+__version__ = "0.4.12"
 
 RANK_LABEL = {
     "easy": "E",
@@ -63,15 +55,17 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
     import tkinter as tk
     from tkinter import ttk
 
-    label_by_value = {v: label for label, v in POST_TYPE_OPTIONS}
+    label_by_value = {v: label for label, v in post_type_options()}
 
     win = tk.Toplevel(parent)
-    win.title("asobby 投稿設定")
+    win.title(t("settings.title"))
     win.attributes("-topmost", True)
     win.resizable(False, False)
 
     post_type_var = tk.StringVar(
-        value=label_by_value.get(current.get("post_type", "casual"), "カジュアル")
+        value=label_by_value.get(
+            current.get("post_type", "casual"), post_type_label("casual")
+        )
     )
 
     presets = [str(x) for x in current.get("comment_presets", []) if str(x).strip()]
@@ -89,17 +83,19 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
     frame = ttk.Frame(win, padding=12)
     frame.grid(sticky="nsew")
 
-    ttk.Label(frame, text="募集モード:").grid(row=0, column=0, sticky="e", pady=4, padx=(0, 8))
+    ttk.Label(frame, text=t("settings.post_mode")).grid(
+        row=0, column=0, sticky="e", pady=4, padx=(0, 8)
+    )
     post_type_box = ttk.Combobox(
         frame,
         textvariable=post_type_var,
-        values=[label for label, _ in POST_TYPE_OPTIONS],
+        values=[label for label, _ in post_type_options()],
         state="readonly",
         width=12,
     )
     post_type_box.grid(row=0, column=1, sticky="w", pady=4)
 
-    ttk.Label(frame, text="配信URL候補\n(1行1件):", justify="right").grid(
+    ttk.Label(frame, text=t("settings.stream_presets"), justify="right").grid(
         row=1, column=0, sticky="ne", pady=4, padx=(0, 8)
     )
     stream_text = tk.Text(frame, width=44, height=4)
@@ -107,7 +103,7 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
     if stream_presets:
         stream_text.insert("1.0", "\n".join(stream_presets))
 
-    ttk.Label(frame, text="コメント候補\n(1行1件):", justify="right").grid(
+    ttk.Label(frame, text=t("settings.comment_presets"), justify="right").grid(
         row=2, column=0, sticky="ne", pady=4, padx=(0, 8)
     )
     comment_text = tk.Text(frame, width=44, height=6)
@@ -117,13 +113,13 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
 
     hint = ttk.Label(
         frame,
-        text="使用するコメント・配信URLはトレイの「コメント切替」「配信URL切替」で選べます",
+        text=t("settings.hint"),
         foreground="#888",
     )
     hint.grid(row=3, column=1, sticky="w")
 
     def do_ok() -> None:
-        value_by_label = {label: v for label, v in POST_TYPE_OPTIONS}
+        value_by_label = {label: v for label, v in post_type_options()}
         comment_lines = [l.strip() for l in comment_text.get("1.0", "end").splitlines() if l.strip()]
         if active_comment in comment_lines:
             comment = active_comment
@@ -149,8 +145,10 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
 
     btns = ttk.Frame(frame)
     btns.grid(row=4, column=0, columnspan=2, sticky="e", pady=(12, 0))
-    ttk.Button(btns, text="OK", command=do_ok).grid(row=0, column=0, padx=(0, 8))
-    ttk.Button(btns, text="キャンセル", command=do_cancel).grid(row=0, column=1)
+    ttk.Button(btns, text=t("settings.ok"), command=do_ok).grid(
+        row=0, column=0, padx=(0, 8)
+    )
+    ttk.Button(btns, text=t("settings.cancel"), command=do_cancel).grid(row=0, column=1)
 
     win.protocol("WM_DELETE_WINDOW", do_cancel)
     win.bind("<Escape>", lambda _e: do_cancel())

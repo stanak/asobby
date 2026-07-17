@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+from i18n import t
+
 try:
     from windows_toasts import (
         InteractableWindowsToaster,
@@ -67,8 +69,8 @@ def show_request_toast(
                 on_reply(arg)
 
         toast = Toast([text], duration=ToastDuration.Long)
-        toast.AddAction(ToastButton("承諾する", "accept"))
-        toast.AddAction(ToastButton("ごめんなさい", "decline"))
+        toast.AddAction(ToastButton(t("toast.accept"), "accept"))
+        toast.AddAction(ToastButton(t("toast.decline"), "decline"))
         toast.on_activated = activated
         _get_toaster().show_toast(toast)
         _live_toasts.append(toast)

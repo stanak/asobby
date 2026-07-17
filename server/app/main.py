@@ -28,6 +28,7 @@ import httpx
 import trueskill
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 import db
@@ -1602,7 +1603,7 @@ async def auth_discord_callback(
     if error or not code:
         WEB_LOGINS.pop(state, None)
         DEVICE_LOGINS.pop(state, None)
-        return _login_result_page(ok=False, message="ログインがキャンセルされました。")
+        return _login_result_page(ok=False, message_key="auth.cancelled")
 
     async with httpx.AsyncClient(timeout=10.0) as http:
         token_res = await http.post(
@@ -1619,7 +1620,7 @@ async def auth_discord_callback(
         if token_res.status_code != 200:
             if is_web:
                 WEB_LOGINS.pop(state, None)
-            return _login_result_page(ok=False, message="Discord との連携に失敗しました。")
+            return _login_result_page(ok=False, message_key="auth.discordFailed")
         access_token = token_res.json().get("access_token", "")
 
         me_res = await http.get(
@@ -1629,7 +1630,7 @@ async def auth_discord_callback(
         if me_res.status_code != 200:
             if is_web:
                 WEB_LOGINS.pop(state, None)
-            return _login_result_page(ok=False, message="Discord ユーザー情報の取得に失敗しました。")
+            return _login_result_page(ok=False, message_key="auth.discordUserFailed")
         me = me_res.json()
 
     user = {
@@ -1640,7 +1641,7 @@ async def auth_discord_callback(
     if not user["id"] or not user["name"]:
         if is_web:
             WEB_LOGINS.pop(state, None)
-        return _login_result_page(ok=False, message="Discord ユーザー情報が不正です。")
+        return _login_result_page(ok=False, message_key="auth.discordUserInvalid")
 
     if is_web:
         _, next_path = WEB_LOGINS.pop(state, (0.0, "/"))
@@ -1668,7 +1669,11 @@ async def auth_discord_callback(
 
     login.user = user
     login.session_token = make_session_token(user, user_row.token_version)
-    return _login_result_page(ok=True, message=f"{user['name']} としてログインしました。アプリに戻ってください。")
+    return _login_result_page(
+        ok=True,
+        message_key="auth.loginSuccess",
+        message_params={"name": user["name"]},
+    )
 
 
 @app.get("/auth/logout")
@@ -1690,17 +1695,39 @@ async def auth_logout(request: Request) -> RedirectResponse:
     return response
 
 
-def _login_result_page(*, ok: bool, message: str) -> HTMLResponse:
+def _login_result_page(
+    *,
+    ok: bool,
+    message_key: str,
+    message_params: dict[str, str] | None = None,
+) -> HTMLResponse:
+    import json
+
     color = "#57c07d" if ok else "#e06c75"
+    heading_key = "auth.loginOk" if ok else "auth.loginFail"
+    params_json = json.dumps(message_params or {}, ensure_ascii=False)
     return HTMLResponse(f"""<!DOCTYPE html>
-<html lang="ja"><head><meta charset="utf-8"><title>asobby</title></head>
+<html><head><meta charset="utf-8"><title>asobby</title>
+<script src="/static/i18n.js"></script></head>
 <body style="background:#14171c;color:#d8dee9;font-family:sans-serif;
 display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <div style="text-align:center">
-<h1 style="color:{color}">{"ログイン完了" if ok else "ログイン失敗"}</h1>
-<p>{message}</p>
-<p style="color:#7b8794">このタブは閉じて構いません。</p>
-</div></body></html>""")
+<h1 id="heading" style="color:{color}"></h1>
+<p id="message"></p>
+<p id="close-hint" style="color:#7b8794"></p>
+<button type="button" id="lang-toggle" style="margin-top:16px;padding:4px 10px;
+background:transparent;color:#6ab0f3;border:1px solid #2c3440;border-radius:6px;cursor:pointer"></button>
+</div>
+<script>
+const messageKey = {json.dumps(message_key, ensure_ascii=False)};
+const messageParams = {params_json};
+applyDocumentI18n();
+document.getElementById("heading").textContent = t("{heading_key}");
+document.getElementById("message").textContent = t(messageKey, messageParams);
+document.getElementById("close-hint").textContent = t("auth.closeTab");
+initLangToggle();
+</script>
+</body></html>""")
 
 
 @app.post("/auth/device/poll")
@@ -2680,3 +2707,6 @@ def is_allowed_stream_url(url: str) -> bool:
         host = host.split(":", 1)[0]
 
     return host in ALLOWED_STREAM_DOMAINS
+
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

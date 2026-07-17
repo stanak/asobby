@@ -13,10 +13,16 @@ from pystray import Menu, MenuItem
 
 from controller import Controller
 from tray_icon import TrayIcon
+from i18n import (
+    SUPPORTED_LANGS,
+    get_lang,
+    post_type_label,
+    post_type_options,
+    set_lang,
+    t,
+)
 from services import (
     Post,
-    POST_TYPE_LABEL,
-    POST_TYPE_OPTIONS,
     edit_post_settings,
     NET_BATTLE,
     __version__,
@@ -90,12 +96,12 @@ class TrayApp:
             fut.add_done_callback(done)
 
         shown = toast.show_request_toast(
-            text + "\n承諾/拒否をボタンで返信できます",
+            text + "\n" + t("toast.request_hint"),
             callback,
             log=lambda m: self._append_log("warn", m),
         )
         if not shown:
-            self._notify(text + "（トレイメニューの「リクエストに返信」から返信できます）")
+            self._notify(text + t("toast.request_fallback"))
         if self.icon:
             self.icon.update_menu()
 
@@ -136,20 +142,24 @@ class TrayApp:
     # icon state
     # -----------------
     def _post_type_label(self) -> str:
-        return POST_TYPE_LABEL.get(self.post.post_type, "カジュアル")
+        return post_type_label(self.post.post_type)
 
     def _status_text(self) -> str:
         if self.controller.detect_error == "access_denied":
-            return "検出済み・メモリ読取不可 (ゲームが管理者権限?)"
+            return t("tray.detect_denied")
         if self.controller.is_detect_paused():
             rest = self.controller.detect_pause_remaining_min()
-            return f"自動検知 停止中 (残り約 {rest} 分)"
+            return t("tray.detect_paused", min=rest)
         if not self.post.id:
-            return "待機中 - ホストを立てると自動投稿"
+            return t("tray.idle")
         mode = self._post_type_label()
         if self.post.net_status == NET_BATTLE:
-            return f"対戦中 ({mode}): {self.post.match_status or self.post.addr}"
-        return f"募集中 ({mode}): {self.post.addr}"
+            return t(
+                "tray.battle",
+                mode=mode,
+                detail=self.post.match_status or self.post.addr,
+            )
+        return t("tray.recruiting", mode=mode, addr=self.post.addr)
 
     def _refresh_icon(self) -> None:
         if not self.icon:
@@ -269,8 +279,8 @@ class TrayApp:
     def _discord_label(self) -> str:
         if self.controller.is_logged_in():
             name = self.controller.discord_user or "?"
-            return f"ログアウト ({name})"
-        return "Discord でログイン"
+            return t("tray.discord_logout", name=name)
+        return t("tray.discord_login")
 
     def _discord_action(self) -> None:
         if self.controller.is_logged_in():
@@ -320,7 +330,7 @@ class TrayApp:
                 self.controller.set_active_post_type(value)
             return act
 
-        for label, value in POST_TYPE_OPTIONS:
+        for label, value in post_type_options():
             yield MenuItem(
                 label,
                 make_action(value),
@@ -341,7 +351,7 @@ class TrayApp:
             return act
 
         yield MenuItem(
-            "（なし）",
+            t("tray.none"),
             make_action(""),
             radio=True,
             checked=lambda item: (self.controller.my_post.comment or "") == "",
@@ -355,7 +365,7 @@ class TrayApp:
                 checked=lambda item, c=c: self.controller.my_post.comment == c,
             )
         if not presets:
-            yield MenuItem("投稿設定でコメントを追加できます", None, enabled=False)
+            yield MenuItem(t("tray.add_comment_hint"), None, enabled=False)
 
     def _stream_menu_items(self):
         """配信URL切替サブメニュー (プリセットからラジオ選択)。"""
@@ -368,7 +378,7 @@ class TrayApp:
             return act
 
         yield MenuItem(
-            "（なし）",
+            t("tray.none"),
             make_action(""),
             radio=True,
             checked=lambda item: (self.controller.my_post.stream_url or "") == "",
@@ -382,7 +392,7 @@ class TrayApp:
                 checked=lambda item, url=url: self.controller.my_post.stream_url == url,
             )
         if not presets:
-            yield MenuItem("投稿設定で配信URLを追加できます", None, enabled=False)
+            yield MenuItem(t("tray.add_stream_hint"), None, enabled=False)
 
     def _pause_menu_items(self):
         """ホスト自動検知の一時停止サブメニュー。"""
@@ -401,18 +411,18 @@ class TrayApp:
         paused = self.controller.is_detect_paused()
         if paused:
             rest = self.controller.detect_pause_remaining_min()
-            yield MenuItem(f"停止中 (残り約 {rest} 分)", None, enabled=False)
-            yield MenuItem("今すぐ再開する", resume)
+            yield MenuItem(t("tray.pause_running", min=rest), None, enabled=False)
+            yield MenuItem(t("tray.pause_resume"), resume)
             yield Menu.SEPARATOR
-        yield MenuItem("30 分停止", make_pause(30 * 60))
-        yield MenuItem("1 時間停止", make_pause(60 * 60))
-        yield MenuItem("3 時間停止", make_pause(3 * 60 * 60))
+        yield MenuItem(t("tray.pause_30m"), make_pause(30 * 60))
+        yield MenuItem(t("tray.pause_1h"), make_pause(60 * 60))
+        yield MenuItem(t("tray.pause_3h"), make_pause(3 * 60 * 60))
 
     def _pause_menu_label(self) -> str:
         if self.controller.is_detect_paused():
             rest = self.controller.detect_pause_remaining_min()
-            return f"ホスト自動検知 (停止中 残り約 {rest} 分)"
-        return "ホスト自動検知を一時停止"
+            return t("tray.pause_active", min=rest)
+        return t("tray.pause")
 
     def _toggle_copy_addr(self) -> None:
         self.controller.set_copy_addr_enabled(
@@ -445,36 +455,58 @@ class TrayApp:
 
             yield MenuItem(header, None, enabled=False)
             yield MenuItem(
-                "承諾する",
+                t("tray.accept"),
                 make_reply(req.message_id, "accept"),
             )
             yield MenuItem(
-                "ごめんなさい",
+                t("tray.decline"),
                 make_reply(req.message_id, "decline"),
             )
+
+    def _lang_menu_items(self):
+        """言語切替サブメニュー (ja/en のラジオ選択)。"""
+        def make_action(lang: str):
+            def act(icon, item):
+                self._set_lang(lang)
+            return act
+
+        for lang in SUPPORTED_LANGS:
+            yield MenuItem(
+                t(f"lang.{lang}"),
+                make_action(lang),
+                radio=True,
+                checked=lambda item, lang=lang: get_lang() == lang,
+            )
+
+    def _set_lang(self, lang: str) -> None:
+        set_lang(lang)
+        if self.icon:
+            self.icon.menu = self._build_menu()
+            self.icon.update_menu()
+            self._refresh_icon()
 
     def _build_menu(self) -> Menu:
         return Menu(
             MenuItem(lambda item: self._status_text(), None, enabled=False),
             Menu.SEPARATOR,
-            MenuItem("ロビーページを開く", lambda: self._open_lobby()),
-            MenuItem("投稿設定...", lambda: self._open_settings()),
-            MenuItem("戦績を見る...", lambda: self._open_stats()),
-            MenuItem("戦績をサーバーと同期", lambda: self._sync_stats()),
-            MenuItem("募集タイプ切替", Menu(lambda: self._post_type_menu_items())),
-            MenuItem("コメント切替", Menu(lambda: self._comment_menu_items())),
-            MenuItem("配信URL切替", Menu(lambda: self._stream_menu_items())),
+            MenuItem(t("tray.open_lobby"), lambda: self._open_lobby()),
+            MenuItem(t("tray.settings"), lambda: self._open_settings()),
+            MenuItem(t("tray.stats"), lambda: self._open_stats()),
+            MenuItem(t("tray.sync_stats"), lambda: self._sync_stats()),
+            MenuItem(t("tray.post_type"), Menu(lambda: self._post_type_menu_items())),
+            MenuItem(t("tray.comment"), Menu(lambda: self._comment_menu_items())),
+            MenuItem(t("tray.stream"), Menu(lambda: self._stream_menu_items())),
             MenuItem(
                 lambda item: self._pause_menu_label(),
                 Menu(lambda: self._pause_menu_items()),
             ),
             MenuItem(
-                "ホスト時に IP:Port をコピー",
+                t("tray.copy_addr"),
                 lambda: self._toggle_copy_addr(),
                 checked=lambda item: self.controller.copy_addr_enabled(),
             ),
             MenuItem(
-                "リクエストに返信",
+                t("tray.reply_requests"),
                 Menu(lambda: self._request_menu_items()),
                 visible=lambda item: (
                     self.controller._prune_pending_requests(),
@@ -491,15 +523,19 @@ class TrayApp:
                      lambda: self._handle_tool("soku", "Select th123.exe")),
             Menu.SEPARATOR,
             MenuItem(
-                lambda item: f"更新 {self.controller.update_available[0]} をダウンロード"
+                lambda item: t(
+                    "tray.download_update",
+                    tag=self.controller.update_available[0],
+                )
                 if self.controller.update_available
                 else "",
                 lambda: self._open_update_page(),
                 visible=lambda item: self.controller.update_available is not None,
             ),
-            MenuItem("ログを開く", lambda: self._open_log()),
-            MenuItem("ツールのパスをリセット", lambda: self._reset_paths()),
-            MenuItem("終了", lambda: self._quit()),
+            MenuItem(t("tray.open_log"), lambda: self._open_log()),
+            MenuItem(t("tray.reset_paths"), lambda: self._reset_paths()),
+            MenuItem(t("lang.menu"), Menu(lambda: self._lang_menu_items())),
+            MenuItem(t("tray.quit"), lambda: self._quit()),
         )
 
     # -----------------
@@ -551,7 +587,7 @@ if __name__ == "__main__":
     if ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
         root = Tk()
         root.withdraw()
-        messagebox.showwarning("asobby", "asobby は既に起動しています")
+        messagebox.showwarning("asobby", t("tray.already_running"))
         sys.exit(0)
 
     TrayApp().run()

@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>asobby - リプレイ検索</title>
+<title data-i18n="replays.pageTitle">asobby - リプレイ検索</title>
+<script src="/static/i18n.js"></script>
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-RJSLH3FRBR"></script>
 <script>
@@ -55,6 +56,19 @@
     text-decoration: none;
   }
   header nav a:hover { text-decoration: underline; }
+  header nav .lang-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--accent);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 2px 8px;
+  }
+  header nav .lang-btn:hover {
+    border-color: var(--accent);
+  }
   main { padding: 8px 20px 32px; max-width: 1400px; }
   .panel {
     background: var(--panel);
@@ -207,77 +221,78 @@
 </head>
 <body>
 <header>
-  <h1>asobby リプレイ検索</h1>
-  <span class="sub">非想天則 リプレイ一覧</span>
+  <h1 data-i18n="replays.title">asobby リプレイ検索</h1>
+  <span class="sub" data-i18n="replays.subtitle">非想天則 リプレイ一覧</span>
   <nav>
-    <a href="/">ロビー</a>
-    <a href="/stats">戦績</a>
-    <a href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer">クライアント DL</a>
-    <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer">ご支援</a>
+    <a href="/" data-i18n="nav.lobby">ロビー</a>
+    <a href="/stats" data-i18n="nav.stats">戦績</a>
+    <a href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
+    <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
+    <button type="button" id="lang-toggle" class="lang-btn"></button>
   </nav>
 </header>
 
 <main>
   <div class="panel">
-    <h2>検索条件</h2>
+    <h2 data-i18n="replays.searchCriteria">検索条件</h2>
     <form id="search-form" class="filter-grid">
       <label class="player-field">
-        プレイヤー名
-        <input type="text" id="player" placeholder="プロファイル名 / Discord 名" autocomplete="off">
+        <span data-i18n="replays.playerName">プレイヤー名</span>
+        <input type="text" id="player" autocomplete="off">
         <div id="player-suggest" class="player-suggest" hidden></div>
       </label>
       <label>
-        キャラ 1
+        <span data-i18n="replays.char1">キャラ 1</span>
         <select id="char1"></select>
       </label>
       <label>
-        キャラ 2 (対面)
+        <span data-i18n="replays.char2">キャラ 2 (対面)</span>
         <select id="char2"></select>
       </label>
       <label>
-        日付 (from)
+        <span data-i18n="replays.dateFrom">日付 (from)</span>
         <input type="date" id="date-from">
       </label>
       <label>
-        日付 (to)
+        <span data-i18n="replays.dateTo">日付 (to)</span>
         <input type="date" id="date-to">
       </label>
       <label>
-        並び順
+        <span data-i18n="replays.sortOrder">並び順</span>
         <select id="sort-order">
-          <option value="date-desc" selected>新しい順</option>
-          <option value="date-asc">古い順</option>
-          <option value="rank-desc">ランク高い順</option>
+          <option value="date-desc" selected data-i18n="replays.sortDateDesc">新しい順</option>
+          <option value="date-asc" data-i18n="replays.sortDateAsc">古い順</option>
+          <option value="rank-desc" data-i18n="replays.sortRankDesc">ランク高い順</option>
         </select>
       </label>
       <div class="filter-actions">
-        <button type="submit">検索</button>
+        <button type="submit" data-i18n="replays.search">検索</button>
       </div>
     </form>
   </div>
 
   <div class="panel">
-    <h2>検索結果</h2>
+    <h2 data-i18n="replays.results">検索結果</h2>
     <div class="result-meta" id="result-meta"></div>
-    <div id="status-msg">条件を入力して検索してください</div>
+    <div id="status-msg" data-i18n="replays.promptSearch">条件を入力して検索してください</div>
     <div class="history-scroll" id="results-wrap" hidden>
       <table>
         <thead>
           <tr>
-            <th>日時</th>
-            <th>ホスト</th>
-            <th>HC</th>
-            <th>ゲスト</th>
-            <th>GC</th>
-            <th>勝敗</th>
-            <th>ランクマ</th>
-            <th>DL</th>
+            <th data-i18n="replays.colDateTime">日時</th>
+            <th data-i18n="replays.colHost">ホスト</th>
+            <th data-i18n="replays.colHC">HC</th>
+            <th data-i18n="replays.colGuest">ゲスト</th>
+            <th data-i18n="replays.colGC">GC</th>
+            <th data-i18n="replays.colResult">勝敗</th>
+            <th data-i18n="replays.colRanked">ランクマ</th>
+            <th data-i18n="replays.colDL">DL</th>
           </tr>
         </thead>
         <tbody id="results-body"></tbody>
       </table>
     </div>
-    <button type="button" class="btn-more" id="load-more" hidden>もっと見る</button>
+    <button type="button" class="btn-more" id="load-more" hidden data-i18n="common.more">もっと見る</button>
   </div>
 </main>
 
@@ -314,7 +329,7 @@ const loadMoreEl = document.getElementById("load-more");
 function fillCharSelect(sel) {
   const empty = document.createElement("option");
   empty.value = "";
-  empty.textContent = "(指定なし)";
+  empty.textContent = t("common.unspecified");
   sel.appendChild(empty);
   for (let i = 0; i < 20; i++) {
     const opt = document.createElement("option");
@@ -329,7 +344,8 @@ fillCharSelect(char2El);
 
 function formatJst(unixSec) {
   const d = new Date(unixSec * 1000);
-  return d.toLocaleString("ja-JP", {
+  const locale = getLang() === "ja" ? "ja-JP" : "en-US";
+  return d.toLocaleString(locale, {
     timeZone: "Asia/Tokyo",
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit",
@@ -343,7 +359,7 @@ function charName(id) {
 }
 
 function playerLabel(name, profile, rank, rating) {
-  const primary = name || profile || "(不明)";
+  const primary = name || profile || t("common.unknown");
   let text = primary;
   if (rank) {
     const rl = RANK_LABEL[rank] || rank;
@@ -404,7 +420,7 @@ async function downloadReplayBlob(matchId, fallbackName, linkEl) {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     linkEl.textContent = orig;
   } catch (_) {
-    linkEl.textContent = "失敗";
+    linkEl.textContent = t("common.failed");
     setTimeout(() => { linkEl.textContent = orig; }, 3000);
   } finally {
     delete linkEl.dataset.busy;
@@ -434,7 +450,7 @@ function renderRow(r) {
   const tdDl = document.createElement("td");
   const a = document.createElement("a");
   a.href = "#";
-  a.textContent = "DL";
+  a.textContent = t("common.dl");
   a.addEventListener("click", (e) => {
     e.preventDefault();
     downloadReplayBlob(r.match_id, r.filename, a);
@@ -455,7 +471,7 @@ function renderTable() {
     const td = document.createElement("td");
     td.colSpan = 8;
     td.style.color = "var(--muted)";
-    td.textContent = "該当するリプレイがありません";
+    td.textContent = t("replays.noResults");
     tr.appendChild(td);
     frag.appendChild(tr);
   }
@@ -467,7 +483,10 @@ function updateMeta() {
     resultMetaEl.textContent = "";
     return;
   }
-  resultMetaEl.textContent = `${results.length} / ${currentTotal} 件表示`;
+  resultMetaEl.textContent = t("replays.resultMeta", {
+    shown: results.length,
+    total: currentTotal,
+  });
 }
 
 function updateLoadMore() {
@@ -511,16 +530,25 @@ async function fetchResults(reset) {
   loading = true;
   statusMsgEl.hidden = false;
   statusMsgEl.className = "";
-  statusMsgEl.textContent = "検索中...";
+  statusMsgEl.textContent = t("replays.searching");
   resultsWrapEl.hidden = true;
   loadMoreEl.hidden = true;
 
   const offset = reset ? 0 : currentOffset;
   try {
     const res = await fetch("/replays/search?" + buildQueryParams(offset).toString());
-    if (!res.ok) throw new Error("HTTP " + res.status);
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const err = await res.json();
+        detail = err.detail || JSON.stringify(err);
+      } catch (_) {
+        detail = res.statusText;
+      }
+      throw { status: res.status, detail };
+    }
     const data = await res.json();
-    if (!data.ok) throw new Error("search failed");
+    if (!data.ok) throw new Error(data.detail || "search failed");
 
     searched = true;
     currentTotal = data.total;
@@ -539,7 +567,16 @@ async function fetchResults(reset) {
     updateLoadMore();
   } catch (err) {
     statusMsgEl.className = "error";
-    statusMsgEl.textContent = "検索に失敗しました";
+    if (err && typeof err === "object" && err.status) {
+      statusMsgEl.textContent = t("common.errorWithStatusDetail", {
+        status: err.status,
+        detail: tError(err.detail),
+      });
+    } else if (err instanceof Error && err.message && err.message !== "search failed") {
+      statusMsgEl.textContent = tError(err.message);
+    } else {
+      statusMsgEl.textContent = t("replays.searchFailed");
+    }
     if (reset) {
       results = [];
       currentTotal = 0;
@@ -617,7 +654,7 @@ function renderPlayerSuggest() {
 
     const badge = document.createElement("span");
     badge.className = "player-suggest-badge";
-    badge.textContent = item.kind === "user" ? "Discord" : "プロファイル";
+    badge.textContent = item.kind === "user" ? t("replays.badgeDiscord") : t("replays.badgeProfile");
     row.appendChild(badge);
 
     frag.appendChild(row);
@@ -716,6 +753,9 @@ document.addEventListener("click", (e) => {
   }
 });
 
+applyDocumentI18n();
+initLangToggle();
+playerEl.placeholder = t("replays.playerPlaceholder");
 fetchResults(true);
 </script>
 </body>

@@ -30,6 +30,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "options": {
         "copy_addr_on_host": False,
+        "locale": "ja",
     },
 }
 

@@ -17,7 +17,8 @@ from api_client import ApiClient
 from detect_api import DetectionState
 from hisoutensoku_memory import read_detection_state
 from local_store import LocalStore
-from services import Post, NET_ALIVE, NET_BATTLE, POST_TYPE_LABEL, __version__, format_system_rank
+from services import Post, NET_ALIVE, NET_BATTLE, __version__, format_system_rank
+from i18n import bind_locale, get_lang, post_type_label, t
 from config_manager import ConfigManager
 from tool_manager import ToolManager
 
@@ -75,6 +76,10 @@ class Controller:
         self.btn_labels_sink = app.emit_btn_labels
 
         self.config_mgr = ConfigManager()
+        bind_locale(
+            get_fn=lambda: self.config_mgr.get_value("options", "locale", "ja"),
+            set_fn=lambda lang: self.config_mgr.set_value("options", "locale", lang),
+        )
         self.config = self.config_mgr.get()
         self.tool_mgr = ToolManager(self.config_mgr)
         db_path = self.config_mgr.path.resolve().parent / "matches.db"
@@ -192,7 +197,7 @@ class Controller:
     def _copy_addr_to_clipboard(self, addr: str) -> None:
         if clipboard_util.copy_text(addr):
             self.log_sink("info", f"Copied host addr to clipboard: {addr}")
-            self.notify_sink(f"募集アドレスをコピーしました: {addr}")
+            self.notify_sink(t("notify.copy_addr", addr=addr))
         else:
             self.log_sink("warn", "Clipboard copy failed")
 
@@ -224,19 +229,30 @@ class Controller:
     # -----------------
     # ホスト自動検知の一時停止
     # -----------------
+    def _pause_duration_label(self, seconds: float) -> str:
+        minutes = int(seconds / 60)
+        if minutes == 30:
+            return t("pause.30m")
+        if minutes == 60:
+            return t("pause.1h")
+        if minutes == 180:
+            return t("pause.3h")
+        if minutes >= 60 and minutes % 60 == 0:
+            return t("notify.pause_hours", hours=minutes // 60)
+        return t("notify.pause_minutes", min=minutes)
+
     def pause_auto_detect(self, seconds: float) -> None:
         """ホスト自動検知 (自動投稿) を指定秒数だけ止める。既存の募集は閉じる。"""
         self._detect_pause_until = time.time() + seconds
-        minutes = int(seconds / 60)
-        label = f"{minutes // 60} 時間" if minutes % 60 == 0 and minutes >= 60 else f"{minutes} 分"
+        label = self._pause_duration_label(seconds)
         self.log_sink("info", f"Auto detect paused for {label}")
-        self.notify_sink(f"ホスト自動検知を {label} 停止しました")
+        self.notify_sink(t("notify.pause", label=label))
 
     def resume_auto_detect(self) -> None:
         if self._detect_pause_until:
             self._detect_pause_until = 0.0
             self.log_sink("info", "Auto detect resumed manually")
-            self.notify_sink("ホスト自動検知を再開しました")
+            self.notify_sink(t("notify.pause_resumed"))
 
     def _track_detect_error(self, err: str) -> None:
         """検知異常の遷移をログ・通知し、トレイ表示を更新する。"""
@@ -249,10 +265,7 @@ class Controller:
                 "th123.exe found but memory is not readable (access denied). "
                 "Game may be running as administrator",
             )
-            self.notify_sink(
-                "非想天則を検出しましたがメモリを読み取れません。"
-                "ゲームが管理者権限で動いている場合は、asobby も管理者として実行してください"
-            )
+            self.notify_sink(t("notify.detect_access_denied"))
         elif not err:
             self.log_sink("info", "Memory read recovered")
         self.my_post_sink(self.my_post)  # トレイの状態表示を更新
@@ -352,20 +365,17 @@ class Controller:
 
     def _request_type_label(self, req_type: str) -> str:
         if req_type == "giuroll_request":
-            return "Giuroll リクエスト"
+            return t("req.giuroll")
         if req_type == "casual_invite":
-            return "カジュアルのお誘い"
+            return t("req.casual_invite")
         return req_type
 
     def _message_notify_text(self, msg_type: str, from_name: str) -> str:
         if msg_type == "giuroll_request":
-            return (
-                f"{from_name} さんから Giuroll を使ってほしいとの"
-                "リクエストが届きました"
-            )
+            return t("msg.giuroll_request", name=from_name)
         if msg_type == "casual_invite":
-            return f"{from_name} さんからカジュアル対戦のお誘いが届きました"
-        return f"{from_name} さんからメッセージが届きました"
+            return t("msg.casual_invite", name=from_name)
+        return t("msg.generic", name=from_name)
 
     async def reply_request(self, message_id: str, reply: str) -> None:
         self._prune_pending_requests()
@@ -374,10 +384,10 @@ class Controller:
             None,
         )
         if pending is None:
-            self.notify_sink("返信対象が見つかりません")
+            self.notify_sink(t("notify.reply_missing"))
             return
         if not self.has_active_post():
-            self.notify_sink("返信を送れませんでした（募集が終了した可能性）")
+            self.notify_sink(t("notify.reply_failed_closed"))
             return
 
         try:
@@ -389,19 +399,19 @@ class Controller:
             )
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (403, 404):
-                self.notify_sink("返信を送れませんでした（募集が終了した可能性）")
+                self.notify_sink(t("notify.reply_failed_closed"))
             else:
-                self.notify_sink("返信を送れませんでした")
+                self.notify_sink(t("notify.reply_failed"))
             return
         except httpx.HTTPError:
-            self.notify_sink("返信を送れませんでした（募集が終了した可能性）")
+            self.notify_sink(t("notify.reply_failed_closed"))
             return
 
         self.pending_requests = [
             r for r in self.pending_requests if r.message_id != message_id
         ]
-        action = "承諾" if reply == "accept" else "拒否"
-        self.notify_sink(f"{pending.from_name} さんに{action}を返信しました")
+        action = t("notify.reply_accept") if reply == "accept" else t("notify.reply_decline")
+        self.notify_sink(t("notify.reply_sent", name=pending.from_name, action=action))
 
     # -----------------
     # loops
@@ -439,7 +449,7 @@ class Controller:
                 self.update_available = (latest_tag, release_url)
                 if self._notified_update_tag != latest_tag:
                     self.notify_sink(
-                        f"asobby {latest_tag} が公開されています。トレイメニューから開けます"
+                        t("notify.update_available", tag=latest_tag)
                     )
                     self._notified_update_tag = latest_tag
                 self.log_sink(
@@ -533,10 +543,7 @@ class Controller:
                         and not resp.get("ranked_active")
                         and not self._notified_casual_fallback
                     ):
-                        msg = (
-                            "異なるランク帯またはログインしていない相手とのマッチングのため、"
-                            "この対戦はカジュアル扱いになります"
-                        )
+                        msg = t("notify.casual_fallback")
                         self.notify_sink(msg)
                         self.log_sink("info", msg)
                         self._notified_casual_fallback = True
@@ -609,7 +616,7 @@ class Controller:
         if self._detect_pause_until and now >= self._detect_pause_until:
             self._detect_pause_until = 0.0
             self.log_sink("info", "Auto detect pause expired")
-            self.notify_sink("ホスト自動検知を再開しました")
+            self.notify_sink(t("notify.pause_resumed"))
 
         # -----------------
         # process dead
@@ -819,9 +826,7 @@ class Controller:
                         and not self._notified_login_required
                     ):
                         self._notified_login_required = True
-                        self.notify_sink(
-                            "募集には Discord ログインが必要です。トレイメニューからログインしてください"
-                        )
+                        self.notify_sink(t("notify.login_required_post"))
                         self.log_sink(
                             "warn",
                             "Recruitment requires Discord login",
@@ -1095,17 +1100,17 @@ class Controller:
     async def sync_stats_now(self) -> None:
         """トレイメニューからの手動同期。結果をトーストで通知する。"""
         if not self.is_logged_in():
-            self.notify_sink("戦績の同期には Discord ログインが必要です")
+            self.notify_sink(t("notify.sync_login_required"))
             return
         if self._stats_sync_running:
-            self.notify_sink("戦績を同期中です…")
+            self.notify_sink(t("notify.sync_running"))
             return
         try:
             pulled, pushed = await self._sync_stats_impl()
-            self.notify_sink(f"戦績を同期しました（取得 {pulled} 件 / 送信 {pushed} 件）")
+            self.notify_sink(t("notify.sync_ok", pulled=pulled, pushed=pushed))
         except Exception as e:
             self.log_sink("warn", f"Stats sync failed: {e}")
-            self.notify_sink("戦績の同期に失敗しました")
+            self.notify_sink(t("notify.sync_failed"))
 
     async def _sync_stats_impl(self) -> tuple[int, int]:
         """サーバー戦績との双方向同期。(取得件数, 送信件数) を返す。"""
@@ -1178,7 +1183,7 @@ class Controller:
         self.my_post_sink(self.my_post)
 
         post_type = str(post.get("post_type", "casual"))
-        type_label = POST_TYPE_LABEL.get(post_type, post_type)
+        type_label = post_type_label(post_type)
         rank_display = format_system_rank(
             str(post.get("rank", "")),
             post.get("rating"),
@@ -1198,10 +1203,10 @@ class Controller:
 
             if code in (401, 403):
                 self._clear_expired_session()
-                self.notify_sink("セッションが切れました。Discord に再ログインしてください")
+                self.notify_sink(t("notify.session_expired"))
             elif code == 409:
                 self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
-                self.notify_sink("募集に失敗しました: ポート開放または autopunch を確認してください")
+                self.notify_sink(t("notify.post_failed"))
             elif code == 429:
                 self.log_sink("warn", "Rate limited by server. Retrying soon.")
             else:
@@ -1218,7 +1223,7 @@ class Controller:
             # アドレス変更時の到達性検証に失敗。ローカルを破棄して
             # 次の周期の create（クールダウン付き）からやり直す。
             self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
-            self.notify_sink("募集に失敗しました: ポート開放または autopunch を確認してください")
+            self.notify_sink(t("notify.post_failed"))
             self.clear_my_post()
             self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
         else:
@@ -1310,7 +1315,7 @@ class Controller:
                 )
                 self._notified_login_required = False
                 self.log_sink("info", f"Discord にログインしました: {self.discord_user}")
-                self.notify_sink(f"Discord にログインしました: {self.discord_user}")
+                self.notify_sink(t("notify.discord_login_ok", name=self.discord_user))
         except asyncio.TimeoutError:
             self.log_sink("warn", "Discord ログインがタイムアウトしました")
         except httpx.HTTPStatusError as e:
@@ -1331,9 +1336,7 @@ class Controller:
         await self.login_discord(webbrowser.open)
         if not self.is_logged_in() and not self._notified_login_required:
             self._notified_login_required = True
-            self.notify_sink(
-                "募集には Discord ログインが必要です。トレイメニューからログインしてください"
-            )
+            self.notify_sink(t("notify.login_required_post"))
 
     def logout_discord(self) -> None:
         self.api.session_token = ""
@@ -1368,7 +1371,11 @@ class Controller:
         self.btn_labels_sink(self._tool_labels)
 
     def lobby_url(self) -> str:
-        return self.config_mgr.get_api_base().rstrip("/") + "/"
+        base = self.config_mgr.get_api_base().rstrip("/") + "/"
+        lang = get_lang()
+        if lang != "ja":
+            return f"{base}?lang={lang}"
+        return base
 
     async def close(self) -> None:
         self._stop.set()
