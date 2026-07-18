@@ -51,6 +51,8 @@ ALLOWED_STREAM_DOMAINS = {
 # クライアントは 5 秒間隔でハートビートを送る。TTL はその 4 倍で
 # 一時的なネットワーク断や GC 停止では投稿が消えないようにする。
 POST_TTL_SEC = 20
+# 対戦中 (ゲスト接続済み) はデプロイ中のハートビート途切れでも復元できるよう長めに保持
+POST_BATTLE_TTL_SEC = 600
 CLEANUP_INTERVAL_SEC = 5
 GUEST_PROBE_INTERVAL_SEC = 10
 SSE_PING_INTERVAL_SEC = 15
@@ -251,6 +253,20 @@ class PostRecord:
 
 
 POST_REDIS_TTL_SEC = POST_TTL_SEC + 30
+
+
+def post_is_in_battle(rec: PostRecord) -> bool:
+    return bool(rec.guest_ip or rec.post.guest_connected)
+
+
+def post_record_ttl(rec: PostRecord) -> float:
+    if post_is_in_battle(rec):
+        return POST_BATTLE_TTL_SEC
+    return POST_TTL_SEC
+
+
+def post_record_redis_ttl(rec: PostRecord) -> int:
+    return int(post_record_ttl(rec) + 30)
 
 
 def post_record_to_dict(rec: PostRecord) -> dict[str, Any]:
@@ -665,7 +681,7 @@ async def _persist_record(rec: PostRecord) -> None:
         await asyncio.to_thread(
             post_redis.save_record_dict,
             post_record_to_dict(rec),
-            ttl_sec=POST_REDIS_TTL_SEC,
+            ttl_sec=post_record_redis_ttl(rec),
         )
     except Exception as e:
         print(f"post_redis save error: {e}")
@@ -699,13 +715,46 @@ async def _hydrate_records_from_redis() -> None:
             if post_id:
                 await _delete_persisted_post(post_id)
             continue
-        if now - rec.post.updated_at >= POST_TTL_SEC:
+        if now - rec.post.updated_at >= post_record_ttl(rec):
             await _delete_persisted_post(rec.post.id)
             continue
         RECORDS[rec.post.id] = rec
         restored += 1
     if restored:
         print(f"post_redis: restored {restored} post(s)")
+
+
+async def _hydrate_chat_from_redis() -> None:
+    if not post_redis.is_configured():
+        return
+    try:
+        messages = await asyncio.to_thread(
+            post_redis.load_chat_messages,
+            max_messages=LOBBY_CHAT_MAX_MESSAGES,
+            max_age_sec=LOBBY_CHAT_MAX_AGE_SEC,
+        )
+    except Exception as e:
+        print(f"post_redis chat load error: {e}")
+        return
+    LOBBY_CHAT.clear()
+    for msg in messages:
+        LOBBY_CHAT.append(msg)
+    if messages:
+        print(f"post_redis: restored {len(messages)} chat message(s)")
+
+
+async def _sync_chat_to_redis() -> None:
+    if not post_redis.is_configured():
+        return
+    try:
+        await asyncio.to_thread(
+            post_redis.replace_chat_messages,
+            list(LOBBY_CHAT),
+            max_messages=LOBBY_CHAT_MAX_MESSAGES,
+            max_age_sec=LOBBY_CHAT_MAX_AGE_SEC,
+        )
+    except Exception as e:
+        print(f"post_redis chat save error: {e}")
 
 
 def _normalize_chat_text(text: str) -> str:
@@ -724,12 +773,15 @@ def _validate_chat_text(text: str) -> str:
     return normalized
 
 
-def _trim_lobby_chat_by_age() -> None:
+def _trim_lobby_chat_by_age() -> bool:
     if not LOBBY_CHAT:
-        return
+        return False
     cutoff = time.time() - LOBBY_CHAT_MAX_AGE_SEC
+    changed = False
     while LOBBY_CHAT and float(LOBBY_CHAT[0].get("ts", 0)) < cutoff:
         LOBBY_CHAT.popleft()
+        changed = True
+    return changed
 
 
 def lobby_chat_snapshot() -> list[dict[str, Any]]:
@@ -743,7 +795,7 @@ async def cleanup_loop() -> None:
         stale_ids = [
             post_id
             for post_id, rec in list(RECORDS.items())
-            if (now - rec.post.updated_at) >= POST_TTL_SEC
+            if (now - rec.post.updated_at) >= post_record_ttl(rec)
         ]
         for post_id in stale_ids:
             RECORDS.pop(post_id, None)
@@ -802,6 +854,7 @@ async def lifespan(app: FastAPI):
     if await asyncio.to_thread(geoip.ensure_geoip_db):
         await asyncio.to_thread(geoip.init_geoip)
     await _hydrate_records_from_redis()
+    await _hydrate_chat_from_redis()
     cleanup_task = asyncio.create_task(cleanup_loop())
     guest_probe_task = asyncio.create_task(guest_probe_loop())
     try:
@@ -2585,14 +2638,23 @@ async def post_lobby_chat(body: ChatMessageIn, request: Request) -> dict[str, An
     text = _validate_chat_text(body.text)
     uid = sess["id"]
     now = time.time()
-    last = LOBBY_CHAT_LAST_SENT.get(uid, 0.0)
-    if (now - last) < LOBBY_CHAT_COOLDOWN_SEC:
-        retry_after = int(LOBBY_CHAT_COOLDOWN_SEC - (now - last) + 0.999)
-        raise HTTPException(
-            status_code=429,
-            detail="please wait before sending another message",
-            headers={"Retry-After": str(retry_after)},
-        )
+    if post_redis.is_configured():
+        remaining = post_redis.chat_cooldown_remaining(uid)
+        if remaining > 0:
+            raise HTTPException(
+                status_code=429,
+                detail="please wait before sending another message",
+                headers={"Retry-After": str(int(remaining) + 1)},
+            )
+    else:
+        last = LOBBY_CHAT_LAST_SENT.get(uid, 0.0)
+        if (now - last) < LOBBY_CHAT_COOLDOWN_SEC:
+            retry_after = int(LOBBY_CHAT_COOLDOWN_SEC - (now - last) + 0.999)
+            raise HTTPException(
+                status_code=429,
+                detail="please wait before sending another message",
+                headers={"Retry-After": str(retry_after)},
+            )
 
     mentions: list[dict[str, str]] = []
     if db.is_configured():
@@ -2609,8 +2671,17 @@ async def post_lobby_chat(body: ChatMessageIn, request: Request) -> dict[str, An
         "ts": now,
     }
     LOBBY_CHAT.append(msg)
-    LOBBY_CHAT_LAST_SENT[uid] = now
-    _trim_lobby_chat_by_age()
+    if post_redis.is_configured():
+        await asyncio.to_thread(
+            post_redis.append_chat_message,
+            msg,
+            max_messages=LOBBY_CHAT_MAX_MESSAGES,
+        )
+        await asyncio.to_thread(post_redis.chat_cooldown_mark, uid, LOBBY_CHAT_COOLDOWN_SEC)
+    else:
+        LOBBY_CHAT_LAST_SENT[uid] = now
+    if _trim_lobby_chat_by_age():
+        await _sync_chat_to_redis()
     await HUB.publish("chat_message", msg)
     return {"ok": True, "message": msg}
 
