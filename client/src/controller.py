@@ -162,7 +162,18 @@ class Controller:
     def _default_post_params(self) -> Dict[str, Any]:
         # post_defaults には comment_presets 等 Post に無いキーも入るので絞る
         d = self.config_mgr.get_post_defaults()
-        return {k: d[k] for k in ("post_type", "comment", "stream_url") if k in d}
+        return {k: d[k] for k in ("post_type", "comment", "stream_url", "challenge_upper") if k in d}
+
+    def challenge_upper_enabled(self) -> bool:
+        return bool(self.config_mgr.get_value("post_defaults", "challenge_upper", False))
+
+    def set_challenge_upper_enabled(self, enabled: bool) -> None:
+        self.config_mgr.set_post_default("challenge_upper", bool(enabled))
+        self.update_my_post(challenge_upper=bool(enabled))
+        self.log_sink(
+            "info",
+            t("log.challenge_upper", state=t("common.on" if enabled else "common.off")),
+        )
 
     def comment_presets(self) -> list[str]:
         v = self.config_mgr.get_value("post_defaults", "comment_presets", [])
@@ -352,6 +363,7 @@ class Controller:
     ) -> dict:
         return {
             "post_type": self.my_post.post_type or "casual",
+            "challenge_upper": bool(self.my_post.challenge_upper),
             "addr": addr,
             "comment": self.my_post.comment or "",
             "stream_url": self.my_post.stream_url or "",

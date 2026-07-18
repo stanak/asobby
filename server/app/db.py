@@ -62,6 +62,24 @@ class User(Base):
     )
 
 
+PH_CHAR_IDS: tuple[int, ...] = tuple(range(21))  # 0–19 + Random (20)
+DEFAULT_TS_MU = 25.0
+DEFAULT_TS_SIGMA = 8.333333333333334
+
+
+class UserCharRating(Base):
+    __tablename__ = "user_char_ratings"
+
+    user_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("users.id"), primary_key=True
+    )
+    char_id: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    ts_mu: Mapped[float] = mapped_column(Float, default=DEFAULT_TS_MU, nullable=False)
+    ts_sigma: Mapped[float] = mapped_column(
+        Float, default=DEFAULT_TS_SIGMA, nullable=False
+    )
+
+
 class Match(Base):
     __tablename__ = "matches"
 
@@ -297,13 +315,87 @@ async def lock_user_rank(user_id: str) -> None:
 
 async def set_user_rank(user_id: str, new_rank: str) -> None:
     """ランクを更新し rank_changed_at を現在時刻にセットする。"""
+    mu = DEFAULT_TS_MU
+    sigma = DEFAULT_TS_SIGMA
     async with session() as s:
         user = await s.get(User, user_id)
         if user is None:
             return
         user.rank = new_rank
         user.rank_changed_at = utcnow()
+        mu = user.ts_mu
+        sigma = user.ts_sigma
         await s.commit()
+    if new_rank == "ph":
+        await init_ph_char_ratings(user_id, mu, sigma)
+
+
+async def init_ph_char_ratings(
+    user_id: str,
+    mu: float = DEFAULT_TS_MU,
+    sigma: float = DEFAULT_TS_SIGMA,
+) -> None:
+    """Ph 到達時に全キャラ (0–19 + Random) へ TrueSkill 初期値を付与する。"""
+    async with session() as s:
+        for char_id in PH_CHAR_IDS:
+            row = await s.get(UserCharRating, (user_id, char_id))
+            if row is None:
+                s.add(
+                    UserCharRating(
+                        user_id=user_id,
+                        char_id=char_id,
+                        ts_mu=mu,
+                        ts_sigma=sigma,
+                    )
+                )
+        await s.commit()
+
+
+async def get_char_rating(user_id: str, char_id: int) -> tuple[float, float] | None:
+    async with session() as s:
+        row = await s.get(UserCharRating, (user_id, char_id))
+        if row is None:
+            return None
+        return row.ts_mu, row.ts_sigma
+
+
+async def set_char_rating(user_id: str, char_id: int, mu: float, sigma: float) -> None:
+    async with session() as s:
+        row = await s.get(UserCharRating, (user_id, char_id))
+        if row is None:
+            s.add(
+                UserCharRating(
+                    user_id=user_id,
+                    char_id=char_id,
+                    ts_mu=mu,
+                    ts_sigma=sigma,
+                )
+            )
+        else:
+            row.ts_mu = mu
+            row.ts_sigma = sigma
+        await s.commit()
+
+
+async def list_char_ratings(user_id: str) -> list[tuple[int, float, float]]:
+    async with session() as s:
+        res = await s.execute(
+            select(UserCharRating)
+            .where(UserCharRating.user_id == user_id)
+            .order_by(UserCharRating.char_id.asc())
+        )
+        return [(r.char_id, r.ts_mu, r.ts_sigma) for r in res.scalars().all()]
+
+
+async def sync_user_aggregate_rating(user_id: str) -> None:
+    """全キャラレートの平均を users.ts_mu / ts_sigma に反映する (ロビー表示用)。"""
+    ratings = await list_char_ratings(user_id)
+    if not ratings:
+        return
+    n = len(ratings)
+    avg_mu = sum(mu for _cid, mu, _sigma in ratings) / n
+    avg_sigma = sum(sigma for _cid, _mu, sigma in ratings) / n
+    await set_user_rating(user_id, avg_mu, avg_sigma)
 
 
 async def set_user_rating(user_id: str, mu: float, sigma: float) -> None:

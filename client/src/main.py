@@ -195,6 +195,7 @@ class TrayApp:
                 post_type=result["post_type"],
                 comment=result["comment"],
                 stream_url=result["stream_url"],
+                challenge_upper=result.get("challenge_upper", False),
             )
             if self.icon:
                 self.icon.update_menu()
@@ -436,6 +437,13 @@ class TrayApp:
         if self.icon:
             self.icon.update_menu()
 
+    def _toggle_challenge_upper(self) -> None:
+        self.controller.set_challenge_upper_enabled(
+            not self.controller.challenge_upper_enabled()
+        )
+        if self.icon:
+            self.icon.update_menu()
+
     def _request_menu_items(self):
         """未返信リクエストへの承諾/拒否メニュー。"""
         self.controller._prune_pending_requests()
@@ -509,6 +517,12 @@ class TrayApp:
                 t("tray.copy_addr"),
                 lambda: self._toggle_copy_addr(),
                 checked=lambda item: self.controller.copy_addr_enabled(),
+            ),
+            MenuItem(
+                t("tray.challenge_upper"),
+                lambda: self._toggle_challenge_upper(),
+                checked=lambda item: self.controller.challenge_upper_enabled(),
+                visible=lambda item: self.controller.my_post.post_type == "ranked",
             ),
             MenuItem(
                 t("tray.reply_requests"),

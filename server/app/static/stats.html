@@ -308,6 +308,7 @@
           <table>
             <thead><tr data-facet="myChar">
               <th class="sortable" data-col="char" data-i18n="stats.colChar">キャラ</th>
+              <th class="sortable ph-rating-col" data-col="rating" data-i18n="stats.colRating" hidden>レート</th>
               <th class="sortable" data-col="games" data-i18n="stats.colGames">対戦</th>
               <th class="sortable" data-col="wins" data-i18n="stats.colWins">勝</th>
               <th class="sortable" data-col="losses" data-i18n="stats.colLosses">負</th>
@@ -419,6 +420,7 @@ const facetSort = {
 const SORT_FIRST_ASC = {
   char: true,
   profile: true,
+  rating: false,
   games: false,
   wins: false,
   losses: false,
@@ -428,6 +430,7 @@ const SORT_FIRST_ASC = {
 const SORT_COL_LABEL = {
   char: "stats.colChar",
   profile: "stats.colProfile",
+  rating: "stats.colRating",
   games: "stats.colGames",
   wins: "stats.colWins",
   losses: "stats.colLosses",
@@ -449,6 +452,51 @@ function localeTag() {
 
 function compareLocale() {
   return getLang() === "ja" ? "ja" : "en";
+}
+
+function isPhUser() {
+  const rank = (statsData?.ranked?.rank || statsData?.user?.rank || "").toLowerCase();
+  return rank === "ph";
+}
+
+function charRatingMap() {
+  const map = new Map();
+  const rows = statsData?.ranked?.char_ratings;
+  if (!Array.isArray(rows)) return map;
+  for (const row of rows) {
+    if (row && row.char != null && row.rating != null) {
+      map.set(row.char, row.rating);
+    }
+  }
+  return map;
+}
+
+function buildMyCharFacetRows(matches) {
+  const grouped = groupByChar(applyFilter(matches, "myChar"), myChar);
+  const byChar = new Map(grouped.map((r) => [r.char, r]));
+  const ratings = charRatingMap();
+  const rows = [];
+  for (let char = 0; char <= 20; char++) {
+    const stats = byChar.get(char) || {
+      char,
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      games: 0,
+      winRate: 0,
+    };
+    rows.push({
+      ...stats,
+      rating: ratings.has(char) ? ratings.get(char) : null,
+    });
+  }
+  return rows;
+}
+
+function setPhRatingColumnVisible(visible) {
+  for (const el of document.querySelectorAll(".ph-rating-col")) {
+    el.hidden = !visible;
+  }
 }
 
 function charName(id) {
@@ -578,6 +626,7 @@ function sortCharFacetRows(rows, sortState) {
   return rows.slice().sort((a, b) => {
     let cmp = 0;
     if (col === "char") cmp = a.char - b.char;
+    else if (col === "rating") cmp = (a.rating ?? -9999) - (b.rating ?? -9999);
     else if (col === "games") cmp = a.games - b.games;
     else if (col === "wins") cmp = a.wins - b.wins;
     else if (col === "losses") cmp = a.losses - b.losses;
@@ -679,8 +728,9 @@ function appendWinRateCell(tr, rate, decisive) {
   tr.appendChild(td);
 }
 
-function fillFacetCharTable(tbody, rows, dim, selected) {
+function fillFacetCharTable(tbody, rows, dim, selected, showRating) {
   const frag = document.createDocumentFragment();
+  const colSpan = showRating ? 6 : 5;
   for (const r of rows) {
     const tr = document.createElement("tr");
     tr.className = "facet-row";
@@ -688,6 +738,9 @@ function fillFacetCharTable(tbody, rows, dim, selected) {
     tr.dataset.dim = dim;
     tr.dataset.value = String(r.char);
     appendTextCell(tr, charName(r.char));
+    if (showRating) {
+      appendTextCell(tr, r.rating != null ? String(r.rating) : "-");
+    }
     appendTextCell(tr, String(r.games));
     appendTextCell(tr, String(r.wins));
     appendTextCell(tr, String(r.losses));
@@ -697,7 +750,7 @@ function fillFacetCharTable(tbody, rows, dim, selected) {
   if (!rows.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 5;
+    td.colSpan = colSpan;
     td.style.color = "var(--muted)";
     td.textContent = t("common.noData");
     tr.appendChild(td);
@@ -848,8 +901,13 @@ function renderSummary() {
 }
 
 function renderFacets() {
+  const showRating = isPhUser();
+  setPhRatingColumnVisible(showRating);
+
   const myRows = sortCharFacetRows(
-    groupByChar(applyFilter(allMatches, "myChar"), myChar),
+    showRating
+      ? buildMyCharFacetRows(allMatches)
+      : groupByChar(applyFilter(allMatches, "myChar"), myChar),
     facetSort.myChar,
   );
   const oppRows = sortCharFacetRows(
@@ -868,12 +926,14 @@ function renderFacets() {
     myRows,
     "myChar",
     filter.myChar,
+    showRating,
   );
   fillFacetCharTable(
     document.getElementById("facet-opp-char"),
     oppRows,
     "oppChar",
     filter.oppChar,
+    false,
   );
 
   const showAll = profileShowAll;

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from i18n import post_type_label, post_type_options, t
 
-__version__ = "0.4.14"
+__version__ = "0.4.15"
 
 RANK_LABEL = {
     "easy": "E",
@@ -42,6 +42,7 @@ class Post:
     autopunch: bool = False
     match_status: str = ""
     net_status: int = NET_UNKNOWN
+    challenge_upper: bool = False
 
 
 def edit_post_settings(parent, current: dict, on_ok) -> None:
@@ -95,19 +96,40 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
     )
     post_type_box.grid(row=0, column=1, sticky="w", pady=4)
 
+    challenge_upper_var = tk.BooleanVar(
+        value=bool(current.get("challenge_upper", False))
+    )
+    value_by_label = {label: v for label, v in post_type_options()}
+    challenge_upper_chk = ttk.Checkbutton(
+        frame,
+        text=t("settings.challenge_upper"),
+        variable=challenge_upper_var,
+    )
+    challenge_upper_chk.grid(row=1, column=1, sticky="w", pady=(0, 4))
+
+    def sync_challenge_upper_state(*_args) -> None:
+        selected = value_by_label.get(post_type_var.get(), "casual")
+        state = "normal" if selected == "ranked" else "disabled"
+        challenge_upper_chk.configure(state=state)
+        if selected != "ranked":
+            challenge_upper_var.set(False)
+
+    post_type_var.trace_add("write", sync_challenge_upper_state)
+    sync_challenge_upper_state()
+
     ttk.Label(frame, text=t("settings.stream_presets"), justify="right").grid(
-        row=1, column=0, sticky="ne", pady=4, padx=(0, 8)
+        row=2, column=0, sticky="ne", pady=4, padx=(0, 8)
     )
     stream_text = tk.Text(frame, width=44, height=4)
-    stream_text.grid(row=1, column=1, sticky="we", pady=4)
+    stream_text.grid(row=2, column=1, sticky="we", pady=4)
     if stream_presets:
         stream_text.insert("1.0", "\n".join(stream_presets))
 
     ttk.Label(frame, text=t("settings.comment_presets"), justify="right").grid(
-        row=2, column=0, sticky="ne", pady=4, padx=(0, 8)
+        row=3, column=0, sticky="ne", pady=4, padx=(0, 8)
     )
     comment_text = tk.Text(frame, width=44, height=6)
-    comment_text.grid(row=2, column=1, sticky="we", pady=4)
+    comment_text.grid(row=3, column=1, sticky="we", pady=4)
     if presets:
         comment_text.insert("1.0", "\n".join(presets))
 
@@ -116,10 +138,10 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
         text=t("settings.hint"),
         foreground="#888",
     )
-    hint.grid(row=3, column=1, sticky="w")
+    hint.grid(row=4, column=1, sticky="w")
 
     def do_ok() -> None:
-        value_by_label = {label: v for label, v in post_type_options()}
+        post_type = value_by_label.get(post_type_var.get(), "casual")
         comment_lines = [l.strip() for l in comment_text.get("1.0", "end").splitlines() if l.strip()]
         if active_comment in comment_lines:
             comment = active_comment
@@ -131,7 +153,8 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
         else:
             stream_url = stream_lines[0] if stream_lines else ""
         result = {
-            "post_type": value_by_label.get(post_type_var.get(), "casual"),
+            "post_type": post_type,
+            "challenge_upper": bool(challenge_upper_var.get()) and post_type == "ranked",
             "stream_url": stream_url,
             "stream_url_presets": stream_lines,
             "comment": comment,
@@ -144,7 +167,7 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
         win.destroy()
 
     btns = ttk.Frame(frame)
-    btns.grid(row=4, column=0, columnspan=2, sticky="e", pady=(12, 0))
+    btns.grid(row=5, column=0, columnspan=2, sticky="e", pady=(12, 0))
     ttk.Button(btns, text=t("settings.ok"), command=do_ok).grid(
         row=0, column=0, padx=(0, 8)
     )

@@ -74,6 +74,27 @@ RANK_LADDER: dict[str, dict[str, Any]] = {
 }
 RANK_ORDER: dict[str, int] = {k: i for i, k in enumerate(RANK_LADDER.keys())}
 
+
+def ranked_session_active(post: Post, guest_user_id: str, guest_rank: str) -> bool:
+    """現在接続中ゲストとの対戦がランクマ扱いか。"""
+    if post.post_type != "ranked" or not guest_user_id or not guest_rank:
+        return False
+    if guest_rank == post.rank:
+        return True
+    if not post.challenge_upper:
+        return False
+    host_ord = RANK_ORDER.get(post.rank)
+    guest_ord = RANK_ORDER.get(guest_rank)
+    if host_ord is None or guest_ord is None:
+        return False
+    return guest_ord == host_ord + 1
+
+
+def refresh_ranked_active(rec: PostRecord) -> None:
+    rec.post.ranked_active = ranked_session_active(
+        rec.post, rec.guest_user_id, rec.guest_rank
+    )
+
 # 作成レート制限（IP 単位）
 CREATE_MIN_INTERVAL_SEC = 2.0
 MAX_ACTIVE_POSTS_PER_IP = 2
@@ -207,6 +228,7 @@ class Post:
     guest_avatar: str = ""
     guest_connected: bool = False  # プローブでゲスト検出中
     ranked_active: bool = False  # 現在のゲストとのセッションがランクマ扱いか
+    challenge_upper: bool = False  # ランクマ時に 1 段上位帯のゲストもランクマ扱い
     country_code: str = ""  # addr の IP から推定した ISO 3166-1 alpha-2
     country_name: str = ""  # 表示用国名（日本語優先）
 
@@ -278,6 +300,7 @@ class CreatePostIn(BaseModel):
     autopunch: bool = False
     match_status: str = Field(default="", max_length=200)
     net_status: int = 0
+    challenge_upper: bool = False
 
 
 class UpdatePostIn(CreatePostIn):
@@ -475,6 +498,31 @@ def discord_avatar_url(user_id: str, avatar_hash: str) -> str:
 def display_rating(mu: float, sigma: float) -> float:
     """TrueSkill 表示レート = mu - 3 * sigma"""
     return round(mu - 3 * sigma, 1)
+
+
+def valid_ph_char(char_id: Optional[int]) -> bool:
+    return char_id is not None and 0 <= char_id <= 20
+
+
+async def ph_char_ratings_payload(user_id: str) -> list[dict[str, Any]]:
+    """Ph ユーザーの全キャラ (0–20) 表示レート一覧。"""
+    rows = await db.list_char_ratings(user_id)
+    if not rows:
+        rank_info = await db.get_user_rank(user_id)
+        mu = db.DEFAULT_TS_MU
+        sigma = db.DEFAULT_TS_SIGMA
+        if rank_info is not None:
+            _rank, mu, sigma = rank_info
+        await db.init_ph_char_ratings(user_id, mu, sigma)
+        rows = await db.list_char_ratings(user_id)
+    rating_map = {
+        char_id: display_rating(mu, sigma) for char_id, mu, sigma in rows
+    }
+    default = display_rating(db.DEFAULT_TS_MU, db.DEFAULT_TS_SIGMA)
+    return [
+        {"char": char_id, "rating": rating_map.get(char_id, default)}
+        for char_id in db.PH_CHAR_IDS
+    ]
 
 
 async def resolve_session(request: Request) -> Optional[dict[str, Any]]:
@@ -895,8 +943,14 @@ async def update_trueskill_ratings(
     host_user_id: str,
     guest_user_id: str,
     winner: str,
+    host_char: Optional[int] = None,
+    guest_char: Optional[int] = None,
 ) -> None:
-    """ph 同士のランクマ対戦確定時に TrueSkill レートを更新する。"""
+    """ph 同士のランクマ対戦確定時にキャラ別 TrueSkill レートを更新する。"""
+    if not valid_ph_char(host_char) or not valid_ph_char(guest_char):
+        return
+    assert host_char is not None and guest_char is not None
+
     host_info = await db.get_user_rank(host_user_id)
     guest_info = await db.get_user_rank(guest_user_id)
     if host_info is None or guest_info is None:
@@ -906,8 +960,17 @@ async def update_trueskill_ratings(
     if host_rank != "ph" or guest_rank != "ph":
         return
 
-    host_rating = trueskill.Rating(mu=host_mu, sigma=host_sigma)
-    guest_rating = trueskill.Rating(mu=guest_mu, sigma=guest_sigma)
+    host_char_info = await db.get_char_rating(host_user_id, host_char)
+    guest_char_info = await db.get_char_rating(guest_user_id, guest_char)
+    if host_char_info is None:
+        await db.init_ph_char_ratings(host_user_id, host_mu, host_sigma)
+        host_char_info = (host_mu, host_sigma)
+    if guest_char_info is None:
+        await db.init_ph_char_ratings(guest_user_id, guest_mu, guest_sigma)
+        guest_char_info = (guest_mu, guest_sigma)
+
+    host_rating = trueskill.Rating(mu=host_char_info[0], sigma=host_char_info[1])
+    guest_rating = trueskill.Rating(mu=guest_char_info[0], sigma=guest_char_info[1])
 
     if winner == "draw":
         new_host, new_guest = trueskill.rate_1vs1(host_rating, guest_rating, drawn=True)
@@ -916,8 +979,10 @@ async def update_trueskill_ratings(
     else:
         new_guest, new_host = trueskill.rate_1vs1(guest_rating, host_rating)
 
-    await db.set_user_rating(host_user_id, new_host.mu, new_host.sigma)
-    await db.set_user_rating(guest_user_id, new_guest.mu, new_guest.sigma)
+    await db.set_char_rating(host_user_id, host_char, new_host.mu, new_host.sigma)
+    await db.set_char_rating(guest_user_id, guest_char, new_guest.mu, new_guest.sigma)
+    await db.sync_user_aggregate_rating(host_user_id)
+    await db.sync_user_aggregate_rating(guest_user_id)
 
 
 def compute_ranked_stats(matches: list[db.Match], user_id: str) -> dict[str, Any]:
@@ -1686,6 +1751,9 @@ async def stats_me(request: Request) -> dict[str, Any]:
     stats = compute_user_stats(matches, sess["id"])
     ranked_matches = await db.fetch_user_ranked_matches(sess["id"])
     ranked_stats = compute_ranked_stats(ranked_matches, sess["id"])
+    char_ratings: Optional[list[dict[str, Any]]] = None
+    if sess["rank"] == "ph":
+        char_ratings = await ph_char_ratings_payload(sess["id"])
     return {
         "user": sess,
         **stats,
@@ -1693,6 +1761,7 @@ async def stats_me(request: Request) -> dict[str, Any]:
             "rank": sess["rank"],
             "rating": sess["rating"],
             **ranked_stats,
+            "char_ratings": char_ratings,
         },
     }
 
@@ -2083,6 +2152,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         autopunch=body.autopunch,
         match_status=body.match_status,
         net_status=body.net_status,
+        challenge_upper=body.challenge_upper,
         owner_name=owner_name,
         owner_avatar=owner_avatar,
         updated_at=now,
@@ -2120,6 +2190,7 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
         await verify_hostable_or_raise(body.addr, autopunch=body.autopunch)
 
     p.post_type = body.post_type
+    p.challenge_upper = body.challenge_upper
     p.addr = body.addr
     p.comment = body.comment
     p.stream_url = body.stream_url
@@ -2129,6 +2200,8 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     p.net_status = body.net_status
     p.updated_at = now_ts()
     geoip.apply_country_from_addr(p, addr=p.addr)
+    if rec.guest_user_id:
+        refresh_ranked_active(rec)
 
     messages = list(rec.pending_messages)
     rec.pending_messages.clear()
@@ -2459,6 +2532,8 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 rec.owner_user_id,
                 rec.guest_user_id,
                 body.winner,
+                body.host_char,
+                body.guest_char,
             )
 
     await _persist_record(rec)
@@ -2720,11 +2795,7 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
         post.guest_avatar = ""
 
     post.guest_connected = True
-    post.ranked_active = (
-        post.post_type == "ranked"
-        and bool(rec.guest_user_id)
-        and rec.guest_rank == post.rank
-    )
+    refresh_ranked_active(rec)
 
     await _persist_record(rec)
     await HUB.publish("upsert", asdict(post))
