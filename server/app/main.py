@@ -947,6 +947,11 @@ async def stats_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "stats.html")
 
 
+@app.get("/guide")
+async def guide_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "guide.html")
+
+
 def _match_is_win(match: db.Match, user_id: str) -> bool:
     if match.host_user_id == user_id:
         return match.winner == "host"

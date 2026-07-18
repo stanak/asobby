@@ -34,6 +34,7 @@
     "nav.stats": "戦績",
     "nav.replays": "リプレイ検索",
     "nav.clientDownload": "クライアント DL",
+    "nav.guide": "使い方",
     "nav.support": "ご支援",
 
     "clientUpdate.banner": "Windows クライアント v{version} が公開されています",
@@ -261,6 +262,89 @@
     "err.hostNotReachable": "ホストに接続できません",
     "err.autopunchHostNotReachable":
       "Autopunch 経由でホストに接続できません（Autopunch は起動していますか？）",
+
+    // guide
+    "guide.pageTitle": "asobby - 使い方",
+    "guide.title": "使い方",
+    "guide.subtitle": "Windows クライアント",
+    "guide.sectionBasic": "基本の使い方",
+    "guide.basicLead": "asobby は、非想天則のホスト募集を自動で Web ロビーに掲載するツールです。",
+    "guide.basicStep1": "Windows クライアントを起動し、タスクトレイに常駐させます。",
+    "guide.basicStep2": "天則を起動してホストを立てます（キャラ選択・待機画面で OK）。",
+    "guide.basicStep3": "クライアントがホスト状態を検知すると、接続可能な場合は自動でロビーに募集が掲載されます。",
+    "guide.basicFail":
+      "接続できない場合（ポート未開放・Autopunch 未設定など）は募集されず、トースト通知で「募集に失敗しました: ポート開放または autopunch を確認してください」と知らせます。",
+    "guide.basicLogin":
+      "ランクマ募集と Discord 連携機能（戦績・ロビー閲覧・チャット）を使うには、トレイメニューから Discord ログインが必要です。",
+    "guide.sectionIcon": "トレイアイコンの色",
+    "guide.iconIdle": "灰色 — 待機中。天則でホストを立てると自動投稿を開始します。",
+    "guide.iconRecruit": "緑 — 募集中。ロビーに掲載中です。",
+    "guide.iconBattle": "橙 — 対戦中。ゲストが接続した状態です。",
+    "guide.iconStatus": "メニュー最上部のステータス行にも、同じ状態がテキストで表示されます。",
+    "guide.sectionMenu": "トレイメニュー各項目",
+    "guide.menu.openLobby.name": "ロビーページを開く",
+    "guide.menu.openLobby.desc":
+      "Web ロビーをブラウザで開きます。募集一覧の閲覧・ロビーチャット・相手への定型メッセージ送信ができます（要 Discord ログイン）。",
+    "guide.menu.settings.name": "投稿設定...",
+    "guide.menu.settings.desc":
+      "募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、ランクマ時の「格上に挑戦」を設定します。OK でサーバーへ反映されます。",
+    "guide.menu.stats.name": "戦績を見る...",
+    "guide.menu.stats.desc":
+      "PC 内に保存した対戦記録をウィンドウで表示します。フィルタやソートで自分の戦績を確認できます。",
+    "guide.menu.syncStats.name": "戦績をサーバーと同期",
+    "guide.menu.syncStats.desc":
+      "ローカル戦績とサーバー上の記録を双方向に同期します（要 Discord ログイン）。",
+    "guide.menu.postType.name": "募集タイプ切替",
+    "guide.menu.postType.desc":
+      "カジュアルとランクマを切り替えます。ランクマは Discord ログインが必須です。",
+    "guide.menu.comment.name": "コメント切替",
+    "guide.menu.comment.desc":
+      "ロビーに表示するコメント文を、投稿設定で登録した候補から選びます。",
+    "guide.menu.stream.name": "配信URL切替",
+    "guide.menu.stream.desc":
+      "YouTube / Twitch / ニコニコの配信 URL を候補から選び、ロビーに表示します。",
+    "guide.menu.pause.name": "ホスト自動検知を一時停止",
+    "guide.menu.pause.desc":
+      "天則を起動していても自動投稿しない時間帯を設けます（30 分 / 1 時間 / 3 時間、または今すぐ再開）。",
+    "guide.menu.copyAddr.name": "ホスト時に IP:Port をコピー",
+    "guide.menu.copyAddr.desc":
+      "ON にすると、募集開始時に接続アドレスをクリップボードへコピーします。",
+    "guide.menu.challengeUpper.name": "格上に挑戦",
+    "guide.menu.challengeUpper.desc":
+      "ランクマ募集時のみ表示。ON の間、1 段上位ランク帯の相手との対戦もランクマ扱いになります（ランクマモード時のみ）。",
+    "guide.menu.reply.name": "リクエストに返信",
+    "guide.menu.reply.desc":
+      "ロビー閲覧者から Giuroll 使用依頼やカジュアルお誘いが届いたとき、承諾 / 拒否で返信します。未返信があるときだけ表示されます。",
+    "guide.menu.discord.name": "Discord でログイン / ログアウト",
+    "guide.menu.discord.desc":
+      "Web ロビー・戦績・ランクマ募集に必要な Discord アカウント連携です。ログアウト後の再ログインではアカウント選択画面が開きます。",
+    "guide.menu.tools.name": "Autopunch / Giuroll / 天則 (soku)",
+    "guide.menu.tools.desc":
+      "各ツールのパス設定・起動・停止です。初回は exe の場所を指定します。Autopunch はポート開放なしで接続可能にするために使います。",
+    "guide.menu.update.name": "更新をダウンロード",
+    "guide.menu.update.desc":
+      "新しいクライアント版が公開されているときだけ表示され、GitHub の Release ページを開きます。",
+    "guide.menu.log.name": "ログを開く",
+    "guide.menu.log.desc":
+      "asobby.log をエディタで開き、検知状態やエラーの詳細を確認できます。",
+    "guide.menu.resetPaths.name": "ツールのパスをリセット",
+    "guide.menu.resetPaths.desc":
+      "Autopunch / Giuroll / 天則の exe パス設定をクリアします。",
+    "guide.menu.lang.name": "言語 / Language",
+    "guide.menu.lang.desc":
+      "クライアント UI の表示言語（日本語 / English）を切り替えます。",
+    "guide.menu.quit.name": "終了",
+    "guide.menu.quit.desc":
+      "クライアントを終了します。募集中の投稿は閉じられます。",
+    "guide.sectionNotify": "主な通知",
+    "guide.notifyPostFailed":
+      "募集失敗 — サーバーから接続確認が取れません。ポート転送・Autopunch・ファイアウォールを確認してください。",
+    "guide.notifyLogin":
+      "ログインが必要 — ランクマ募集や戦績同期の前に Discord ログインしてください。",
+    "guide.notifyCasual":
+      "カジュアル扱い — ランクマ募集でも、相手が未ログインまたはランク帯不一致（格上挑戦 OFF 時）だと戦績はカジュアルになります。",
+    "guide.notifyUpdate":
+      "更新あり — 新しい exe が公開されたとき。トレイからダウンロードできます。",
   };
 
   const en = {
@@ -269,6 +353,7 @@
     "nav.stats": "Stats",
     "nav.replays": "Replay search",
     "nav.clientDownload": "Download client",
+    "nav.guide": "Guide",
     "nav.support": "Support us",
 
     "clientUpdate.banner": "Windows client v{version} is available",
@@ -492,6 +577,91 @@
     "err.hostNotReachable": "Host not reachable",
     "err.autopunchHostNotReachable":
       "Host not reachable via Autopunch (is Autopunch running?)",
+
+    // guide
+    "guide.pageTitle": "asobby - Guide",
+    "guide.title": "Guide",
+    "guide.subtitle": "Windows client",
+    "guide.sectionBasic": "Basics",
+    "guide.basicLead":
+      "asobby automatically lists your Hisoutensoku host on the web lobby.",
+    "guide.basicStep1": "Start the Windows client and leave it running in the system tray.",
+    "guide.basicStep2": "Launch Hisoutensoku and open a host (character select / waiting screen is enough).",
+    "guide.basicStep3":
+      "When the client detects hosting, it posts to the lobby automatically if the server can reach your host.",
+    "guide.basicFail":
+      "If you are not reachable (no port forwarding, Autopunch not set up, etc.), nothing is posted and a toast says: “Failed to post: check port forwarding or autopunch”.",
+    "guide.basicLogin":
+      "Discord login from the tray menu is required for ranked posts and Discord features (stats, lobby, chat).",
+    "guide.sectionIcon": "Tray icon colors",
+    "guide.iconIdle": "Gray — idle. Start a host in Hisoutensoku to begin auto-posting.",
+    "guide.iconRecruit": "Green — recruiting. Your post is live on the lobby.",
+    "guide.iconBattle": "Orange — in battle. A guest is connected.",
+    "guide.iconStatus": "The status line at the top of the menu shows the same state in text.",
+    "guide.sectionMenu": "Tray menu items",
+    "guide.menu.openLobby.name": "Open lobby page",
+    "guide.menu.openLobby.desc":
+      "Opens the web lobby in your browser: post list, lobby chat, and preset messages to hosts (Discord login required).",
+    "guide.menu.settings.name": "Post settings...",
+    "guide.menu.settings.desc":
+      "Post mode (casual / ranked), comment presets, stream URL presets, and “Challenge upper rank” for ranked mode. OK applies to the server.",
+    "guide.menu.stats.name": "View stats...",
+    "guide.menu.stats.desc":
+      "Opens a window with match history stored on this PC. Filter and sort your records.",
+    "guide.menu.syncStats.name": "Sync stats with server",
+    "guide.menu.syncStats.desc":
+      "Two-way sync between local stats and the server (Discord login required).",
+    "guide.menu.postType.name": "Post type",
+    "guide.menu.postType.desc":
+      "Switch between casual and ranked. Ranked requires Discord login.",
+    "guide.menu.comment.name": "Comment preset",
+    "guide.menu.comment.desc":
+      "Pick the comment shown on the lobby from presets defined in Post settings.",
+    "guide.menu.stream.name": "Stream URL preset",
+    "guide.menu.stream.desc":
+      "Pick a YouTube / Twitch / Niconico URL from presets to show on the lobby.",
+    "guide.menu.pause.name": "Pause auto host detection",
+    "guide.menu.pause.desc":
+      "Stop auto-posting even while Hisoutensoku is running (30 min / 1 h / 3 h, or resume now).",
+    "guide.menu.copyAddr.name": "Copy IP:Port when hosting",
+    "guide.menu.copyAddr.desc":
+      "When enabled, copies your host address to the clipboard when recruiting starts.",
+    "guide.menu.challengeUpper.name": "Challenge upper rank",
+    "guide.menu.challengeUpper.desc":
+      "Ranked posts only. While ON, matches against guests exactly one rank band above also count as ranked.",
+    "guide.menu.reply.name": "Reply to requests",
+    "guide.menu.reply.desc":
+      "Accept or decline Giuroll requests and casual invites from lobby viewers. Shown only while requests are pending.",
+    "guide.menu.discord.name": "Log in / Log out (Discord)",
+    "guide.menu.discord.desc":
+      "Links your Discord account for the web lobby, stats, and ranked posts. Re-login opens the account picker.",
+    "guide.menu.tools.name": "Autopunch / Giuroll / Hisoutensoku (soku)",
+    "guide.menu.tools.desc":
+      "Set paths, launch, or stop each tool. Autopunch helps guests connect without manual port forwarding.",
+    "guide.menu.update.name": "Download update",
+    "guide.menu.update.desc":
+      "Shown when a newer client release is available; opens the GitHub Releases page.",
+    "guide.menu.log.name": "Open log",
+    "guide.menu.log.desc":
+      "Opens asobby.log for detection details and errors.",
+    "guide.menu.resetPaths.name": "Reset tool paths",
+    "guide.menu.resetPaths.desc":
+      "Clears saved exe paths for Autopunch, Giuroll, and Hisoutensoku.",
+    "guide.menu.lang.name": "Language / 言語",
+    "guide.menu.lang.desc":
+      "Switch the client UI between Japanese and English.",
+    "guide.menu.quit.name": "Quit",
+    "guide.menu.quit.desc":
+      "Exits the client and closes any active post.",
+    "guide.sectionNotify": "Common notifications",
+    "guide.notifyPostFailed":
+      "Post failed — the server could not verify your host. Check port forwarding, Autopunch, and firewall.",
+    "guide.notifyLogin":
+      "Login required — sign in with Discord before ranked posts or stats sync.",
+    "guide.notifyCasual":
+      "Casual match — even on ranked posts, stats stay casual if the opponent is not logged in or ranks do not match (unless Challenge upper rank is on).",
+    "guide.notifyUpdate":
+      "Update available — a new exe is published; download it from the tray menu.",
   };
 
   const dicts = { ja, en };

@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="guide.pageTitle">asobby - 使い方</title>
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-RJSLH3FRBR"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-RJSLH3FRBR');
+</script>
+<script src="/static/i18n.js"></script>
+<script src="/static/client-update.js"></script>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1c2129;
+    --border: #2c3440;
+    --text: #d8dee9;
+    --muted: #7b8794;
+    --accent: #6ab0f3;
+    --ok: #57c07d;
+    --warn: #e5c07b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 16px 20px 8px;
+  }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: 1px; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header nav {
+    margin-left: auto;
+    font-size: 13px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  header nav a { color: var(--accent); text-decoration: none; }
+  header nav a:hover { text-decoration: underline; }
+  header nav .lang-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--accent);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 2px 8px;
+    font-family: inherit;
+  }
+  header nav .lang-btn:hover { border-color: var(--accent); }
+  main {
+    padding: 8px 20px 48px;
+    max-width: 820px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 22px;
+    margin-bottom: 16px;
+  }
+  .panel h2 {
+    margin: 0 0 14px;
+    font-size: 16px;
+    color: var(--text);
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+  .panel p { margin: 0 0 12px; }
+  .panel p:last-child { margin-bottom: 0; }
+  .panel ul {
+    margin: 0 0 12px;
+    padding-left: 1.25em;
+  }
+  .panel li { margin-bottom: 6px; }
+  .lead {
+    font-size: 16px;
+    color: var(--text);
+  }
+  .note {
+    padding: 12px 14px;
+    border-radius: 6px;
+    background: rgba(106, 176, 243, 0.08);
+    border: 1px solid rgba(106, 176, 243, 0.25);
+    color: var(--text);
+    font-size: 14px;
+  }
+  .warn {
+    padding: 12px 14px;
+    border-radius: 6px;
+    background: rgba(229, 192, 123, 0.08);
+    border: 1px solid rgba(229, 192, 123, 0.3);
+    font-size: 14px;
+  }
+  .icon-list {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .icon-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .icon-dot {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    margin-top: 5px;
+  }
+  .icon-dot.idle { background: #808080; }
+  .icon-dot.recruit { background: #2ea043; }
+  .icon-dot.battle { background: #db6d28; }
+  .menu-item {
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .menu-item:last-child { border-bottom: none; padding-bottom: 0; }
+  .menu-item h3 {
+    margin: 0 0 6px;
+    font-size: 15px;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .menu-item p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1 data-i18n="guide.title">使い方</h1>
+  <span class="sub" data-i18n="guide.subtitle">Windows クライアント</span>
+  <nav>
+    <a href="/" data-i18n="nav.lobby">ロビー</a>
+    <a href="/stats" data-i18n="nav.stats">戦績</a>
+    <a href="/replays" data-i18n="nav.replays">リプレイ検索</a>
+    <a id="nav-client-dl" href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
+    <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
+    <button type="button" id="lang-toggle" class="lang-btn"></button>
+  </nav>
+</header>
+
+<main>
+  <section class="panel">
+    <h2 data-i18n="guide.sectionBasic">基本の使い方</h2>
+    <p class="lead" data-i18n="guide.basicLead">asobby は、非想天則のホスト募集を自動で Web ロビーに掲載するツールです。</p>
+    <ol>
+      <li data-i18n="guide.basicStep1">Windows クライアントを起動し、タスクトレイに常駐させます。</li>
+      <li data-i18n="guide.basicStep2">天則を起動してホストを立てます（キャラ選択・待機画面で OK）。</li>
+      <li data-i18n="guide.basicStep3">クライアントがホスト状態を検知すると、接続可能な場合は自動でロビーに募集が掲載されます。</li>
+    </ol>
+    <div class="warn" data-i18n="guide.basicFail">接続できない場合（ポート未開放・Autopunch 未設定など）は募集されず、トースト通知で「募集に失敗しました: ポート開放または autopunch を確認してください」と知らせます。</div>
+    <p class="note" data-i18n="guide.basicLogin">ランクマ募集と Discord 連携機能（戦績・ロビー閲覧・チャット）を使うには、トレイメニューから Discord ログインが必要です。</p>
+  </section>
+
+  <section class="panel">
+    <h2 data-i18n="guide.sectionIcon">トレイアイコンの色</h2>
+    <ul class="icon-list">
+      <li>
+        <span class="icon-dot idle" aria-hidden="true"></span>
+        <span data-i18n="guide.iconIdle">灰色 — 待機中。天則でホストを立てると自動投稿を開始します。</span>
+      </li>
+      <li>
+        <span class="icon-dot recruit" aria-hidden="true"></span>
+        <span data-i18n="guide.iconRecruit">緑 — 募集中。ロビーに掲載中です。</span>
+      </li>
+      <li>
+        <span class="icon-dot battle" aria-hidden="true"></span>
+        <span data-i18n="guide.iconBattle">橙 — 対戦中。ゲストが接続した状態です。</span>
+      </li>
+    </ul>
+    <p data-i18n="guide.iconStatus">メニュー最上部のステータス行にも、同じ状態がテキストで表示されます。</p>
+  </section>
+
+  <section class="panel">
+    <h2 data-i18n="guide.sectionMenu">トレイメニュー各項目</h2>
+
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.openLobby.name">ロビーページを開く</h3>
+      <p data-i18n="guide.menu.openLobby.desc">Web ロビーをブラウザで開きます。募集一覧の閲覧・ロビーチャット・相手への定型メッセージ送信ができます（要 Discord ログイン）。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.settings.name">投稿設定...</h3>
+      <p data-i18n="guide.menu.settings.desc">募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、ランクマ時の「格上に挑戦」を設定します。OK でサーバーへ反映されます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.stats.name">戦績を見る...</h3>
+      <p data-i18n="guide.menu.stats.desc">PC 内に保存した対戦記録をウィンドウで表示します。フィルタやソートで自分の戦績を確認できます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.syncStats.name">戦績をサーバーと同期</h3>
+      <p data-i18n="guide.menu.syncStats.desc">ローカル戦績とサーバー上の記録を双方向に同期します（要 Discord ログイン）。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.postType.name">募集タイプ切替</h3>
+      <p data-i18n="guide.menu.postType.desc">カジュアルとランクマを切り替えます。ランクマは Discord ログインが必須です。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.comment.name">コメント切替</h3>
+      <p data-i18n="guide.menu.comment.desc">ロビーに表示するコメント文を、投稿設定で登録した候補から選びます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.stream.name">配信URL切替</h3>
+      <p data-i18n="guide.menu.stream.desc">YouTube / Twitch / ニコニコの配信 URL を候補から選び、ロビーに表示します。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.pause.name">ホスト自動検知を一時停止</h3>
+      <p data-i18n="guide.menu.pause.desc">天則を起動していても自動投稿しない時間帯を設けます（30 分 / 1 時間 / 3 時間、または今すぐ再開）。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.copyAddr.name">ホスト時に IP:Port をコピー</h3>
+      <p data-i18n="guide.menu.copyAddr.desc">ON にすると、募集開始時に接続アドレスをクリップボードへコピーします。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.challengeUpper.name">格上に挑戦</h3>
+      <p data-i18n="guide.menu.challengeUpper.desc">ランクマ募集時のみ表示。ON の間、1 段上位ランク帯の相手との対戦もランクマ扱いになります（ランクマモード時のみ）。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.reply.name">リクエストに返信</h3>
+      <p data-i18n="guide.menu.reply.desc">ロビー閲覧者から Giuroll 使用依頼やカジュアルお誘いが届いたとき、承諾 / 拒否で返信します。未返信があるときだけ表示されます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.discord.name">Discord でログイン / ログアウト</h3>
+      <p data-i18n="guide.menu.discord.desc">Web ロビー・戦績・ランクマ募集に必要な Discord アカウント連携です。ログアウト後の再ログインではアカウント選択画面が開きます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.tools.name">Autopunch / Giuroll / 天則 (soku)</h3>
+      <p data-i18n="guide.menu.tools.desc">各ツールのパス設定・起動・停止です。初回は exe の場所を指定します。Autopunch はポート開放なしで接続可能にするために使います。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.update.name">更新をダウンロード</h3>
+      <p data-i18n="guide.menu.update.desc">新しいクライアント版が公開されているときだけ表示され、GitHub の Release ページを開きます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.log.name">ログを開く</h3>
+      <p data-i18n="guide.menu.log.desc">asobby.log をエディタで開き、検知状態やエラーの詳細を確認できます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.resetPaths.name">ツールのパスをリセット</h3>
+      <p data-i18n="guide.menu.resetPaths.desc">Autopunch / Giuroll / 天則の exe パス設定をクリアします。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.lang.name">言語 / Language</h3>
+      <p data-i18n="guide.menu.lang.desc">クライアント UI の表示言語（日本語 / English）を切り替えます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.quit.name">終了</h3>
+      <p data-i18n="guide.menu.quit.desc">クライアントを終了します。募集中の投稿は閉じられます。</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2 data-i18n="guide.sectionNotify">主な通知</h2>
+    <ul>
+      <li data-i18n="guide.notifyPostFailed">募集失敗 — サーバーから接続確認が取れません。ポート転送・Autopunch・ファイアウォールを確認してください。</li>
+      <li data-i18n="guide.notifyLogin">ログインが必要 — ランクマ募集や戦績同期の前に Discord ログインしてください。</li>
+      <li data-i18n="guide.notifyCasual">カジュアル扱い — ランクマ募集でも、相手が未ログインまたはランク帯不一致（格上挑戦 OFF 時）だと戦績はカジュアルになります。</li>
+      <li data-i18n="guide.notifyUpdate">更新あり — 新しい exe が公開されたとき。トレイからダウンロードできます。</li>
+    </ul>
+  </section>
+</main>
+<script>
+applyDocumentI18n();
+initLangToggle();
+</script>
+</body>
+</html>
