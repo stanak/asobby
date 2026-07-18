@@ -58,7 +58,7 @@ GUEST_PROBE_INTERVAL_SEC = 10
 SSE_PING_INTERVAL_SEC = 15
 
 # ランクマッチ: 昇降格判定に必要な最低試合数
-RANKED_EVAL_MIN_GAMES = 10
+RANKED_EVAL_MIN_GAMES = 30
 # 昇降格判定に使う直近ランクマ対戦数
 RANKED_EVAL_WINDOW = 30
 # 1 セッション (ゲスト接続) でランクマ扱いになるのは最初の 3 戦まで

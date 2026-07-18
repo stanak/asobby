@@ -172,7 +172,7 @@ async def test_rank_promotion_and_demotion():
             host.rank = "easy"
             await s.commit()
 
-        for _ in range(10):
+        for _ in range(30):
             await insert_ranked_win("999", "888", winner="host")
 
         new_rank = await main.evaluate_rank("999")
@@ -187,16 +187,17 @@ async def test_rank_promotion_and_demotion():
         assert again is None
 
         await create_user("777", name="exuser", rank="ex")
-        await insert_ranked_win("777", "888", winner="host")
-        for _ in range(9):
+        for _ in range(5):
+            await insert_ranked_win("777", "888", winner="host")
+        for _ in range(25):
             await insert_ranked_win("777", "888", winner="guest")
         demoted = await main.evaluate_rank("777")
         assert demoted == "normal"
 
         await create_user("666", name="normaluser", rank="normal")
-        for _ in range(2):
+        for _ in range(10):
             await insert_ranked_win("666", "888", winner="host")
-        for _ in range(8):
+        for _ in range(20):
             await insert_ranked_win("666", "888", winner="guest")
         stay = await main.evaluate_rank("666")
         assert stay is None
@@ -211,7 +212,7 @@ async def test_ph_promotion_inits_all_char_ratings():
         await create_user("999", name="lunauser", rank="luna")
         await create_user("888", name="guest")
 
-        for _ in range(10):
+        for _ in range(30):
             await insert_ranked_win("999", "888", winner="host")
 
         new_rank = await main.evaluate_rank("999")

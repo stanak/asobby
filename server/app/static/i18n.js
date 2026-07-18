@@ -280,7 +280,7 @@
     "guide.rankedIntro":
       "ランクマ募集で、同じランク帯の相手（または「格上に挑戦」ON 時は 1 段上位）と Discord ログイン済みの相手が対戦すると、戦績がランクマとして記録されます。",
     "guide.rankedEval":
-      "昇格・降格は、現在のランク帯における直近 30 戦の勝率で判定します（判定には最低 10 戦必要）。",
+      "昇格・降格は、現在のランク帯における直近 30 戦の勝率で判定します（30 戦揃ってから判定されます）。",
     "guide.rank.colRank": "ランク",
     "guide.rank.colPromote": "昇格条件",
     "guide.rank.colDemote": "降格条件",
@@ -631,7 +631,7 @@
     "guide.rankedIntro":
       "On ranked posts, matches count as ranked when your opponent is logged in on the client and in the same rank band (or exactly one band above if Challenge upper rank is on).",
     "guide.rankedEval":
-      "Promotion and demotion use your win rate over the latest 30 ranked matches in your current band (at least 10 matches required).",
+      "Promotion and demotion use your win rate over the latest 30 ranked matches in your current band (evaluated once all 30 are recorded).",
     "guide.rank.colRank": "Rank",
     "guide.rank.colPromote": "Promotion",
     "guide.rank.colDemote": "Demotion",
