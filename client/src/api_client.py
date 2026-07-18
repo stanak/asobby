@@ -200,7 +200,20 @@ class ApiClient:
         return r.json()
 
     async def check_update(self) -> Optional[Tuple[str, str]]:
-        """Fetch latest release from GitHub. Returns (tag_name, html_url) or None."""
+        """最新版を確認する。サーバー (/client/latest) を優先し、失敗時は GitHub。"""
+        try:
+            r = await self.http.get(
+                f"{self.base}/client/latest",
+                headers=self._request_headers(),
+            )
+            r.raise_for_status()
+            data = r.json()
+            if data.get("ok") and data.get("tag"):
+                url = str(data.get("download_url") or data.get("html_url") or "")
+                return str(data["tag"]), url
+        except Exception as e:
+            self._last_update_check_error = e
+
         try:
             r = await self.http.get(
                 GITHUB_LATEST_RELEASE_URL,
