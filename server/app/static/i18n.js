@@ -270,12 +270,46 @@
     "guide.sectionBasic": "基本の使い方",
     "guide.basicLead": "asobby は、非想天則のホスト募集を自動で Web ロビーに掲載するツールです。",
     "guide.basicStep1": "Windows クライアントを起動し、タスクトレイに常駐させます。",
-    "guide.basicStep2": "天則を起動してホストを立てます（キャラ選択・待機画面で OK）。",
+    "guide.basicStep2": "天則を起動してホストを立てます。",
     "guide.basicStep3": "クライアントがホスト状態を検知すると、接続可能な場合は自動でロビーに募集が掲載されます。",
     "guide.basicFail":
       "接続できない場合（ポート未開放・Autopunch 未設定など）は募集されず、トースト通知で「募集に失敗しました: ポート開放または autopunch を確認してください」と知らせます。",
     "guide.basicLogin":
-      "ランクマ募集と Discord 連携機能（戦績・ロビー閲覧・チャット）を使うには、トレイメニューから Discord ログインが必要です。",
+      "asobby の利用（募集の自動投稿・Web ロビー・戦績・チャットなど）には、トレイメニューから Discord ログインが必要です。",
+    "guide.sectionRanked": "ランクマの仕様",
+    "guide.rankedIntro":
+      "ランクマ募集で、同じランク帯の相手（または「格上に挑戦」ON 時は 1 段上位）と Discord ログイン済みの相手が対戦すると、戦績がランクマとして記録されます。",
+    "guide.rankedEval":
+      "昇格・降格は、現在のランク帯における直近 30 戦の勝率で判定します（判定には最低 10 戦必要）。",
+    "guide.rank.colRank": "ランク",
+    "guide.rank.colPromote": "昇格条件",
+    "guide.rank.colDemote": "降格条件",
+    "guide.rank.none": "—",
+    "guide.rank.e.promote": "勝率 50% 以上 → N",
+    "guide.rank.n.promote": "勝率 50% 以上 → Ex",
+    "guide.rank.ex.promote": "勝率 60% 以上 → H",
+    "guide.rank.ex.demote": "勝率 20% 未満 → N",
+    "guide.rank.h.promote": "勝率 60% 以上 → L",
+    "guide.rank.h.demote": "勝率 20% 未満 → Ex",
+    "guide.rank.l.promote": "勝率 70% 以上 → Ph",
+    "guide.rank.l.demote": "勝率 20% 未満 → H",
+    "guide.rank.ph.promote": "昇格なし",
+    "guide.rank.ph.demote": "降格なし",
+    "guide.rankedPh":
+      "Ph 帯ではランクの昇降格はありません。Ph 同士のランクマ対戦では、キャラごとのレート（TrueSkill）が更新されます。",
+    "guide.sectionStats": "戦績の管理",
+    "guide.statsIntro":
+      "対戦結果はクライアント側にも保存され、Discord ログイン後にサーバーとも同期されます（トレイの「戦績をサーバーと同期」、または Web 戦績ページ）。",
+    "guide.statsClient": "クライアントの「戦績を見る...」— PC 内の記録をウィンドウで閲覧",
+    "guide.statsWeb":
+      "Web の戦績ページ (/stats) — サーバー上の記録を閲覧（要 Discord ログイン）",
+    "guide.statsFilterLead":
+      "どちらも、次の表の行をクリックすると対戦履歴が絞り込まれます。組み合わせて使うと、知りたい情報にすぐたどり着けます。",
+    "guide.statsFilterMyChar": "自キャラ別 — 自分が使ったキャラでフィルタ",
+    "guide.statsFilterOppChar": "相手キャラ別 — 相手キャラでフィルタ",
+    "guide.statsFilterOppProfile": "相手プロファイル別 — 相手のプロファイル名でフィルタ",
+    "guide.statsFilterNote":
+      "フィルタは対戦履歴・集計の両方に反映されます。チップの × または「クリア」で解除できます。",
     "guide.sectionIcon": "トレイアイコンの色",
     "guide.iconIdle": "灰色 — 待機中。天則でホストを立てると自動投稿を開始します。",
     "guide.iconRecruit": "緑 — 募集中。ロビーに掲載中です。",
@@ -296,7 +330,7 @@
       "ローカル戦績とサーバー上の記録を双方向に同期します（要 Discord ログイン）。",
     "guide.menu.postType.name": "募集タイプ切替",
     "guide.menu.postType.desc":
-      "カジュアルとランクマを切り替えます。ランクマは Discord ログインが必須です。",
+      "カジュアルとランクマを切り替えます。いずれの募集も Discord ログインが必要です。",
     "guide.menu.comment.name": "コメント切替",
     "guide.menu.comment.desc":
       "ロビーに表示するコメント文を、投稿設定で登録した候補から選びます。",
@@ -317,7 +351,7 @@
       "ロビー閲覧者から Giuroll 使用依頼やカジュアルお誘いが届いたとき、承諾 / 拒否で返信します。未返信があるときだけ表示されます。",
     "guide.menu.discord.name": "Discord でログイン / ログアウト",
     "guide.menu.discord.desc":
-      "Web ロビー・戦績・ランクマ募集に必要な Discord アカウント連携です。ログアウト後の再ログインではアカウント選択画面が開きます。",
+      "asobby 全般に必要な Discord アカウント連携です。ログアウト後の再ログインではアカウント選択画面が開きます。",
     "guide.menu.tools.name": "Autopunch / Giuroll / 天則 (soku)",
     "guide.menu.tools.desc":
       "各ツールのパス設定・起動・停止です。初回は exe の場所を指定します。Autopunch はポート開放なしで接続可能にするために使います。",
@@ -340,7 +374,7 @@
     "guide.notifyPostFailed":
       "募集失敗 — サーバーから接続確認が取れません。ポート転送・Autopunch・ファイアウォールを確認してください。",
     "guide.notifyLogin":
-      "ログインが必要 — ランクマ募集や戦績同期の前に Discord ログインしてください。",
+      "ログインが必要 — 募集の自動投稿などを行う前に Discord ログインしてください。",
     "guide.notifyCasual":
       "カジュアル扱い — ランクマ募集でも、相手が未ログインまたはランク帯不一致（格上挑戦 OFF 時）だと戦績はカジュアルになります。",
     "guide.notifyUpdate":
@@ -586,13 +620,47 @@
     "guide.basicLead":
       "asobby automatically lists your Hisoutensoku host on the web lobby.",
     "guide.basicStep1": "Start the Windows client and leave it running in the system tray.",
-    "guide.basicStep2": "Launch Hisoutensoku and open a host (character select / waiting screen is enough).",
+    "guide.basicStep2": "Launch Hisoutensoku and open a host.",
     "guide.basicStep3":
       "When the client detects hosting, it posts to the lobby automatically if the server can reach your host.",
     "guide.basicFail":
       "If you are not reachable (no port forwarding, Autopunch not set up, etc.), nothing is posted and a toast says: “Failed to post: check port forwarding or autopunch”.",
     "guide.basicLogin":
-      "Discord login from the tray menu is required for ranked posts and Discord features (stats, lobby, chat).",
+      "Discord login from the tray menu is required to use asobby (auto-posting, web lobby, stats, chat, and more).",
+    "guide.sectionRanked": "Ranked rules",
+    "guide.rankedIntro":
+      "On ranked posts, matches count as ranked when your opponent is logged in on the client and in the same rank band (or exactly one band above if Challenge upper rank is on).",
+    "guide.rankedEval":
+      "Promotion and demotion use your win rate over the latest 30 ranked matches in your current band (at least 10 matches required).",
+    "guide.rank.colRank": "Rank",
+    "guide.rank.colPromote": "Promotion",
+    "guide.rank.colDemote": "Demotion",
+    "guide.rank.none": "—",
+    "guide.rank.e.promote": "Win rate ≥ 50% → N",
+    "guide.rank.n.promote": "Win rate ≥ 50% → Ex",
+    "guide.rank.ex.promote": "Win rate ≥ 60% → H",
+    "guide.rank.ex.demote": "Win rate < 20% → N",
+    "guide.rank.h.promote": "Win rate ≥ 60% → L",
+    "guide.rank.h.demote": "Win rate < 20% → Ex",
+    "guide.rank.l.promote": "Win rate ≥ 70% → Ph",
+    "guide.rank.l.demote": "Win rate < 20% → H",
+    "guide.rank.ph.promote": "No promotion",
+    "guide.rank.ph.demote": "No demotion",
+    "guide.rankedPh":
+      "There is no rank promotion or demotion in Ph. Ranked Ph vs Ph matches update per-character TrueSkill ratings.",
+    "guide.sectionStats": "Stats",
+    "guide.statsIntro":
+      "Match results are stored on the client and synced to the server after Discord login (tray “Sync stats with server” or the web stats page).",
+    "guide.statsClient": "Tray “View stats...” — browse records stored on this PC",
+    "guide.statsWeb":
+      "Web stats page (/stats) — browse server-side records (Discord login required)",
+    "guide.statsFilterLead":
+      "In both UIs, click a row in the breakdown tables below to filter match history. Combine filters to find what you need quickly.",
+    "guide.statsFilterMyChar": "My character — filter by characters you played",
+    "guide.statsFilterOppChar": "Opponent character — filter by opponent character",
+    "guide.statsFilterOppProfile": "Opponent profile — filter by opponent profile name",
+    "guide.statsFilterNote":
+      "Filters apply to both history and summaries. Clear them with the chip × or Clear button.",
     "guide.sectionIcon": "Tray icon colors",
     "guide.iconIdle": "Gray — idle. Start a host in Hisoutensoku to begin auto-posting.",
     "guide.iconRecruit": "Green — recruiting. Your post is live on the lobby.",
@@ -613,7 +681,7 @@
       "Two-way sync between local stats and the server (Discord login required).",
     "guide.menu.postType.name": "Post type",
     "guide.menu.postType.desc":
-      "Switch between casual and ranked. Ranked requires Discord login.",
+      "Switch between casual and ranked. All posts require Discord login.",
     "guide.menu.comment.name": "Comment preset",
     "guide.menu.comment.desc":
       "Pick the comment shown on the lobby from presets defined in Post settings.",
@@ -634,7 +702,7 @@
       "Accept or decline Giuroll requests and casual invites from lobby viewers. Shown only while requests are pending.",
     "guide.menu.discord.name": "Log in / Log out (Discord)",
     "guide.menu.discord.desc":
-      "Links your Discord account for the web lobby, stats, and ranked posts. Re-login opens the account picker.",
+      "Links your Discord account for all asobby features. Re-login opens the account picker.",
     "guide.menu.tools.name": "Autopunch / Giuroll / Hisoutensoku (soku)",
     "guide.menu.tools.desc":
       "Set paths, launch, or stop each tool. Autopunch helps guests connect without manual port forwarding.",
@@ -657,7 +725,7 @@
     "guide.notifyPostFailed":
       "Post failed — the server could not verify your host. Check port forwarding, Autopunch, and firewall.",
     "guide.notifyLogin":
-      "Login required — sign in with Discord before ranked posts or stats sync.",
+      "Login required — sign in with Discord before auto-posting and other features.",
     "guide.notifyCasual":
       "Casual match — even on ranked posts, stats stay casual if the opponent is not logged in or ranks do not match (unless Challenge upper rank is on).",
     "guide.notifyUpdate":

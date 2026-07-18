@@ -145,6 +145,29 @@
     color: var(--muted);
     font-size: 14px;
   }
+  .rank-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    margin: 12px 0;
+  }
+  .rank-table th,
+  .rank-table td {
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .rank-table th {
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .rank-table td:first-child {
+    font-weight: 600;
+    color: var(--accent);
+    white-space: nowrap;
+  }
 </style>
 </head>
 <body>
@@ -171,7 +194,71 @@
       <li data-i18n="guide.basicStep3">クライアントがホスト状態を検知すると、接続可能な場合は自動でロビーに募集が掲載されます。</li>
     </ol>
     <div class="warn" data-i18n="guide.basicFail">接続できない場合（ポート未開放・Autopunch 未設定など）は募集されず、トースト通知で「募集に失敗しました: ポート開放または autopunch を確認してください」と知らせます。</div>
-    <p class="note" data-i18n="guide.basicLogin">ランクマ募集と Discord 連携機能（戦績・ロビー閲覧・チャット）を使うには、トレイメニューから Discord ログインが必要です。</p>
+    <p class="note" data-i18n="guide.basicLogin">asobby の利用（募集の自動投稿・Web ロビー・戦績・チャットなど）には、トレイメニューから Discord ログインが必要です。</p>
+  </section>
+
+  <section class="panel">
+    <h2 data-i18n="guide.sectionRanked">ランクマの仕様</h2>
+    <p data-i18n="guide.rankedIntro">ランクマ募集で、同じランク帯の相手（または「格上に挑戦」ON 時は 1 段上位）と Discord ログイン済みの相手が対戦すると、戦績がランクマとして記録されます。</p>
+    <p data-i18n="guide.rankedEval">昇格・降格は、現在のランク帯における直近 30 戦の勝率で判定します（判定には最低 10 戦必要）。</p>
+    <table class="rank-table">
+      <thead>
+        <tr>
+          <th data-i18n="guide.rank.colRank">ランク</th>
+          <th data-i18n="guide.rank.colPromote">昇格条件</th>
+          <th data-i18n="guide.rank.colDemote">降格条件</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>E</td>
+          <td data-i18n="guide.rank.e.promote">勝率 50% 以上 → N</td>
+          <td data-i18n="guide.rank.none">—</td>
+        </tr>
+        <tr>
+          <td>N</td>
+          <td data-i18n="guide.rank.n.promote">勝率 50% 以上 → Ex</td>
+          <td data-i18n="guide.rank.none">—</td>
+        </tr>
+        <tr>
+          <td>Ex</td>
+          <td data-i18n="guide.rank.ex.promote">勝率 60% 以上 → H</td>
+          <td data-i18n="guide.rank.ex.demote">勝率 20% 未満 → N</td>
+        </tr>
+        <tr>
+          <td>H</td>
+          <td data-i18n="guide.rank.h.promote">勝率 60% 以上 → L</td>
+          <td data-i18n="guide.rank.h.demote">勝率 20% 未満 → Ex</td>
+        </tr>
+        <tr>
+          <td>L</td>
+          <td data-i18n="guide.rank.l.promote">勝率 70% 以上 → Ph</td>
+          <td data-i18n="guide.rank.l.demote">勝率 20% 未満 → H</td>
+        </tr>
+        <tr>
+          <td>Ph</td>
+          <td data-i18n="guide.rank.ph.promote">昇格なし</td>
+          <td data-i18n="guide.rank.ph.demote">降格なし</td>
+        </tr>
+      </tbody>
+    </table>
+    <p data-i18n="guide.rankedPh">Ph 帯ではランクの昇降格はありません。Ph 同士のランクマ対戦では、キャラごとのレート（TrueSkill）が更新されます。</p>
+  </section>
+
+  <section class="panel">
+    <h2 data-i18n="guide.sectionStats">戦績の管理</h2>
+    <p data-i18n="guide.statsIntro">対戦結果はクライアント側にも保存され、Discord ログイン後にサーバーとも同期されます（トレイの「戦績をサーバーと同期」、または Web 戦績ページ）。</p>
+    <ul>
+      <li data-i18n="guide.statsClient">クライアントの「戦績を見る...」— PC 内の記録をウィンドウで閲覧</li>
+      <li data-i18n="guide.statsWeb">Web の戦績ページ (/stats) — サーバー上の記録を閲覧（要 Discord ログイン）</li>
+    </ul>
+    <p data-i18n="guide.statsFilterLead">どちらも、次の表の行をクリックすると対戦履歴が絞り込まれます。組み合わせて使うと、知りたい情報にすぐたどり着けます。</p>
+    <ul>
+      <li data-i18n="guide.statsFilterMyChar">自キャラ別 — 自分が使ったキャラでフィルタ</li>
+      <li data-i18n="guide.statsFilterOppChar">相手キャラ別 — 相手キャラでフィルタ</li>
+      <li data-i18n="guide.statsFilterOppProfile">相手プロファイル別 — 相手のプロファイル名でフィルタ</li>
+    </ul>
+    <p data-i18n="guide.statsFilterNote">フィルタは対戦履歴・集計の両方に反映されます。チップの × または「クリア」で解除できます。</p>
   </section>
 
   <section class="panel">
