@@ -184,6 +184,17 @@ class Controller:
             t("log.challenge_upper", state=t("common.on" if enabled else "common.off")),
         )
 
+    def ping_warn_enabled(self) -> bool:
+        return bool(self.config_mgr.get_value("options", "ping_warn_enabled", True))
+
+    def set_ping_warn_enabled(self, enabled: bool) -> None:
+        value = bool(enabled)
+        self.config_mgr.set_value("options", "ping_warn_enabled", value)
+        self.log_sink(
+            "info",
+            t("log.ping_warn_enabled", state=t("common.on" if value else "common.off")),
+        )
+
     def ping_warn_ms(self) -> int:
         raw = self.config_mgr.get_value("options", "ping_warn_ms", 60)
         try:
@@ -399,6 +410,7 @@ class Controller:
         return {
             "post_type": self.my_post.post_type or "casual",
             "challenge_upper": bool(self.my_post.challenge_upper),
+            "ping_warn_enabled": self.ping_warn_enabled(),
             "ping_warn_ms": self.ping_warn_ms(),
             "ping_warn_giuroll_ms": self.ping_warn_giuroll_ms(),
             "addr": addr,
@@ -1518,6 +1530,19 @@ class Controller:
             return
         self.my_post = replace(self.my_post, **filtered)
         self.my_post_sink(self.my_post)
+
+    async def enqueue_settings_update(self) -> None:
+        """募集中なら Ping 警告設定などをサーバーへ即反映する。"""
+        if not self.has_active_post():
+            return
+        payload = self._build_payload(
+            addr=self.my_post.addr or "",
+            giuroll=bool(self.my_post.giuroll),
+            autopunch=bool(self.my_post.autopunch),
+            match_status=self.my_post.match_status or "",
+            net_status=int(self.my_post.net_status or NET_ALIVE),
+        )
+        await self._action_q.put(Action("update", payload))
 
     def update_btn_labels(self, tool_name: str, is_active: bool) -> None:
         self.tool_mgr.set_active(tool_name, is_active)

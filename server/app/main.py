@@ -238,6 +238,7 @@ class Post:
     guest_connected: bool = False  # プローブでゲスト検出中
     ranked_active: bool = False  # 現在のゲストとのセッションがランクマ扱いか
     challenge_upper: bool = False  # ランクマ時に 1 段上位帯のゲストもランクマ扱い
+    ping_warn_enabled: bool = True  # 高 Ping 警告をホストへ送るか
     ping_warn_ms: int = PING_WARN_MS_DEFAULT  # この RTT 以上の viewer ping でホストへ警告
     ping_warn_giuroll_ms: int = PING_WARN_GIUROLL_MS_DEFAULT  # Giuroll ホスト向け警告しきい値
     country_code: str = ""  # addr の IP から推定した ISO 3166-1 alpha-2
@@ -329,6 +330,7 @@ class CreatePostIn(BaseModel):
     match_status: str = Field(default="", max_length=200)
     net_status: int = 0
     challenge_upper: bool = False
+    ping_warn_enabled: bool = True
     ping_warn_ms: int = Field(default=PING_WARN_MS_DEFAULT, ge=PING_WARN_MS_MIN, le=PING_WARN_MS_MAX)
     ping_warn_giuroll_ms: int = Field(
         default=PING_WARN_GIUROLL_MS_DEFAULT,
@@ -969,6 +971,8 @@ def get_record_or_raise(post_id: str, owner_token: str) -> PostRecord:
 
 
 def post_ping_warn_threshold(post: Post) -> int:
+    if not post.ping_warn_enabled:
+        return PING_WARN_MS_MAX + 1
     if post.giuroll:
         return int(post.ping_warn_giuroll_ms or PING_WARN_GIUROLL_MS_DEFAULT)
     return int(post.ping_warn_ms or PING_WARN_MS_DEFAULT)
@@ -2254,6 +2258,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         match_status=body.match_status,
         net_status=body.net_status,
         challenge_upper=body.challenge_upper,
+        ping_warn_enabled=body.ping_warn_enabled,
         ping_warn_ms=body.ping_warn_ms,
         ping_warn_giuroll_ms=body.ping_warn_giuroll_ms,
         owner_name=owner_name,
@@ -2294,6 +2299,7 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
 
     p.post_type = body.post_type
     p.challenge_upper = body.challenge_upper
+    p.ping_warn_enabled = body.ping_warn_enabled
     p.ping_warn_ms = body.ping_warn_ms
     p.ping_warn_giuroll_ms = body.ping_warn_giuroll_ms
     p.addr = body.addr
@@ -2398,6 +2404,15 @@ async def report_high_ping(
 
     if rec.owner_user_id == sess["id"]:
         raise HTTPException(status_code=400, detail="cannot report ping to your own post")
+
+    if not rec.post.ping_warn_enabled:
+        raise HTTPException(status_code=409, detail="ping warnings disabled for this post")
+
+    if not rec.post.guest_connected:
+        raise HTTPException(status_code=409, detail="host has no connected guest")
+
+    if rec.guest_user_id and rec.guest_user_id != sess["id"]:
+        raise HTTPException(status_code=403, detail="only the connected guest may report ping")
 
     threshold = post_ping_warn_threshold(rec.post)
     if body.rtt_ms < threshold:

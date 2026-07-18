@@ -76,6 +76,13 @@ async def create_post(
     return body["post"], body["owner_token"]
 
 
+def connect_guest(post_id: str, *, guest_user_id: str = "viewer1", name: str = "viewer") -> None:
+    rec = main.RECORDS[post_id]
+    rec.post.guest_connected = True
+    rec.guest_user_id = guest_user_id
+    rec.post.guest_name = name
+
+
 @pytest.fixture(autouse=True)
 def clean_state(tmp_path):
     db_path = tmp_path / "asobby_ping_report_test.db"
@@ -96,6 +103,7 @@ async def test_ping_report_delivered_via_update():
         await create_user("host1", name="host")
         await create_user("viewer1", name="viewer")
         post, owner_token = await create_post(client, ping_warn_ms=60)
+        connect_guest(post["id"], guest_user_id="viewer1", name="viewer")
 
         viewer_token = bearer_token("viewer1", "viewer")
         res = await client.post(
@@ -137,6 +145,7 @@ async def test_ping_report_uses_giuroll_threshold():
             ping_warn_giuroll_ms=100,
             giuroll=True,
         )
+        connect_guest(post["id"], guest_user_id="viewer1", name="viewer")
 
         viewer_token = bearer_token("viewer1", "viewer")
         res = await client.post(
@@ -176,6 +185,7 @@ async def test_ping_report_below_threshold_rejected():
         await create_user("host1", name="host")
         await create_user("viewer1", name="viewer")
         post, _ = await create_post(client, ping_warn_ms=60)
+        connect_guest(post["id"], guest_user_id="viewer1", name="viewer")
 
         viewer_token = bearer_token("viewer1", "viewer")
         res = await client.post(
@@ -184,6 +194,68 @@ async def test_ping_report_below_threshold_rejected():
             headers={"Authorization": f"Bearer {viewer_token}"},
         )
         assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_ping_report_requires_connected_guest():
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        await create_user("viewer1", name="viewer")
+        post, _ = await create_post(client, ping_warn_ms=60)
+
+        viewer_token = bearer_token("viewer1", "viewer")
+        res = await client.post(
+            f"/posts/{post['id']}/ping-report",
+            json={"rtt_ms": 80},
+            headers={"Authorization": f"Bearer {viewer_token}"},
+        )
+        assert res.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_ping_report_only_connected_guest():
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        await create_user("viewer1", name="viewer")
+        await create_user("viewer2", name="other")
+        post, _ = await create_post(client, ping_warn_ms=60)
+        connect_guest(post["id"], guest_user_id="viewer1", name="viewer")
+
+        other_token = bearer_token("viewer2", "other")
+        res = await client.post(
+            f"/posts/{post['id']}/ping-report",
+            json={"rtt_ms": 80},
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        assert res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_ping_report_disabled():
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        await create_user("viewer1", name="viewer")
+        token = bearer_token("host1", "host")
+        res = await client.post(
+            "/posts",
+            json={
+                "post_type": "casual",
+                "addr": "1.2.3.4:10800",
+                "ping_warn_enabled": False,
+                "ping_warn_ms": 60,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        connect_guest(post["id"], guest_user_id="viewer1", name="viewer")
+
+        viewer_token = bearer_token("viewer1", "viewer")
+        res2 = await client.post(
+            f"/posts/{post['id']}/ping-report",
+            json={"rtt_ms": 80},
+            headers={"Authorization": f"Bearer {viewer_token}"},
+        )
+        assert res2.status_code == 409
 
 
 @pytest.mark.asyncio

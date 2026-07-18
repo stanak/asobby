@@ -1093,9 +1093,16 @@ async function refreshHostPings() {
       pingByPostId.set(item.id, item.ok ? item.rtt_ms : null);
       if (item.ok && item.rtt_ms != null) {
         const post = posts.get(item.id);
-        const threshold = pingWarnThresholdForPost(post);
-        if (item.rtt_ms >= threshold) {
-          void reportHighPing(item.id, item.rtt_ms);
+        if (
+          post?.guest_connected
+          && post.ping_warn_enabled !== false
+        ) {
+          const threshold = pingWarnThresholdForPost(post);
+          if (item.rtt_ms >= threshold) {
+            void reportHighPing(item.id, item.rtt_ms);
+          }
+        } else {
+          pingReportedPosts.delete(item.id);
         }
       }
     }
@@ -1715,6 +1722,9 @@ function connect() {
   es.addEventListener("upsert", (e) => {
     const p = JSON.parse(e.data);
     posts.set(p.id, p);
+    if (!p.guest_connected) {
+      pingReportedPosts.delete(p.id);
+    }
     render();
     void refreshHostPings();
   });

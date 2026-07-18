@@ -331,7 +331,7 @@
       "Web ロビーをブラウザで開きます。募集一覧の閲覧・ロビーチャット・相手への定型メッセージ送信ができます（要 Discord ログイン）。",
     "guide.menu.settings.name": "投稿設定...",
     "guide.menu.settings.desc":
-      "募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、ランクマ時の「格上に挑戦」、Ping 警告しきい値 (通常 60ms / Giuroll 100ms) を設定します。OK でサーバーへ反映されます。",
+      "募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、ランクマ時の「格上に挑戦」、高 Ping 警告 (ON/OFF・通常 60ms / Giuroll 100ms) を設定します。OK でサーバーへ反映されます。",
     "guide.menu.stats.name": "戦績を見る...",
     "guide.menu.stats.desc":
       "PC 内に保存した対戦記録をウィンドウで表示します。フィルタやソートで自分の戦績を確認できます。",
@@ -390,7 +390,7 @@
     "guide.notifyUpdate":
       "更新あり — 新しい exe が公開されたとき。トレイからダウンロードできます。",
     "guide.notifyHighPing":
-      "Ping 警告 — ロビー閲覧者の Ping が設定値以上 (通常 60ms / Giuroll 100ms) のとき、ホストへ通知します。ロビーの Ping 列は緑 (良好) / 黄 (しきい値付近) / 赤 (しきい値超) で表示されます。しきい値は「投稿設定...」で変更できます。",
+      "Ping 警告 — ゲストが接続したあと、接続中ゲスト (Discord ログイン済み) の Ping が設定値以上 (通常 60ms / Giuroll 100ms) のときだけホストへ通知します。「投稿設定...」またはトレイの「高 Ping 警告」で ON/OFF・しきい値を変更できます。ロビーの Ping 列は緑 / 黄 / 赤で表示されます。",
   };
 
   const en = {
@@ -753,7 +753,7 @@
     "guide.notifyUpdate":
       "Update available — a new exe is published; download it from the tray menu.",
     "guide.notifyHighPing":
-      "High ping warning — when a lobby viewer’s ping to you is at or above your threshold (default 60ms / Giuroll 100ms), the host client shows a toast. The Ping column is green (good) / yellow (near threshold) / red (over). Change thresholds in Post settings…. Viewers need the asobby client running.",
+      "High ping warning — after a guest connects, only that logged-in guest can trigger a host toast when their ping is at or above your threshold (default 60ms / Giuroll 100ms). Toggle and thresholds are in Post settings… or the tray “High ping warnings” item. The Ping column stays green / yellow / red.",
   };
 
   const dicts = { ja, en };

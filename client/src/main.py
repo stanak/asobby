@@ -188,15 +188,17 @@ class TrayApp:
     def _open_settings(self) -> None:
         current = {
             **self.controller.config_mgr.get_post_defaults(),
+            "ping_warn_enabled": self.controller.ping_warn_enabled(),
             "ping_warn_ms": self.controller.ping_warn_ms(),
             "ping_warn_giuroll_ms": self.controller.ping_warn_giuroll_ms(),
         }
 
         def apply(result: dict) -> None:
             for key, value in result.items():
-                if key in ("ping_warn_ms", "ping_warn_giuroll_ms"):
+                if key in ("ping_warn_enabled", "ping_warn_ms", "ping_warn_giuroll_ms"):
                     continue
                 self.controller.config_mgr.set_post_default(key, value)
+            self.controller.set_ping_warn_enabled(bool(result.get("ping_warn_enabled", True)))
             self.controller.set_ping_warn_ms(int(result.get("ping_warn_ms", 60)))
             self.controller.set_ping_warn_giuroll_ms(
                 int(result.get("ping_warn_giuroll_ms", 100))
@@ -207,6 +209,11 @@ class TrayApp:
                 stream_url=result["stream_url"],
                 challenge_upper=result.get("challenge_upper", False),
             )
+            if self.controller.has_active_post():
+                asyncio.run_coroutine_threadsafe(
+                    self.controller.enqueue_settings_update(),
+                    self.loop,
+                )
             if self.icon:
                 self.icon.update_menu()
 
@@ -454,6 +461,18 @@ class TrayApp:
         if self.icon:
             self.icon.update_menu()
 
+    def _toggle_ping_warn(self) -> None:
+        self.controller.set_ping_warn_enabled(
+            not self.controller.ping_warn_enabled()
+        )
+        if self.controller.has_active_post():
+            asyncio.run_coroutine_threadsafe(
+                self.controller.enqueue_settings_update(),
+                self.loop,
+            )
+        if self.icon:
+            self.icon.update_menu()
+
     def _request_menu_items(self):
         """未返信リクエストへの承諾/拒否メニュー。"""
         self.controller._prune_pending_requests()
@@ -533,6 +552,11 @@ class TrayApp:
                 lambda: self._toggle_challenge_upper(),
                 checked=lambda item: self.controller.challenge_upper_enabled(),
                 visible=lambda item: self.controller.my_post.post_type == "ranked",
+            ),
+            MenuItem(
+                t("tray.ping_warn"),
+                lambda: self._toggle_ping_warn(),
+                checked=lambda item: self.controller.ping_warn_enabled(),
             ),
             MenuItem(
                 t("tray.reply_requests"),
