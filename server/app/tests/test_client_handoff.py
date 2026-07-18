@@ -78,6 +78,51 @@ async def test_handoff_requires_login_redirects_to_web_login():
 
 
 @pytest.mark.asyncio
+async def test_handoff_force_redirects_to_account_picker():
+    async with app_client() as client:
+        await create_user("u1", name="alice")
+        token = bearer_token("u1", "alice")
+        res = await client.get(
+            "/auth/client/handoff",
+            params={"port": 12345, "force": "1"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 302
+        loc = res.headers["location"]
+        assert loc.startswith("/auth/discord/web?next=")
+        assert "force=1" in loc
+        assert "port%3D12345" in loc
+        set_cookie = res.headers.get("set-cookie", "")
+        assert "asobby_session=" in set_cookie
+        assert "Max-Age=0" in set_cookie or "max-age=0" in set_cookie.lower()
+
+
+@pytest.mark.asyncio
+async def test_auth_logout_api_revokes_bearer():
+    async with app_client() as client:
+        await create_user("u1", name="alice")
+        token = bearer_token("u1", "alice")
+        res = await client.post(
+            "/auth/logout",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+        assert res.json() == {"ok": True}
+        me = await client.get(
+            "/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert me.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_auth_logout_api_unauthorized():
+    async with app_client() as client:
+        res = await client.post("/auth/logout")
+        assert res.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_handoff_invalid_port():
     async with app_client() as client:
         await create_user("u1", name="alice")

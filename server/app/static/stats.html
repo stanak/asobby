@@ -13,6 +13,7 @@
   gtag('config', 'G-RJSLH3FRBR');
 </script>
 <script src="/static/i18n.js"></script>
+<script src="/static/client-update.js"></script>
 <style>
   :root {
     --bg: #14171c;
@@ -271,9 +272,9 @@
   <nav>
     <a href="/" data-i18n="nav.lobby">ロビー</a>
     <a href="/replays" data-i18n="nav.replays">リプレイ検索</a>
-    <a href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
+    <a id="nav-client-dl" href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
     <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
-    <button type="button" id="lang-toggle">日本語</button>
+    <button type="button" id="lang-toggle" class="lang-btn"></button>
   </nav>
 </header>
 

@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title data-i18n="replays.pageTitle">asobby - リプレイ検索</title>
 <script src="/static/i18n.js"></script>
+<script src="/static/client-update.js"></script>
+<script src="/static/player-suggest.js"></script>
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-RJSLH3FRBR"></script>
 <script>
@@ -226,7 +228,7 @@
   <nav>
     <a href="/" data-i18n="nav.lobby">ロビー</a>
     <a href="/stats" data-i18n="nav.stats">戦績</a>
-    <a href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
+    <a id="nav-client-dl" href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
     <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
     <button type="button" id="lang-toggle" class="lang-btn"></button>
   </nav>
@@ -281,9 +283,7 @@
           <tr>
             <th data-i18n="replays.colDateTime">日時</th>
             <th data-i18n="replays.colHost">ホスト</th>
-            <th data-i18n="replays.colHC">HC</th>
             <th data-i18n="replays.colClient">クライアント</th>
-            <th data-i18n="replays.colGC">GC</th>
             <th data-i18n="replays.colResult">勝敗</th>
             <th data-i18n="replays.colRanked">ランクマ</th>
             <th data-i18n="replays.colDL">DL</th>
@@ -427,23 +427,31 @@ async function downloadReplayBlob(matchId, fallbackName, linkEl) {
   }
 }
 
+function playerSideLabel(name, profile, rank, rating, charId) {
+  const player = playerLabel(name, profile, rank, rating);
+  const chr = charName(charId);
+  if (chr === "-") return player;
+  return player + " / " + chr;
+}
+
 function renderRow(r) {
   const tr = document.createElement("tr");
   appendTextCell(tr, formatJst(r.played_at));
 
   const hostTd = document.createElement("td");
-  hostTd.textContent = playerLabel(r.host_name, r.host_profile, r.host_rank, r.host_rating);
+  hostTd.textContent = playerSideLabel(
+    r.host_name, r.host_profile, r.host_rank, r.host_rating, r.host_char
+  );
   if (r.winner === "host") hostTd.className = "winner";
   tr.appendChild(hostTd);
 
-  appendTextCell(tr, charName(r.host_char));
-
   const guestTd = document.createElement("td");
-  guestTd.textContent = playerLabel(r.guest_name, r.guest_profile, r.guest_rank, r.guest_rating);
+  guestTd.textContent = playerSideLabel(
+    r.guest_name, r.guest_profile, r.guest_rank, r.guest_rating, r.guest_char
+  );
   if (r.winner === "guest") guestTd.className = "winner";
   tr.appendChild(guestTd);
 
-  appendTextCell(tr, charName(r.guest_char));
   appendTextCell(tr, winnerResult(r.winner));
   appendTextCell(tr, formatRankedCell(r.ranked, r.match_rank));
 
@@ -596,161 +604,12 @@ loadMoreEl.addEventListener("click", () => {
   fetchResults(false);
 });
 
-// --- プレイヤー名オートコンプリート ---
-const SUGGEST_DEBOUNCE_MS = 250;
-let suggestTimer = null;
-let suggestSeq = 0;
-let suggestItems = [];
-let suggestActive = -1;
-let suggestMouseDown = false;
-
-function discordAvatarUrl(userId, avatarHash) {
-  if (avatarHash) {
-    return "https://cdn.discordapp.com/avatars/" + userId + "/" + avatarHash + ".png?size=64";
-  }
-  return "https://cdn.discordapp.com/embed/avatars/0.png";
-}
-
-function closePlayerSuggest() {
-  playerSuggestEl.hidden = true;
-  playerSuggestEl.replaceChildren();
-  suggestItems = [];
-  suggestActive = -1;
-}
-
-function selectPlayerSuggest(idx) {
-  if (idx < 0 || idx >= suggestItems.length) return;
-  playerEl.value = suggestItems[idx].name;
-  closePlayerSuggest();
-}
-
-function renderPlayerSuggest() {
-  playerSuggestEl.replaceChildren();
-  if (!suggestItems.length) {
-    playerSuggestEl.hidden = true;
-    return;
-  }
-  const frag = document.createDocumentFragment();
-  suggestItems.forEach((item, idx) => {
-    const row = document.createElement("div");
-    row.className = "player-suggest-item" + (idx === suggestActive ? " active" : "");
-    row.setAttribute("role", "option");
-    row.dataset.idx = String(idx);
-
-    if (item.kind === "user") {
-      const img = document.createElement("img");
-      img.className = "player-suggest-avatar";
-      img.src = discordAvatarUrl(item.user_id, item.avatar);
-      img.loading = "lazy";
-      img.referrerPolicy = "no-referrer";
-      img.alt = "";
-      row.appendChild(img);
-    }
-
-    const nameSpan = document.createElement("span");
-    nameSpan.className = "player-suggest-name";
-    nameSpan.textContent = item.name;
-    row.appendChild(nameSpan);
-
-    const badge = document.createElement("span");
-    badge.className = "player-suggest-badge";
-    badge.textContent = item.kind === "user" ? t("replays.badgeDiscord") : t("replays.badgeProfile");
-    row.appendChild(badge);
-
-    frag.appendChild(row);
-  });
-  playerSuggestEl.appendChild(frag);
-  playerSuggestEl.hidden = false;
-}
-
-function highlightPlayerSuggest(idx) {
-  if (!suggestItems.length) return;
-  if (idx < 0) idx = suggestItems.length - 1;
-  if (idx >= suggestItems.length) idx = 0;
-  suggestActive = idx;
-  const rows = playerSuggestEl.querySelectorAll(".player-suggest-item");
-  rows.forEach((row, i) => {
-    row.classList.toggle("active", i === suggestActive);
-  });
-  const activeRow = rows[suggestActive];
-  if (activeRow) {
-    activeRow.scrollIntoView({ block: "nearest" });
-  }
-}
-
-async function fetchPlayerSuggest(query) {
-  const seq = ++suggestSeq;
-  try {
-    const params = new URLSearchParams({ q: query });
-    const res = await fetch("/replays/players?" + params.toString());
-    if (!res.ok) return;
-    const data = await res.json();
-    if (seq !== suggestSeq || query !== playerEl.value.trim()) return;
-    if (!data.ok || !Array.isArray(data.suggestions)) {
-      closePlayerSuggest();
-      return;
-    }
-    suggestItems = data.suggestions;
-    suggestActive = -1;
-    renderPlayerSuggest();
-  } catch (_err) {
-    if (seq === suggestSeq) closePlayerSuggest();
-  }
-}
-
-function schedulePlayerSuggest() {
-  if (suggestTimer) clearTimeout(suggestTimer);
-  const query = playerEl.value.trim();
-  if (!query) {
-    closePlayerSuggest();
-    return;
-  }
-  suggestTimer = setTimeout(() => fetchPlayerSuggest(query), SUGGEST_DEBOUNCE_MS);
-}
-
-playerEl.addEventListener("input", schedulePlayerSuggest);
-
-playerEl.addEventListener("keydown", (e) => {
-  if (playerSuggestEl.hidden || !suggestItems.length) return;
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    highlightPlayerSuggest(suggestActive + 1);
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    highlightPlayerSuggest(suggestActive - 1);
-  } else if (e.key === "Enter" && suggestActive >= 0) {
-    e.preventDefault();
-    selectPlayerSuggest(suggestActive);
-  } else if (e.key === "Escape") {
-    closePlayerSuggest();
-  }
-});
-
-playerEl.addEventListener("blur", () => {
-  if (suggestMouseDown) return;
-  closePlayerSuggest();
-});
-
-playerSuggestEl.addEventListener("mousedown", (e) => {
-  suggestMouseDown = true;
-  e.preventDefault();
-});
-
-document.addEventListener("mouseup", () => {
-  suggestMouseDown = false;
-});
-
-playerSuggestEl.addEventListener("click", (e) => {
-  const row = e.target.closest(".player-suggest-item");
-  if (!row) return;
-  const idx = Number(row.dataset.idx);
-  if (!Number.isNaN(idx)) selectPlayerSuggest(idx);
-});
-
-document.addEventListener("click", (e) => {
-  if (!playerEl.contains(e.target) && !playerSuggestEl.contains(e.target)) {
-    closePlayerSuggest();
-  }
+attachPlayerSuggest({
+  input: playerEl,
+  suggestEl: playerSuggestEl,
+  fetchUrl: "/replays/players",
+  mode: "plain",
+  getQuery: () => playerEl.value.trim(),
 });
 
 applyDocumentI18n();

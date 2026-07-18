@@ -1363,10 +1363,11 @@ class Controller:
         port = server.sockets[0].getsockname()[1]
         return server, port, code_fut
 
-    async def login_discord(self, open_browser) -> None:
+    async def login_discord(self, open_browser, *, force: bool = False) -> None:
         """Discord ログインフロー。ブラウザで /auth/client/handoff を開き、
         Web 側でログイン済みならワンタイムコードが即 localhost へ届く。
-        未ログインなら Discord OAuth を挟んでから届く。"""
+        未ログインなら Discord OAuth を挟んでから届く。
+        force=True のときは既存 Web セッションを破棄し Discord アカウント選択を表示する。"""
         if self._login_in_progress:
             return
         self._login_in_progress = True
@@ -1374,7 +1375,10 @@ class Controller:
             server, port, code_fut = await self._start_handoff_listener()
             try:
                 base = self.api.base.rstrip("/")
-                open_browser(f"{base}/auth/client/handoff?port={port}")
+                url = f"{base}/auth/client/handoff?port={port}"
+                if force:
+                    url += "&force=1"
+                open_browser(url)
                 self.log_sink("info", "ブラウザで Discord ログインを確認しています...")
                 code = await asyncio.wait_for(code_fut, timeout=180.0)
             finally:
@@ -1390,6 +1394,7 @@ class Controller:
                     username=self.discord_user,
                 )
                 self._notified_login_required = False
+                self._auto_login_attempted = False
                 self.log_sink("info", f"Discord にログインしました: {self.discord_user}")
                 self.notify_sink(t("notify.discord_login_ok", name=self.discord_user))
         except asyncio.TimeoutError:
@@ -1409,12 +1414,22 @@ class Controller:
     async def _auto_login(self) -> None:
         """募集検知時にログインしていない場合、ブラウザ経由で自動連携を試みる。
         Web 側でログイン済みなら操作なしで完了する。"""
-        await self.login_discord(webbrowser.open)
+        await self.login_discord(webbrowser.open, force=False)
         if not self.is_logged_in() and not self._notified_login_required:
             self._notified_login_required = True
             self.notify_sink(t("notify.login_required_post"))
 
-    def logout_discord(self) -> None:
+    async def logout_discord(self) -> None:
+        base = self.api.base.rstrip("/")
+        if self.api.session_token:
+            try:
+                await self.api.auth_logout()
+            except httpx.HTTPError:
+                pass
+        try:
+            webbrowser.open(f"{base}/auth/logout")
+        except Exception:
+            pass
         self.api.session_token = ""
         self.discord_user = ""
         self.config_mgr.set_values("auth", session_token="", username="")

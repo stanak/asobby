@@ -7,9 +7,9 @@
   const STORAGE_KEY = "asobby-lang";
   const LANGS = ["ja", "en"];
 
-  const LANG_LABEL = {
-    ja: "日本語",
-    en: "English",
+  const LANG_SWITCH_LABEL = {
+    ja: "English",
+    en: "Japanese",
   };
 
   function isLang(v) {
@@ -35,6 +35,10 @@
     "nav.replays": "リプレイ検索",
     "nav.clientDownload": "クライアント DL",
     "nav.support": "ご支援",
+
+    "clientUpdate.banner": "Windows クライアント v{version} が公開されています",
+    "clientUpdate.download": "GitHub で見る",
+    "clientUpdate.dismiss": "閉じる",
 
     // common
     "common.appName": "asobby",
@@ -108,6 +112,14 @@
     "lobby.rankDescEx": "中級者層",
     "lobby.rankDescHard": "中級者以上",
     "lobby.rankDescLuna": "上級者以上",
+
+    "lobby.chatTitle": "ロビーチャット(感想戦などにもどうぞ)",
+    "lobby.chatPlaceholder": "メッセージを入力 (@でメンション)",
+    "lobby.chatSend": "送信",
+    "lobby.chatHide": "ロビーチャットを隠す",
+    "lobby.chatShow": "ロビーチャットを表示",
+    "lobby.chatEmpty": "まだメッセージはありません",
+    "lobby.chatCooldown": "しばらく待ってから送ってください",
 
     // stats
     "stats.pageTitle": "asobby - 戦績",
@@ -185,9 +197,7 @@
     "replays.resultMeta": "{shown} / {total} 件表示",
     "replays.colDateTime": "日時",
     "replays.colHost": "ホスト",
-    "replays.colHC": "HC",
     "replays.colClient": "クライアント",
-    "replays.colGC": "GC",
     "replays.colResult": "勝敗",
     "replays.colRanked": "ランクマ",
     "replays.colDL": "DL",
@@ -260,7 +270,9 @@
     "nav.clientDownload": "Download client",
     "nav.support": "Support us",
 
-    // common
+    "clientUpdate.banner": "Windows client v{version} is available",
+    "clientUpdate.download": "View on GitHub",
+    "clientUpdate.dismiss": "Dismiss",
     "common.appName": "asobby",
     "common.loading": "Loading…",
     "common.loadFailed": "Failed to load",
@@ -332,6 +344,14 @@
     "lobby.rankDescEx": "Intermediate tier",
     "lobby.rankDescHard": "Intermediate and up",
     "lobby.rankDescLuna": "Advanced and up",
+
+    "lobby.chatTitle": "Lobby chat (post-match chat welcome)",
+    "lobby.chatPlaceholder": "Type a message (@ to mention)",
+    "lobby.chatSend": "Send",
+    "lobby.chatHide": "Hide lobby chat",
+    "lobby.chatShow": "Show lobby chat",
+    "lobby.chatEmpty": "No messages yet",
+    "lobby.chatCooldown": "Please wait before sending another message",
 
     // stats
     "stats.pageTitle": "asobby - Stats",
@@ -409,9 +429,7 @@
     "replays.resultMeta": "Showing {shown} / {total}",
     "replays.colDateTime": "Date/time",
     "replays.colHost": "Host",
-    "replays.colHC": "HC",
     "replays.colClient": "Client",
-    "replays.colGC": "GC",
     "replays.colResult": "Result",
     "replays.colRanked": "Ranked",
     "replays.colDL": "DL",
@@ -522,7 +540,7 @@
     const btn = document.getElementById("lang-toggle");
     if (!btn) return;
     function updateLabel() {
-      btn.textContent = LANG_LABEL[lang];
+      btn.textContent = LANG_SWITCH_LABEL[lang];
     }
     updateLabel();
     btn.addEventListener("click", () => {

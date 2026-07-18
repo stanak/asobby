@@ -284,9 +284,14 @@ class TrayApp:
 
     def _discord_action(self) -> None:
         if self.controller.is_logged_in():
-            self.controller.logout_discord()
-            if self.icon:
-                self.icon.update_menu()
+            def done(_fut) -> None:
+                if self.icon:
+                    self.icon.update_menu()
+
+            fut = asyncio.run_coroutine_threadsafe(
+                self.controller.logout_discord(), self.loop
+            )
+            fut.add_done_callback(done)
             return
 
         def open_browser(url: str) -> None:
@@ -297,7 +302,7 @@ class TrayApp:
                 self.icon.update_menu()
 
         fut = asyncio.run_coroutine_threadsafe(
-            self.controller.login_discord(open_browser), self.loop
+            self.controller.login_discord(open_browser, force=True), self.loop
         )
         fut.add_done_callback(done)
 

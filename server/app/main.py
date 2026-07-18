@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import socket
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone, timedelta
@@ -34,6 +35,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 import db
 import geoip
 import post_redis
+import client_release
 
 ALLOWED_STREAM_DOMAINS = {
     "youtube.com",
@@ -81,6 +83,14 @@ MESSAGE_COOLDOWN_SEC = 60.0
 MESSAGE_MAX_PENDING = 20
 MESSAGE_SENT_LOG_MAX = 50
 MESSAGE_LAST_SENT: dict[tuple[str, str], float] = {}  # (sender_user_id, post_id) -> 時刻
+
+# ロビーチャット (インメモリ)
+LOBBY_CHAT_MAX_MESSAGES = 100
+LOBBY_CHAT_MAX_TEXT = 500
+LOBBY_CHAT_MAX_LINES = 8
+LOBBY_CHAT_COOLDOWN_SEC = 3.0
+LOBBY_CHAT_MAX_AGE_SEC = 3600
+LOBBY_CHAT_LAST_SENT: dict[str, float] = {}  # user_id -> unix ts
 
 # リプレイアップロード上限 (非想天則の .rep は通常 100KB 程度)
 REPLAY_MAX_BYTES = 300 * 1024
@@ -373,6 +383,10 @@ class SyncMatchesIn(BaseModel):
         return self
 
 
+class ChatMessageIn(BaseModel):
+    text: str = Field(max_length=LOBBY_CHAT_MAX_TEXT + 50)
+
+
 # ----------------------------
 # Sessions (署名付きトークン; サーバー側の保存なし)
 # ----------------------------
@@ -422,13 +436,34 @@ def verify_session_token(token: str) -> Optional[dict[str, Any]]:
 
 
 def session_from_request(request: Request) -> Optional[dict[str, Any]]:
+    token = session_token_from_request(request)
+    if token:
+        return verify_session_token(token)
+    return None
+
+
+def session_token_from_request(request: Request) -> str:
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
-        return verify_session_token(auth[7:].strip())
-    cookie = request.cookies.get("asobby_session")
-    if cookie:
-        return verify_session_token(cookie)
-    return None
+        return auth[7:].strip()
+    return request.cookies.get("asobby_session") or ""
+
+
+def revoke_session_token(token: str) -> None:
+    if token:
+        LOGOUT_REVOKED.add(token)
+
+
+def clear_session_cookie(response: Response) -> None:
+    response.set_cookie(
+        key="asobby_session",
+        value="",
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=0,
+        path="/",
+    )
 
 
 def discord_avatar_url(user_id: str, avatar_hash: str) -> str:
@@ -570,6 +605,7 @@ def format_sse(event: str, data: Any) -> str:
 # App / state
 # ----------------------------
 HUB = SSEHub()
+LOBBY_CHAT: deque[dict[str, Any]] = deque(maxlen=LOBBY_CHAT_MAX_MESSAGES)
 RECORDS: Dict[str, PostRecord] = {}
 LAST_CREATE_AT: Dict[str, float] = {}
 
@@ -622,6 +658,35 @@ async def _hydrate_records_from_redis() -> None:
         restored += 1
     if restored:
         print(f"post_redis: restored {restored} post(s)")
+
+
+def _normalize_chat_text(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _validate_chat_text(text: str) -> str:
+    normalized = _normalize_chat_text(text).strip()
+    if not normalized:
+        raise HTTPException(status_code=422, detail="empty message")
+    if len(normalized) > LOBBY_CHAT_MAX_TEXT:
+        raise HTTPException(status_code=422, detail="message too long")
+    line_count = normalized.count("\n") + 1
+    if line_count > LOBBY_CHAT_MAX_LINES:
+        raise HTTPException(status_code=422, detail="too many lines")
+    return normalized
+
+
+def _trim_lobby_chat_by_age() -> None:
+    if not LOBBY_CHAT:
+        return
+    cutoff = time.time() - LOBBY_CHAT_MAX_AGE_SEC
+    while LOBBY_CHAT and float(LOBBY_CHAT[0].get("ts", 0)) < cutoff:
+        LOBBY_CHAT.popleft()
+
+
+def lobby_chat_snapshot() -> list[dict[str, Any]]:
+    _trim_lobby_chat_by_age()
+    return list(LOBBY_CHAT)
 
 
 async def cleanup_loop() -> None:
@@ -701,6 +766,39 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="asobby api", version="0.2", lifespan=lifespan)
+
+CANONICAL_HOST = (urlparse(PUBLIC_BASE_URL).hostname or "").lower()
+
+
+@app.middleware("http")
+async def redirect_to_canonical_host(request: Request, call_next):
+    """fly.dev 等の代替ホストはカスタムドメインへ寄せる (OAuth / Cookie 整合)。"""
+    if not CANONICAL_HOST:
+        return await call_next(request)
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host.endswith(".fly.dev") and host != CANONICAL_HOST:
+        target = PUBLIC_BASE_URL.rstrip("/") + request.url.path
+        if request.url.query:
+            target += "?" + request.url.query
+        return RedirectResponse(target, status_code=301)
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def client_update_headers(request: Request, call_next):
+    response = await call_next(request)
+    client_ver = (request.headers.get("X-Asobby-Client-Version") or "").strip()
+    if not client_ver:
+        return response
+    latest = client_release.cached_latest()
+    if latest is None:
+        latest = await client_release.get_latest_release()
+    if latest and client_release.is_older(client_ver, latest["version"]):
+        response.headers["X-Asobby-Client-Update"] = latest["tag"]
+        download = latest.get("download_url") or latest.get("html_url") or ""
+        if download:
+            response.headers["X-Asobby-Client-Download"] = download
+    return response
 
 
 def client_ip(request: Request) -> str:
@@ -1604,6 +1702,15 @@ async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/client/latest")
+async def client_latest() -> dict[str, Any]:
+    """Web / クライアント向け: GitHub 最新リリース情報 (キャッシュ)。"""
+    info = await client_release.get_latest_release()
+    if info is None:
+        return {"ok": False}
+    return {"ok": True, **info}
+
+
 @app.get("/myip")
 async def get_myip(request: Request) -> dict[str, str]:
     return {"ip": client_ip(request)}
@@ -1653,7 +1760,7 @@ async def auth_discord_start(code: str) -> RedirectResponse:
 
 
 @app.get("/auth/discord/web")
-async def auth_discord_web(next: str = "/") -> RedirectResponse:
+async def auth_discord_web(next: str = "/", force: bool = False) -> RedirectResponse:
     """Web ページ閲覧用の Discord ログイン。完了後はクッキーセッションを発行する。"""
     require_discord_configured()
     cleanup_web_logins()
@@ -1668,7 +1775,7 @@ async def auth_discord_web(next: str = "/") -> RedirectResponse:
         "response_type": "code",
         "scope": "identify",
         "state": state,
-        "prompt": "none",
+        "prompt": "select_account" if force else "none",
     })
     return RedirectResponse(f"{DISCORD_AUTHORIZE_URL}?{params}", status_code=302)
 
@@ -1766,21 +1873,20 @@ async def auth_discord_callback(
 
 @app.get("/auth/logout")
 async def auth_logout(request: Request) -> RedirectResponse:
-    token = request.cookies.get("asobby_session")
-    if token:
-        LOGOUT_REVOKED.add(token)
+    revoke_session_token(session_token_from_request(request))
     response = RedirectResponse("/", status_code=302)
-    # ログイン時と同じ属性で上書き削除する (Secure 不一致だとブラウザが消せない)
-    response.set_cookie(
-        key="asobby_session",
-        value="",
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        max_age=0,
-        path="/",
-    )
+    clear_session_cookie(response)
     return response
+
+
+@app.post("/auth/logout")
+async def auth_logout_api(request: Request) -> dict[str, Any]:
+    """クライアント Bearer セッションの失効 (Web クッキーは /auth/logout GET で別途削除)。"""
+    token = session_token_from_request(request)
+    if not token or verify_session_token(token) is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    revoke_session_token(token)
+    return {"ok": True}
 
 
 def _login_result_page(
@@ -1847,17 +1953,31 @@ async def auth_me(request: Request) -> dict[str, Any]:
 
 
 @app.get("/auth/client/handoff")
-async def auth_client_handoff(request: Request, port: int) -> RedirectResponse:
+async def auth_client_handoff(
+    request: Request,
+    port: int,
+    force: bool = False,
+) -> RedirectResponse:
     """ブラウザのクッキーセッションをクライアントへ引き渡す。
 
     クライアントは 127.0.0.1:{port} で待ち受けてからこの URL をブラウザで開く。
     Web 側でログイン済みならワンタイムコード付きで即 localhost へリダイレクトされ、
     未ログインなら Discord ログインを挟んでからここへ戻ってくる。
+    force=1 のときは既存 Web セッションを破棄し Discord アカウント選択を表示する。
     """
     require_discord_configured()
     cleanup_handoff_codes()
     if not (1024 <= port <= 65535):
         raise HTTPException(status_code=400, detail="invalid port")
+
+    if force:
+        next_url = quote(f"/auth/client/handoff?port={port}", safe="")
+        response = RedirectResponse(
+            f"/auth/discord/web?next={next_url}&force=1", status_code=302
+        )
+        revoke_session_token(session_token_from_request(request))
+        clear_session_cookie(response)
+        return response
 
     sess = await resolve_session(request)
     if sess is None:
@@ -2353,6 +2473,73 @@ async def legacy_upsert() -> None:
     )
 
 
+@app.get("/lobby/players/suggest")
+async def suggest_lobby_players(
+    request: Request,
+    q: str = "",
+    limit: int = 10,
+) -> dict[str, Any]:
+    """ロビーチャットの @ メンション補完 (Discord ユーザー名)。"""
+    if await resolve_session(request) is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    if not db.is_configured():
+        return {"ok": True, "suggestions": []}
+    player_q = q.strip()
+    if not player_q:
+        return {"ok": True, "suggestions": []}
+    page_limit = min(max(1, limit), 20)
+    users = await db.suggest_users_by_name(player_q, page_limit)
+    suggestions = [
+        {
+            "kind": "user",
+            "name": user.name,
+            "user_id": user.id,
+            "avatar": user.avatar or None,
+        }
+        for user in users
+    ]
+    return {"ok": True, "suggestions": suggestions}
+
+
+@app.post("/lobby/chat")
+async def post_lobby_chat(body: ChatMessageIn, request: Request) -> dict[str, Any]:
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+
+    text = _validate_chat_text(body.text)
+    uid = sess["id"]
+    now = time.time()
+    last = LOBBY_CHAT_LAST_SENT.get(uid, 0.0)
+    if (now - last) < LOBBY_CHAT_COOLDOWN_SEC:
+        retry_after = int(LOBBY_CHAT_COOLDOWN_SEC - (now - last) + 0.999)
+        raise HTTPException(
+            status_code=429,
+            detail="please wait before sending another message",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    mentions: list[dict[str, str]] = []
+    if db.is_configured():
+        for user in await db.users_mentioned_in_text(text):
+            mentions.append({"user_id": user.id, "name": user.name})
+
+    msg = {
+        "id": uuid4().hex,
+        "user_id": uid,
+        "name": sess["name"],
+        "avatar": sess.get("avatar") or "",
+        "text": text,
+        "mentions": mentions,
+        "ts": now,
+    }
+    LOBBY_CHAT.append(msg)
+    LOBBY_CHAT_LAST_SENT[uid] = now
+    _trim_lobby_chat_by_age()
+    await HUB.publish("chat_message", msg)
+    return {"ok": True, "message": msg}
+
+
 @app.get("/sse/posts")
 async def sse_posts(request: Request):
     # 募集一覧の閲覧はログイン必須
@@ -2365,6 +2552,7 @@ async def sse_posts(request: Request):
             # 購読開始後にスナップショットを送ることで、接続直後の
             # イベント取りこぼしをなくす（重複 upsert は冪等なので無害）。
             yield format_sse("snapshot", sorted_public_posts())
+            yield format_sse("chat_snapshot", lobby_chat_snapshot())
 
             while True:
                 if await request.is_disconnected():

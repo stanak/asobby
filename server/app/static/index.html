@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title data-i18n="lobby.pageTitle">asobby - 非想天則ロビー</title>
 <script src="/static/i18n.js"></script>
+<script src="/static/client-update.js"></script>
+<script src="/static/player-suggest.js"></script>
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-RJSLH3FRBR"></script>
 <script>
@@ -329,6 +331,235 @@
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
   }
+
+  /* lobby chat */
+  body.chat-panel-open { padding-bottom: 220px; }
+  #lobby-chat {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 200;
+    pointer-events: none;
+  }
+  #lobby-chat > * { pointer-events: auto; }
+  #lobby-chat-collapsed {
+    display: flex;
+    justify-content: center;
+    padding: 6px 20px 10px;
+    background: linear-gradient(transparent, rgba(20, 23, 28, 0.95) 30%);
+  }
+  #lobby-chat-collapsed[hidden] {
+    display: none !important;
+  }
+  #lobby-chat-show-btn {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px 6px 0 0;
+    color: var(--text);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 8px 16px;
+  }
+  #lobby-chat-show-btn:hover { border-color: var(--accent); }
+  #lobby-chat-panel {
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    max-height: min(40vh, 320px);
+  }
+  #lobby-chat-panel[hidden] {
+    display: none !important;
+  }
+  .lobby-chat-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .lobby-chat-header-spacer { flex: 1; }
+  #lobby-chat-hide-btn {
+    position: relative;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--muted);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    padding: 3px 10px;
+  }
+  #lobby-chat-hide-btn:hover { border-color: var(--accent); color: var(--text); }
+  .chat-toggle-badge {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--err);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+  }
+  .chat-toggle-badge.dot {
+    min-width: 10px;
+    width: 10px;
+    height: 10px;
+    padding: 0;
+    top: -3px;
+    right: -3px;
+  }
+  #lobby-chat-messages {
+    flex: 1;
+    min-height: 80px;
+    max-height: 180px;
+    overflow-y: auto;
+    padding: 8px 16px;
+  }
+  #lobby-chat-messages .chat-empty {
+    color: var(--muted);
+    font-size: 13px;
+    text-align: center;
+    padding: 24px 0;
+  }
+  .chat-row {
+    padding: 4px 8px;
+    margin-bottom: 4px;
+    border-radius: 4px;
+    border-left: 3px solid transparent;
+  }
+  .chat-row.chat-mention-me {
+    background: rgba(224, 108, 117, 0.12);
+    border-left-color: var(--err);
+  }
+  .chat-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 2px;
+  }
+  .chat-avatar {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    object-fit: cover;
+  }
+  .chat-meta .chat-name { color: var(--accent); font-weight: 600; }
+  .chat-body {
+    font-size: 14px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .chat-mention {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .lobby-chat-compose {
+    display: flex;
+    gap: 8px;
+    padding: 8px 16px 12px;
+    border-top: 1px solid var(--border);
+    align-items: flex-end;
+  }
+  .lobby-chat-input-wrap {
+    flex: 1;
+    position: relative;
+    min-width: 0;
+  }
+  #lobby-chat-input {
+    width: 100%;
+    resize: none;
+    min-height: 44px;
+    max-height: 144px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.4;
+    padding: 8px 10px;
+  }
+  #lobby-chat-input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  #lobby-chat-send {
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    color: #0d1117;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 16px;
+    white-space: nowrap;
+  }
+  #lobby-chat-send:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  #lobby-chat-error {
+    font-size: 12px;
+    color: var(--err);
+    padding: 0 16px 8px;
+  }
+  #lobby-chat-error:empty { display: none; }
+  .player-suggest {
+    position: absolute;
+    z-index: 20;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    margin-bottom: 4px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+    box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.35);
+  }
+  .player-suggest-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .player-suggest-item:hover,
+  .player-suggest-item.active {
+    background: #252b36;
+  }
+  .player-suggest-avatar {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    object-fit: cover;
+  }
+  .player-suggest-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 </style>
 </head>
 <body>
@@ -338,7 +569,7 @@
   <nav>
     <a href="/stats" data-i18n="nav.stats">戦績</a>
     <a href="/replays" data-i18n="nav.replays">リプレイ検索</a>
-    <a href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
+    <a id="nav-client-dl" href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
     <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
     <button type="button" id="lang-toggle" class="lang-btn"></button>
   </nav>
@@ -402,6 +633,30 @@
 </main>
 </div>
 
+<div id="lobby-chat" hidden>
+  <div id="lobby-chat-collapsed" hidden>
+    <button type="button" id="lobby-chat-show-btn">
+      <span data-i18n="lobby.chatShow">ロビーチャットを表示</span>
+    </button>
+  </div>
+  <div id="lobby-chat-panel" hidden>
+    <div class="lobby-chat-header">
+      <span data-i18n="lobby.chatTitle">ロビーチャット(感想戦などにもどうぞ)</span>
+      <span class="lobby-chat-header-spacer"></span>
+      <button type="button" id="lobby-chat-hide-btn" data-i18n="lobby.chatHide">ロビーチャットを隠す</button>
+    </div>
+    <div id="lobby-chat-messages"></div>
+    <div id="lobby-chat-error"></div>
+    <div class="lobby-chat-compose">
+      <div class="lobby-chat-input-wrap">
+        <textarea id="lobby-chat-input" rows="2" maxlength="500" data-i18n-placeholder="lobby.chatPlaceholder"></textarea>
+        <div id="lobby-chat-suggest" class="player-suggest" hidden></div>
+      </div>
+      <button type="button" id="lobby-chat-send" data-i18n="lobby.chatSend">送信</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast-container" aria-live="polite"></div>
 
 <script>
@@ -426,6 +681,26 @@ let myUserId = null;
 let myName = "";
 let openPopoverId = null;
 const messageCooldowns = new Map();
+
+const CHAT_MAX_TEXT = 500;
+const CHAT_MAX_LINES = 8;
+const CHAT_OPEN_STORAGE_KEY = "asobby-lobby-chat-open";
+let chatMessages = [];
+let chatOpen = true;
+let chatUnreadMentions = 0;
+let chatInitialized = false;
+let chatSending = false;
+
+const lobbyChatRootEl = document.getElementById("lobby-chat");
+const lobbyChatCollapsedEl = document.getElementById("lobby-chat-collapsed");
+const lobbyChatPanelEl = document.getElementById("lobby-chat-panel");
+const lobbyChatShowBtnEl = document.getElementById("lobby-chat-show-btn");
+const lobbyChatHideBtnEl = document.getElementById("lobby-chat-hide-btn");
+const lobbyChatMessagesEl = document.getElementById("lobby-chat-messages");
+const lobbyChatInputEl = document.getElementById("lobby-chat-input");
+const lobbyChatSendEl = document.getElementById("lobby-chat-send");
+const lobbyChatErrorEl = document.getElementById("lobby-chat-error");
+const lobbyChatSuggestEl = document.getElementById("lobby-chat-suggest");
 
 const REQ_TYPE_KEYS = {
   giuroll_request: "msg.typeGiurollRequest",
@@ -888,6 +1163,8 @@ function showLoggedIn(user) {
     })
   ));
   statusEl.hidden = false;
+  lobbyChatRootEl.hidden = false;
+  initLobbyChat();
   render();
 }
 
@@ -899,7 +1176,240 @@ function showLoginRequired() {
   rankChoiceBannerEl.hidden = true;
   authInfoEl.hidden = true;
   statusEl.hidden = true;
+  lobbyChatRootEl.hidden = true;
   render();
+}
+
+function chatLineCount(text) {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (!normalized) return 0;
+  return normalized.split("\n").length;
+}
+
+function formatChatTime(ts) {
+  const d = new Date(ts * 1000);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function chatAvatarUrl(msg) {
+  if (msg.avatar) return msg.avatar;
+  return "https://cdn.discordapp.com/embed/avatars/0.png";
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function formatChatBody(text) {
+  const escaped = escapeHtml(text);
+  return escaped.replace(
+    /@([^\s@]+)/g,
+    '<span class="chat-mention">@$1</span>'
+  );
+}
+
+function isChatMentioned(msg) {
+  if (!myUserId || !Array.isArray(msg.mentions)) return false;
+  return msg.mentions.some((m) => m.user_id === myUserId);
+}
+
+function upsertChatMessage(msg) {
+  if (!msg || !msg.id) return;
+  const idx = chatMessages.findIndex((m) => m.id === msg.id);
+  if (idx >= 0) {
+    chatMessages[idx] = msg;
+  } else {
+    chatMessages.push(msg);
+  }
+  chatMessages.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+}
+
+function renderChatList() {
+  lobbyChatMessagesEl.replaceChildren();
+  if (!chatMessages.length) {
+    const empty = document.createElement("div");
+    empty.className = "chat-empty";
+    empty.setAttribute("data-i18n", "lobby.chatEmpty");
+    empty.textContent = t("lobby.chatEmpty");
+    lobbyChatMessagesEl.appendChild(empty);
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const msg of chatMessages) {
+    const row = document.createElement("div");
+    row.className = "chat-row";
+    if (isChatMentioned(msg)) row.classList.add("chat-mention-me");
+
+    const meta = document.createElement("div");
+    meta.className = "chat-meta";
+    const avatarEl = document.createElement("img");
+    avatarEl.className = "chat-avatar";
+    avatarEl.src = chatAvatarUrl(msg);
+    avatarEl.alt = "";
+    avatarEl.loading = "lazy";
+    avatarEl.referrerPolicy = "no-referrer";
+    meta.appendChild(avatarEl);
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "chat-name";
+    nameSpan.textContent = msg.name || "?";
+    meta.appendChild(nameSpan);
+    meta.appendChild(document.createTextNode(formatChatTime(msg.ts || 0)));
+
+    const body = document.createElement("div");
+    body.className = "chat-body";
+    body.innerHTML = formatChatBody(msg.text || "");
+
+    row.appendChild(meta);
+    row.appendChild(body);
+    frag.appendChild(row);
+  }
+  lobbyChatMessagesEl.appendChild(frag);
+}
+
+function scrollChatToBottom() {
+  lobbyChatMessagesEl.scrollTop = lobbyChatMessagesEl.scrollHeight;
+}
+
+function setChatToggleBadge(btn, count) {
+  const existing = btn.querySelector(".chat-toggle-badge");
+  if (existing) existing.remove();
+  if (count <= 0) return;
+  const badge = document.createElement("span");
+  badge.className = "chat-toggle-badge" + (count === 1 ? " dot" : "");
+  if (count > 1) badge.textContent = count > 99 ? "99+" : String(count);
+  badge.setAttribute("aria-label", String(count));
+  btn.appendChild(badge);
+}
+
+function updateChatMentionBadge() {
+  setChatToggleBadge(lobbyChatHideBtnEl, chatUnreadMentions);
+  setChatToggleBadge(lobbyChatShowBtnEl, chatUnreadMentions);
+}
+
+function clearChatMentionBadge() {
+  chatUnreadMentions = 0;
+  updateChatMentionBadge();
+}
+
+function setChatPanelOpen(open, persist) {
+  chatOpen = open;
+  if (persist !== false) {
+    localStorage.setItem(CHAT_OPEN_STORAGE_KEY, open ? "1" : "0");
+  }
+  lobbyChatPanelEl.hidden = !open;
+  lobbyChatCollapsedEl.hidden = open;
+  document.body.classList.toggle("chat-panel-open", open);
+  if (open) {
+    clearChatMentionBadge();
+    renderChatList();
+    scrollChatToBottom();
+  }
+}
+
+function handleIncomingChatMessage(msg) {
+  upsertChatMessage(msg);
+  if (chatOpen) {
+    renderChatList();
+    scrollChatToBottom();
+  }
+  if (
+    msg.user_id !== myUserId &&
+    isChatMentioned(msg) &&
+    !chatOpen
+  ) {
+    chatUnreadMentions += 1;
+    updateChatMentionBadge();
+  }
+}
+
+function showChatError(text) {
+  lobbyChatErrorEl.textContent = text || "";
+}
+
+async function sendChatMessage() {
+  if (chatSending) return;
+  const text = lobbyChatInputEl.value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!text) return;
+  if (text.length > CHAT_MAX_TEXT || chatLineCount(text) > CHAT_MAX_LINES) return;
+
+  chatSending = true;
+  lobbyChatSendEl.disabled = true;
+  showChatError("");
+  try {
+    const res = await fetch("/lobby/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ text }),
+    });
+    if (res.ok) {
+      lobbyChatInputEl.value = "";
+      return;
+    }
+    if (res.status === 429) {
+      showChatError(t("lobby.chatCooldown"));
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    showChatError(
+      data.detail
+        ? tError(data.detail)
+        : t("common.errorWithStatus", { status: res.status })
+    );
+  } catch (_) {
+    showChatError(t("common.networkError"));
+  } finally {
+    chatSending = false;
+    lobbyChatSendEl.disabled = false;
+  }
+}
+
+function initLobbyChat() {
+  if (chatInitialized) return;
+  chatInitialized = true;
+
+  const stored = localStorage.getItem(CHAT_OPEN_STORAGE_KEY);
+  setChatPanelOpen(stored !== "0", false);
+
+  lobbyChatHideBtnEl.addEventListener("click", () => setChatPanelOpen(false));
+  lobbyChatShowBtnEl.addEventListener("click", () => setChatPanelOpen(true));
+  lobbyChatSendEl.addEventListener("click", sendChatMessage);
+
+  lobbyChatInputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      if (!lobbyChatSuggestEl.hidden) return;
+      e.preventDefault();
+      sendChatMessage();
+      return;
+    }
+    if (e.key === "Enter" && e.shiftKey) {
+      const val = lobbyChatInputEl.value;
+      const pos = lobbyChatInputEl.selectionStart ?? val.length;
+      const next = val.slice(0, pos) + "\n" + val.slice(pos);
+      if (chatLineCount(next) > CHAT_MAX_LINES) {
+        e.preventDefault();
+      }
+    }
+  });
+
+  lobbyChatInputEl.addEventListener("input", () => {
+    if (lobbyChatInputEl.value.length > CHAT_MAX_TEXT) {
+      lobbyChatInputEl.value = lobbyChatInputEl.value.slice(0, CHAT_MAX_TEXT);
+    }
+  });
+
+  attachPlayerSuggest({
+    input: lobbyChatInputEl,
+    suggestEl: lobbyChatSuggestEl,
+    fetchUrl: "/lobby/players/suggest",
+    mode: "mention",
+  });
 }
 
 let sseStarted = false;
@@ -962,6 +1472,18 @@ function connect() {
 
   es.addEventListener("message_reply", (e) => {
     showReplyToast(JSON.parse(e.data));
+  });
+
+  es.addEventListener("chat_snapshot", (e) => {
+    chatMessages = JSON.parse(e.data);
+    if (chatOpen) {
+      renderChatList();
+      scrollChatToBottom();
+    }
+  });
+
+  es.addEventListener("chat_message", (e) => {
+    handleIncomingChatMessage(JSON.parse(e.data));
   });
 
   es.addEventListener("error", () => {

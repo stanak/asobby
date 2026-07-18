@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py db.py geoip.py post_redis.py alembic.ini ./
+COPY main.py db.py geoip.py post_redis.py client_release.py alembic.ini ./
 COPY migrations ./migrations
 COPY static ./static
 

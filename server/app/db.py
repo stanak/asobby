@@ -730,6 +730,41 @@ async def get_replay_for_match(match_id: str) -> Optional[Replay]:
         return res.scalar_one_or_none()
 
 
+async def suggest_users_by_name(q: str, limit: int = 10) -> list[User]:
+    """Discord ログイン済みユーザー名の部分一致候補 (ロビーチャットメンション用)。"""
+    needle = q.strip().lower()
+    if not needle:
+        return []
+    async with session() as s:
+        res = await s.execute(
+            select(User)
+            .where(func.lower(User.name).contains(needle))
+            .order_by(User.name.asc())
+            .limit(limit)
+        )
+        return list(res.scalars().all())
+
+
+async def users_mentioned_in_text(text: str) -> list[User]:
+    """テキスト中の @Name を users.name と照合する (長い名前を優先)。"""
+    if "@" not in text:
+        return []
+    lower = text.lower()
+    async with session() as s:
+        res = await s.execute(select(User).order_by(func.length(User.name).desc()))
+        users = list(res.scalars().all())
+    matched: list[User] = []
+    seen: set[str] = set()
+    for user in users:
+        if not user.name:
+            continue
+        needle = f"@{user.name}".lower()
+        if needle in lower and user.id not in seen:
+            matched.append(user)
+            seen.add(user.id)
+    return matched
+
+
 async def suggest_replay_players(
     q: str,
     limit: int = 10,
