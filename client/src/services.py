@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from i18n import post_type_label, post_type_options, t
 
-__version__ = "0.4.17"
+__version__ = "0.4.18"
 
 RANK_LABEL = {
     "easy": "E",
@@ -107,6 +107,29 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
     )
     challenge_upper_chk.grid(row=1, column=1, sticky="w", pady=(0, 4))
 
+    ping_warn_var = tk.StringVar(
+        value=str(int(current.get("ping_warn_ms", 60) or 60))
+    )
+    ping_warn_giuroll_var = tk.StringVar(
+        value=str(int(current.get("ping_warn_giuroll_ms", 100) or 100))
+    )
+    ttk.Label(frame, text=t("settings.ping_warn_ms")).grid(
+        row=2, column=0, sticky="e", pady=4, padx=(0, 8)
+    )
+    ping_warn_entry = ttk.Entry(frame, textvariable=ping_warn_var, width=8)
+    ping_warn_entry.grid(row=2, column=1, sticky="w", pady=4)
+    ttk.Label(frame, text=t("settings.ping_warn_ms_unit")).grid(
+        row=2, column=1, sticky="w", padx=(72, 0), pady=4
+    )
+    ttk.Label(frame, text=t("settings.ping_warn_giuroll_ms")).grid(
+        row=3, column=0, sticky="e", pady=4, padx=(0, 8)
+    )
+    ping_warn_giuroll_entry = ttk.Entry(frame, textvariable=ping_warn_giuroll_var, width=8)
+    ping_warn_giuroll_entry.grid(row=3, column=1, sticky="w", pady=4)
+    ttk.Label(frame, text=t("settings.ping_warn_giuroll_ms_unit")).grid(
+        row=3, column=1, sticky="w", padx=(72, 0), pady=4
+    )
+
     def sync_challenge_upper_state(*_args) -> None:
         selected = value_by_label.get(post_type_var.get(), "casual")
         state = "normal" if selected == "ranked" else "disabled"
@@ -118,18 +141,18 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
     sync_challenge_upper_state()
 
     ttk.Label(frame, text=t("settings.stream_presets"), justify="right").grid(
-        row=2, column=0, sticky="ne", pady=4, padx=(0, 8)
+        row=4, column=0, sticky="ne", pady=4, padx=(0, 8)
     )
     stream_text = tk.Text(frame, width=44, height=4)
-    stream_text.grid(row=2, column=1, sticky="we", pady=4)
+    stream_text.grid(row=4, column=1, sticky="we", pady=4)
     if stream_presets:
         stream_text.insert("1.0", "\n".join(stream_presets))
 
     ttk.Label(frame, text=t("settings.comment_presets"), justify="right").grid(
-        row=3, column=0, sticky="ne", pady=4, padx=(0, 8)
+        row=5, column=0, sticky="ne", pady=4, padx=(0, 8)
     )
     comment_text = tk.Text(frame, width=44, height=6)
-    comment_text.grid(row=3, column=1, sticky="we", pady=4)
+    comment_text.grid(row=5, column=1, sticky="we", pady=4)
     if presets:
         comment_text.insert("1.0", "\n".join(presets))
 
@@ -138,10 +161,20 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
         text=t("settings.hint"),
         foreground="#888",
     )
-    hint.grid(row=4, column=1, sticky="w")
+    hint.grid(row=6, column=1, sticky="w")
 
     def do_ok() -> None:
         post_type = value_by_label.get(post_type_var.get(), "casual")
+        try:
+            ping_warn_ms = int(str(ping_warn_var.get()).strip())
+        except ValueError:
+            ping_warn_ms = 60
+        ping_warn_ms = max(1, min(5000, ping_warn_ms))
+        try:
+            ping_warn_giuroll_ms = int(str(ping_warn_giuroll_var.get()).strip())
+        except ValueError:
+            ping_warn_giuroll_ms = 100
+        ping_warn_giuroll_ms = max(1, min(5000, ping_warn_giuroll_ms))
         comment_lines = [l.strip() for l in comment_text.get("1.0", "end").splitlines() if l.strip()]
         if active_comment in comment_lines:
             comment = active_comment
@@ -155,6 +188,8 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
         result = {
             "post_type": post_type,
             "challenge_upper": bool(challenge_upper_var.get()) and post_type == "ranked",
+            "ping_warn_ms": ping_warn_ms,
+            "ping_warn_giuroll_ms": ping_warn_giuroll_ms,
             "stream_url": stream_url,
             "stream_url_presets": stream_lines,
             "comment": comment,
@@ -167,7 +202,7 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
         win.destroy()
 
     btns = ttk.Frame(frame)
-    btns.grid(row=5, column=0, columnspan=2, sticky="e", pady=(12, 0))
+    btns.grid(row=7, column=0, columnspan=2, sticky="e", pady=(12, 0))
     ttk.Button(btns, text=t("settings.ok"), command=do_ok).grid(
         row=0, column=0, padx=(0, 8)
     )

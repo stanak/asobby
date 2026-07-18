@@ -186,11 +186,21 @@ class TrayApp:
             self.tk_root.after(0, fn)
 
     def _open_settings(self) -> None:
-        current = self.controller.config_mgr.get_post_defaults()
+        current = {
+            **self.controller.config_mgr.get_post_defaults(),
+            "ping_warn_ms": self.controller.ping_warn_ms(),
+            "ping_warn_giuroll_ms": self.controller.ping_warn_giuroll_ms(),
+        }
 
         def apply(result: dict) -> None:
             for key, value in result.items():
+                if key in ("ping_warn_ms", "ping_warn_giuroll_ms"):
+                    continue
                 self.controller.config_mgr.set_post_default(key, value)
+            self.controller.set_ping_warn_ms(int(result.get("ping_warn_ms", 60)))
+            self.controller.set_ping_warn_giuroll_ms(
+                int(result.get("ping_warn_giuroll_ms", 100))
+            )
             self.controller.update_my_post(
                 post_type=result["post_type"],
                 comment=result["comment"],

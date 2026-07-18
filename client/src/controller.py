@@ -182,6 +182,32 @@ class Controller:
             t("log.challenge_upper", state=t("common.on" if enabled else "common.off")),
         )
 
+    def ping_warn_ms(self) -> int:
+        raw = self.config_mgr.get_value("options", "ping_warn_ms", 60)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 60
+        return max(1, min(5000, value))
+
+    def ping_warn_giuroll_ms(self) -> int:
+        raw = self.config_mgr.get_value("options", "ping_warn_giuroll_ms", 100)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 100
+        return max(1, min(5000, value))
+
+    def set_ping_warn_ms(self, ms: int) -> None:
+        value = max(1, min(5000, int(ms)))
+        self.config_mgr.set_value("options", "ping_warn_ms", value)
+        self.log_sink("info", t("log.ping_warn_ms", ms=value))
+
+    def set_ping_warn_giuroll_ms(self, ms: int) -> None:
+        value = max(1, min(5000, int(ms)))
+        self.config_mgr.set_value("options", "ping_warn_giuroll_ms", value)
+        self.log_sink("info", t("log.ping_warn_giuroll_ms", ms=value))
+
     def comment_presets(self) -> list[str]:
         v = self.config_mgr.get_value("post_defaults", "comment_presets", [])
         if not isinstance(v, list):
@@ -371,6 +397,8 @@ class Controller:
         return {
             "post_type": self.my_post.post_type or "casual",
             "challenge_upper": bool(self.my_post.challenge_upper),
+            "ping_warn_ms": self.ping_warn_ms(),
+            "ping_warn_giuroll_ms": self.ping_warn_giuroll_ms(),
             "addr": addr,
             "comment": self.my_post.comment or "",
             "stream_url": self.my_post.stream_url or "",
@@ -553,6 +581,18 @@ class Controller:
                             else:
                                 self.notify_sink(text)
                             self.log_sink("info", text)
+                    for warn in resp.get("ping_warnings") or []:
+                        from_name = str(warn.get("from_name") or "")
+                        rtt_ms = int(warn.get("rtt_ms") or 0)
+                        threshold = int(warn.get("threshold_ms") or self.ping_warn_ms())
+                        msg = t(
+                            "notify.high_ping",
+                            name=from_name,
+                            ms=rtt_ms,
+                            threshold=threshold,
+                        )
+                        self.notify_sink(msg)
+                        self.log_sink("info", msg)
                     guest_connected = resp.get("guest_connected")
                     if not guest_connected:
                         self._notified_casual_fallback = False

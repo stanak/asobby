@@ -126,6 +126,7 @@
     "lobby.chatCooldown": "しばらく待ってから送ってください",
     "lobby.pingUnavailable": "—",
     "lobby.pingClientRequired": "asobby クライアント起動中のみ表示されます",
+    "lobby.pingThresholdHint": "警告しきい値: {threshold}ms",
 
     // stats
     "stats.pageTitle": "asobby - 戦績",
@@ -330,7 +331,7 @@
       "Web ロビーをブラウザで開きます。募集一覧の閲覧・ロビーチャット・相手への定型メッセージ送信ができます（要 Discord ログイン）。",
     "guide.menu.settings.name": "投稿設定...",
     "guide.menu.settings.desc":
-      "募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、ランクマ時の「格上に挑戦」を設定します。OK でサーバーへ反映されます。",
+      "募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、ランクマ時の「格上に挑戦」、Ping 警告しきい値 (通常 60ms / Giuroll 100ms) を設定します。OK でサーバーへ反映されます。",
     "guide.menu.stats.name": "戦績を見る...",
     "guide.menu.stats.desc":
       "PC 内に保存した対戦記録をウィンドウで表示します。フィルタやソートで自分の戦績を確認できます。",
@@ -388,6 +389,8 @@
       "カジュアル扱い — ランクマ募集でも、相手が未ログインまたはランク帯不一致（格上挑戦 OFF 時）だと戦績はカジュアルになります。",
     "guide.notifyUpdate":
       "更新あり — 新しい exe が公開されたとき。トレイからダウンロードできます。",
+    "guide.notifyHighPing":
+      "Ping 警告 — ロビー閲覧者の Ping が設定値以上 (通常 60ms / Giuroll 100ms) のとき、ホストへ通知します。ロビーの Ping 列は緑 (良好) / 黄 (しきい値付近) / 赤 (しきい値超) で表示されます。しきい値は「投稿設定...」で変更できます。",
   };
 
   const en = {
@@ -486,6 +489,7 @@
     "lobby.chatCooldown": "Please wait before sending another message",
     "lobby.pingUnavailable": "—",
     "lobby.pingClientRequired": "Shown only while the asobby client is running",
+    "lobby.pingThresholdHint": "Warning threshold: {threshold}ms",
 
     // stats
     "stats.pageTitle": "asobby - Stats",
@@ -690,7 +694,7 @@
       "Opens the web lobby in your browser: post list, lobby chat, and preset messages to hosts (Discord login required).",
     "guide.menu.settings.name": "Post settings...",
     "guide.menu.settings.desc":
-      "Post mode (casual / ranked), comment presets, stream URL presets, and “Challenge upper rank” for ranked mode. OK applies to the server.",
+      "Post mode (casual / ranked), comment presets, stream URL presets, “Challenge upper rank” for ranked mode, and Ping warning thresholds (default 60ms / Giuroll 100ms). OK applies to the server.",
     "guide.menu.stats.name": "View stats...",
     "guide.menu.stats.desc":
       "Opens a window with match history stored on this PC. Filter and sort your records.",
@@ -748,6 +752,8 @@
       "Casual match — even on ranked posts, stats stay casual if the opponent is not logged in or ranks do not match (unless Challenge upper rank is on).",
     "guide.notifyUpdate":
       "Update available — a new exe is published; download it from the tray menu.",
+    "guide.notifyHighPing":
+      "High ping warning — when a lobby viewer’s ping to you is at or above your threshold (default 60ms / Giuroll 100ms), the host client shows a toast. The Ping column is green (good) / yellow (near threshold) / red (over). Change thresholds in Post settings…. Viewers need the asobby client running.",
   };
 
   const dicts = { ja, en };

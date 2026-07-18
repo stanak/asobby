@@ -32,6 +32,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "options": {
         "copy_addr_on_host": False,
         "locale": "ja",
+        "ping_warn_ms": 60,
+        "ping_warn_giuroll_ms": 100,
     },
 }
 

@@ -104,8 +104,15 @@ MAX_ACTIVE_POSTS_PER_IP = 2
 # Web ロビーからホストへの定型メッセージ
 MESSAGE_COOLDOWN_SEC = 60.0
 MESSAGE_MAX_PENDING = 20
+PING_WARN_MS_DEFAULT = 60
+PING_WARN_GIUROLL_MS_DEFAULT = 100
+PING_WARN_MS_MIN = 1
+PING_WARN_MS_MAX = 5000
+PING_REPORT_COOLDOWN_SEC = 300.0
+PING_WARN_MAX_PENDING = 20
 MESSAGE_SENT_LOG_MAX = 50
 MESSAGE_LAST_SENT: dict[tuple[str, str], float] = {}  # (sender_user_id, post_id) -> 時刻
+PING_REPORT_LAST: dict[tuple[str, str], float] = {}  # (viewer_user_id, post_id) -> 時刻
 
 # ロビーチャット (インメモリ)
 LOBBY_CHAT_MAX_MESSAGES = 100
@@ -231,6 +238,8 @@ class Post:
     guest_connected: bool = False  # プローブでゲスト検出中
     ranked_active: bool = False  # 現在のゲストとのセッションがランクマ扱いか
     challenge_upper: bool = False  # ランクマ時に 1 段上位帯のゲストもランクマ扱い
+    ping_warn_ms: int = PING_WARN_MS_DEFAULT  # この RTT 以上の viewer ping でホストへ警告
+    ping_warn_giuroll_ms: int = PING_WARN_GIUROLL_MS_DEFAULT  # Giuroll ホスト向け警告しきい値
     country_code: str = ""  # addr の IP から推定した ISO 3166-1 alpha-2
     country_name: str = ""  # 表示用国名（日本語優先）
 
@@ -248,6 +257,7 @@ class PostRecord:
     guest_rank: str = ""  # 同定済みゲストのランク
     session_games: int = 0  # 現在ゲストとの対戦報告回数
     pending_messages: list[dict] = field(default_factory=list)
+    pending_ping_warnings: list[dict] = field(default_factory=list)
     # giuroll_request / casual_invite の送信ログ (返信 API 用。配送キューとは別)
     sent_log: dict[str, dict] = field(default_factory=dict)
 
@@ -280,6 +290,7 @@ def post_record_to_dict(rec: PostRecord) -> dict[str, Any]:
         "guest_rank": rec.guest_rank,
         "session_games": rec.session_games,
         "pending_messages": list(rec.pending_messages),
+        "pending_ping_warnings": list(rec.pending_ping_warnings),
         "sent_log": dict(rec.sent_log),
     }
 
@@ -296,6 +307,7 @@ def post_record_from_dict(data: dict[str, Any]) -> PostRecord:
         guest_rank=str(data.get("guest_rank", "")),
         session_games=int(data.get("session_games", 0) or 0),
         pending_messages=list(data.get("pending_messages") or []),
+        pending_ping_warnings=list(data.get("pending_ping_warnings") or []),
         sent_log=dict(data.get("sent_log") or {}),
     )
 
@@ -317,6 +329,12 @@ class CreatePostIn(BaseModel):
     match_status: str = Field(default="", max_length=200)
     net_status: int = 0
     challenge_upper: bool = False
+    ping_warn_ms: int = Field(default=PING_WARN_MS_DEFAULT, ge=PING_WARN_MS_MIN, le=PING_WARN_MS_MAX)
+    ping_warn_giuroll_ms: int = Field(
+        default=PING_WARN_GIUROLL_MS_DEFAULT,
+        ge=PING_WARN_MS_MIN,
+        le=PING_WARN_MS_MAX,
+    )
 
 
 class UpdatePostIn(CreatePostIn):
@@ -362,6 +380,10 @@ class ChooseRankIn(BaseModel):
 
 class PostMessageIn(BaseModel):
     type: Literal["giuroll_request", "casual_invite"]
+
+
+class PingReportIn(BaseModel):
+    rtt_ms: int = Field(ge=1, le=60000)
 
 
 class PostReplyIn(BaseModel):
@@ -946,10 +968,18 @@ def get_record_or_raise(post_id: str, owner_token: str) -> PostRecord:
     return rec
 
 
+def post_ping_warn_threshold(post: Post) -> int:
+    if post.giuroll:
+        return int(post.ping_warn_giuroll_ms or PING_WARN_GIUROLL_MS_DEFAULT)
+    return int(post.ping_warn_ms or PING_WARN_MS_DEFAULT)
+
+
 def cleanup_message_state_for_post(post_id: str) -> None:
-    """投稿削除時に MESSAGE_LAST_SENT の該当エントリを掃除する。"""
+    """投稿削除時に MESSAGE_LAST_SENT / PING_REPORT_LAST の該当エントリを掃除する。"""
     for key in [k for k in MESSAGE_LAST_SENT if k[1] == post_id]:
         MESSAGE_LAST_SENT.pop(key, None)
+    for key in [k for k in PING_REPORT_LAST if k[1] == post_id]:
+        PING_REPORT_LAST.pop(key, None)
 
 
 # ----------------------------
@@ -2224,6 +2254,8 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         match_status=body.match_status,
         net_status=body.net_status,
         challenge_upper=body.challenge_upper,
+        ping_warn_ms=body.ping_warn_ms,
+        ping_warn_giuroll_ms=body.ping_warn_giuroll_ms,
         owner_name=owner_name,
         owner_avatar=owner_avatar,
         updated_at=now,
@@ -2262,6 +2294,8 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
 
     p.post_type = body.post_type
     p.challenge_upper = body.challenge_upper
+    p.ping_warn_ms = body.ping_warn_ms
+    p.ping_warn_giuroll_ms = body.ping_warn_giuroll_ms
     p.addr = body.addr
     p.comment = body.comment
     p.stream_url = body.stream_url
@@ -2276,8 +2310,11 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
 
     messages = list(rec.pending_messages)
     rec.pending_messages.clear()
+    ping_warnings = list(rec.pending_ping_warnings)
+    rec.pending_ping_warnings.clear()
     data = asdict(p)
     data["messages"] = messages
+    data["ping_warnings"] = ping_warnings
     await _persist_record(rec)
     await HUB.publish("upsert", asdict(p))
     return data
@@ -2342,6 +2379,55 @@ async def post_message(post_id: str, body: PostMessageIn, request: Request) -> d
     MESSAGE_LAST_SENT[cooldown_key] = now
     await _persist_record(rec)
     return {"ok": True, "cooldown_sec": int(MESSAGE_COOLDOWN_SEC)}
+
+
+@app.post("/posts/{post_id}/ping-report")
+async def report_high_ping(
+    post_id: str,
+    body: PingReportIn,
+    request: Request,
+) -> dict[str, Any]:
+    """閲覧者のローカル Ping 計測が閾値以上のとき、ホストへ警告をキューする。"""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+
+    rec = RECORDS.get(post_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="post not found")
+
+    if rec.owner_user_id == sess["id"]:
+        raise HTTPException(status_code=400, detail="cannot report ping to your own post")
+
+    threshold = post_ping_warn_threshold(rec.post)
+    if body.rtt_ms < threshold:
+        raise HTTPException(status_code=422, detail="rtt below warning threshold")
+
+    now = now_ts()
+    cooldown_key = (sess["id"], post_id)
+    last_sent = PING_REPORT_LAST.get(cooldown_key, 0.0)
+    elapsed = now - last_sent
+    if elapsed < PING_REPORT_COOLDOWN_SEC:
+        retry_after = int(PING_REPORT_COOLDOWN_SEC - elapsed + 0.999)
+        raise HTTPException(
+            status_code=429,
+            detail="please wait before reporting ping again",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    rec.pending_ping_warnings.append({
+        "from_user_id": sess["id"],
+        "from_name": sess["name"],
+        "rtt_ms": body.rtt_ms,
+        "threshold_ms": threshold,
+        "sent_at": now,
+    })
+    if len(rec.pending_ping_warnings) > PING_WARN_MAX_PENDING:
+        rec.pending_ping_warnings = rec.pending_ping_warnings[-PING_WARN_MAX_PENDING:]
+
+    PING_REPORT_LAST[cooldown_key] = now
+    await _persist_record(rec)
+    return {"ok": True, "cooldown_sec": int(PING_REPORT_COOLDOWN_SEC)}
 
 
 @app.post("/posts/reply")

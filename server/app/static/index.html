@@ -549,9 +549,12 @@
     white-space: nowrap;
     color: var(--muted);
     min-width: 3.5rem;
+    font-weight: 600;
   }
-  .ping-cell.ok { color: var(--text); }
-  .ping-cell.pending { opacity: 0.6; }
+  .ping-cell.pending { opacity: 0.6; font-weight: 400; }
+  .ping-cell.ping-good { color: #3fb950; }
+  .ping-cell.ping-warn { color: #d29922; }
+  .ping-cell.ping-bad { color: #f85149; }
   .player-suggest {
     position: absolute;
     z-index: 20;
@@ -740,6 +743,7 @@ let clientPingAvailable = false;
 let pingByPostId = new Map();
 let pingInFlight = false;
 let pingTimer = null;
+const pingReportedPosts = new Set();
 
 const lobbyChatRootEl = document.getElementById("lobby-chat");
 const lobbyChatCollapsedEl = document.getElementById("lobby-chat-collapsed");
@@ -1002,6 +1006,25 @@ function parsePostAddr(addr) {
   return { host, port };
 }
 
+const PING_WARN_DEFAULT_MS = 60;
+const PING_WARN_GIUROLL_DEFAULT_MS = 100;
+const PING_NEAR_RATIO = 0.75;
+
+function pingWarnThresholdForPost(p) {
+  if (p?.giuroll) {
+    const v = Number(p.ping_warn_giuroll_ms);
+    return Number.isFinite(v) && v > 0 ? v : PING_WARN_GIUROLL_DEFAULT_MS;
+  }
+  const v = Number(p?.ping_warn_ms);
+  return Number.isFinite(v) && v > 0 ? v : PING_WARN_DEFAULT_MS;
+}
+
+function pingLevelClass(rttMs, threshold) {
+  if (rttMs >= threshold) return "ping-bad";
+  if (rttMs >= threshold * PING_NEAR_RATIO) return "ping-warn";
+  return "ping-good";
+}
+
 function buildPingCell(p) {
   const cell = document.createElement("td");
   cell.className = "ping-cell";
@@ -1020,8 +1043,10 @@ function buildPingCell(p) {
     cell.textContent = t("lobby.pingUnavailable");
     return cell;
   }
-  cell.classList.add("ok");
+  const threshold = pingWarnThresholdForPost(p);
+  cell.classList.add(pingLevelClass(cached, threshold));
   cell.textContent = `${cached}ms`;
+  cell.title = t("lobby.pingThresholdHint", { threshold });
   return cell;
 }
 
@@ -1066,6 +1091,13 @@ async function refreshHostPings() {
     if (!data.ok || !Array.isArray(data.results)) return;
     for (const item of data.results) {
       pingByPostId.set(item.id, item.ok ? item.rtt_ms : null);
+      if (item.ok && item.rtt_ms != null) {
+        const post = posts.get(item.id);
+        const threshold = pingWarnThresholdForPost(post);
+        if (item.rtt_ms >= threshold) {
+          void reportHighPing(item.id, item.rtt_ms);
+        }
+      }
     }
     render();
   } catch (_) {
@@ -1082,6 +1114,21 @@ function schedulePingRefresh() {
     await checkClientPingApi();
     await refreshHostPings();
   }, PING_REFRESH_MS);
+}
+
+async function reportHighPing(postId, rttMs) {
+  if (pingReportedPosts.has(postId)) return;
+  try {
+    const res = await fetch(`/posts/${postId}/ping-report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ rtt_ms: rttMs }),
+    });
+    if (res.ok) pingReportedPosts.add(postId);
+  } catch (_) {
+    /* local client or network unavailable */
+  }
 }
 
 function buildRow(p) {
@@ -1676,6 +1723,7 @@ function connect() {
     const d = JSON.parse(e.data);
     posts.delete(d.id);
     pingByPostId.delete(d.id);
+    pingReportedPosts.delete(d.id);
     render();
   });
 
