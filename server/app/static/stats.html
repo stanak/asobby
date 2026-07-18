@@ -472,7 +472,7 @@ function oppProfile(m) {
 
 function matchWon(m) {
   return (m.my_side === "host" && m.winner === "host")
-    || (m.my_side === "guest" && m.winner === "guest");
+    || ((m.my_side === "guest" || m.my_side === "client") && m.winner === "guest");
 }
 
 function matchLost(m) {

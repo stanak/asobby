@@ -76,6 +76,11 @@ class LocalStore:
         columns = {row[1] for row in cur.fetchall()}
         if "match_rank" not in columns:
             conn.execute("ALTER TABLE matches ADD COLUMN match_rank TEXT")
+        conn.execute("UPDATE matches SET my_side = 'client' WHERE my_side = 'guest'")
+
+    @staticmethod
+    def is_client_side(my_side: str | None) -> bool:
+        return my_side in ("guest", "client")
 
     def record_local(
         self,
@@ -127,6 +132,8 @@ class LocalStore:
                 host_profile = str(row.get("host_profile", "") or "")
                 guest_profile = str(row.get("guest_profile", "") or "")
                 my_side = str(row.get("my_side", ""))
+                if my_side == "guest":
+                    my_side = "client"
                 ranked = int(row.get("ranked", 0) or 0)
                 match_rank = row.get("match_rank")
                 source = str(row.get("source", "server") or "server")
@@ -226,19 +233,41 @@ class LocalStore:
                 inserted += 1
         return inserted
 
-    def fetch_unpushed(self, older_than_sec: float = 300) -> list[dict]:
-        """未送信のローカル戦績を返す。"""
-        cutoff = time.time() - older_than_sec
+    def fetch_unpushed(self, min_age_sec: float = 0) -> list[dict]:
+        """未送信のローカル戦績を返す。
+
+        min_age_sec > 0 のときは played_at がその秒数より前の行だけ返す
+        (即時 sync 後の API 報告との競合を避ける用途)。
+        """
+        clauses = ["server_id IS NULL", "pushed = 0"]
+        params: list[Any] = []
+        if min_age_sec > 0:
+            clauses.append("played_at < ?")
+            params.append(time.time() - min_age_sec)
+        where = " AND ".join(clauses)
+        with self._connect() as conn:
+            cur = conn.execute(
+                f"""
+                SELECT * FROM matches
+                WHERE {where}
+                ORDER BY played_at
+                """,
+                params,
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
+
+    def fetch_unpushed_by_id(self, local_id: str) -> list[dict]:
+        """指定 id の未送信ローカル戦績を返す (即時 sync 用)。"""
         with self._connect() as conn:
             cur = conn.execute(
                 """
                 SELECT * FROM matches
-                WHERE server_id IS NULL AND pushed = 0 AND played_at < ?
-                ORDER BY played_at
+                WHERE id = ? AND server_id IS NULL AND pushed = 0
                 """,
-                (cutoff,),
+                (local_id,),
             )
-            return [_row_to_dict(r) for r in cur.fetchall()]
+            row = cur.fetchone()
+            return [_row_to_dict(row)] if row is not None else []
 
     def mark_pushed(self, local_id: str, server_id_or_none: str | None) -> None:
         with self._connect() as conn:
@@ -283,20 +312,23 @@ class LocalStore:
 
         if my_char is not None:
             clauses.append(
-                "((my_side = 'host' AND host_char = ?) OR (my_side = 'guest' AND guest_char = ?))"
+                "((my_side = 'host' AND host_char = ?) OR "
+                "(my_side IN ('guest', 'client') AND guest_char = ?))"
             )
             params.extend([my_char, my_char])
 
         if opp_char is not None:
             clauses.append(
-                "((my_side = 'host' AND guest_char = ?) OR (my_side = 'guest' AND host_char = ?))"
+                "((my_side = 'host' AND guest_char = ?) OR "
+                "(my_side IN ('guest', 'client') AND host_char = ?))"
             )
             params.extend([opp_char, opp_char])
 
         if opp_profile_like:
             like = f"%{opp_profile_like}%"
             clauses.append(
-                "((my_side = 'host' AND guest_profile LIKE ?) OR (my_side = 'guest' AND host_profile LIKE ?))"
+                "((my_side = 'host' AND guest_profile LIKE ?) OR "
+                "(my_side IN ('guest', 'client') AND host_profile LIKE ?))"
             )
             params.extend([like, like])
 
@@ -315,7 +347,7 @@ class LocalStore:
         my_side = row.get("my_side")
         winner = row.get("winner")
         return (my_side == "host" and winner == "host") or (
-            my_side == "guest" and winner == "guest"
+            LocalStore.is_client_side(my_side) and winner == "guest"
         )
 
     @staticmethod

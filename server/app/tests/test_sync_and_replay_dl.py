@@ -153,7 +153,7 @@ async def test_stats_me_matches_host_and_guest_view():
         )
         assert guest_res.status_code == 200
         gm = guest_res.json()["matches"][0]
-        assert gm["my_side"] == "guest"
+        assert gm["my_side"] == "client"
         assert gm["id"] == match_id
 
 
@@ -385,3 +385,64 @@ async def test_matches_sync_near_duplicate_and_guest_mapping():
             assert m.host_char == 7
             assert m.guest_char == 3
             assert m.source == "sync"
+
+
+@pytest.mark.asyncio
+async def test_host_result_promotes_prior_sync_match():
+    """即時 sync 後の /posts/result が二重登録せず既存行を昇格する。"""
+    async with app_client() as client:
+        await create_user("100", name="host", last_ip="1.2.3.4")
+        await create_user("200", name="guest", last_ip="5.6.7.8")
+
+        host_token = bearer_token("100", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "casual", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+
+        client_id = "e" * 32
+        sync_res = await client.post(
+            "/matches/sync",
+            json={
+                "matches": [{
+                    "client_id": client_id,
+                    "played_at": time.time(),
+                    "my_side": "host",
+                    "winner": "host",
+                    "my_char": 0,
+                    "opp_char": 5,
+                    "my_profile": "hp",
+                    "opp_profile": "gp",
+                }],
+            },
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        assert sync_res.json()["results"][0]["status"] == "imported"
+        sync_match_id = sync_id("100", client_id)
+
+        result = await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "winner": "host",
+                "host_char": 0,
+                "guest_char": 5,
+                "host_profile": "hp",
+                "guest_profile": "gp",
+            },
+        )
+        assert result.json()["recorded"] is True
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            matches = list(res_m.scalars().all())
+        assert len(matches) == 1
+        assert matches[0].id == sync_match_id
+        assert matches[0].source == "host"
+        assert matches[0].guest_user_id == "200"

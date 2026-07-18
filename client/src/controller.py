@@ -42,8 +42,9 @@ REPLAY_RESULT_WAIT_SEC = 30.0
 REPLAY_MTIME_MARGIN_SEC = 10.0
 
 STATS_SYNC_INITIAL_DELAY_SEC = 10.0
-STATS_SYNC_INTERVAL_SEC = 10 * 60
+STATS_SYNC_INTERVAL_SEC = 60.0
 STATS_SYNC_BATCH = 500
+STATS_SYNC_DEFER_SEC = 8.0
 
 PENDING_REQUEST_TTL_SEC = 600  # 未返信リクエストの保持期限
 
@@ -588,15 +589,21 @@ class Controller:
                         if resp.get("recorded"):
                             self.log_sink(
                                 "info",
-                                f"Guest match result reported: {act.payload['winner']}",
+                                t(
+                                    "log.client_result_reported",
+                                    winner=act.payload["winner"],
+                                ),
                             )
                         elif resp.get("reason") == "duplicate":
                             self.log_sink(
                                 "info",
-                                "Guest match result duplicate (already recorded)",
+                                t("log.client_result_duplicate"),
                             )
                     except httpx.HTTPError as e:
-                        self.log_sink("error", f"Guest result report failed: {e}")
+                        self.log_sink(
+                            "error",
+                            t("log.client_result_failed", error=e),
+                        )
 
             except httpx.HTTPStatusError as e:
                 self._on_api_error(act, e)
@@ -633,7 +640,7 @@ class Controller:
 
         # -----------------
         # 一時停止中: 自動投稿だけ止める (既存の募集があれば閉じる)。
-        # 戦績のローカル記録・ゲスト側報告・リプレイ収集は停止中も動かす
+        # 戦績のローカル記録・クライアント側報告・リプレイ収集は停止中も動かす
         # -----------------
         paused = now < self._detect_pause_until
         if paused and self.has_active_post() and not self._close_pending:
@@ -669,7 +676,7 @@ class Controller:
             return Action("close", {"reason": "joined_other_host"})
 
         # -----------------
-        # 0) KO 確定 -> ローカル戦績 (ホスト/ゲスト、ログイン不要)
+        # 0) KO 確定 -> ローカル戦績 (ホスト/クライアント、ログイン不要)
         # -----------------
         if (
             st.net_side in ("host", "client")
@@ -683,7 +690,7 @@ class Controller:
             and (st.lwin == 2 or st.rwin == 2)
         ):
             self._local_match_recorded = True
-            my_side = "host" if st.net_side == "host" else "guest"
+            my_side = "host" if st.net_side == "host" else "client"
             winner = "host" if st.lwin == 2 else "guest"
             ranked = 0
             if (
@@ -703,7 +710,7 @@ class Controller:
             }
 
         # -----------------
-        # 0b) KO 確定 -> result (ホスト側のみ。ゲスト対戦は自分の募集に反映しない)
+        # 0b) KO 確定 -> result (ホスト側のみ。クライアントとして凸った対戦は自分の募集に反映しない)
         # -----------------
         if (
             st.net_side == "host"
@@ -727,7 +734,7 @@ class Controller:
                 "guest_profile": (st.rprof or ""),
             })
 
-        # ゲスト側: ホストが asobby 非導入でも戦績を補完報告する
+        # クライアント側: ホストが asobby 非導入でも戦績を補完報告する
         if (
             st.net_side == "client"
             and is_battle
@@ -755,7 +762,7 @@ class Controller:
             self._local_match_recorded = False
 
         # -----------------
-        # リプレイ収集 (ホスト/ゲスト両方)
+        # リプレイ収集 (ホスト/クライアント両方)
         # -----------------
         is_net_battle = is_battle and st.net_side in ("host", "client")
 
@@ -911,13 +918,35 @@ class Controller:
         return None
 
     def _replay_candidate_dirs(self, exe_path: str) -> list[Path]:
+        """th123.exe と同じフォルダ配下の replay/ を返す。
+
+        Program Files 等への書き込みは VirtualStore にリダイレクトされる。
+        その場合の保存先は exe 直下ではなく
+        %LOCALAPPDATA%\\VirtualStore\\<ドライブルートからの exe 親ディレクトリ>\\replay
+        になる。configex123.ini / ReplayLabelEx 等で replay/ 以下のサブフォルダに
+        保存される場合もある。
+        """
+        if not exe_path:
+            return []
         p = Path(exe_path)
-        dirs = [p.parent / "replay"]
+        game_dir = p.parent
+        dirs = [game_dir / "replay"]
+
         local_app = os.environ.get("LOCALAPPDATA", "")
-        if local_app and len(exe_path) >= 3 and exe_path[1] == ":":
-            rel = exe_path[3:]
-            parent_rel = str(Path(rel).parent)
-            dirs.append(Path(local_app) / "VirtualStore" / parent_rel / "replay")
+        anchor = p.anchor
+        if not local_app or not anchor:
+            return dirs
+
+        try:
+            rel_dir = game_dir.relative_to(anchor)
+        except ValueError:
+            return dirs
+
+        vs_root = Path(local_app) / "VirtualStore"
+        if rel_dir.parts:
+            dirs.append(vs_root / rel_dir / "replay")
+        else:
+            dirs.append(vs_root / "replay")
         return dirs
 
     @staticmethod
@@ -936,7 +965,9 @@ class Controller:
             if not d.is_dir():
                 continue
             try:
-                for rep in d.glob("*.rep"):
+                # replay/ 直下だけでなく、日付フォルダ (26/07/17) や
+                # ReplayLabelEx の %mode\ 等のサブフォルダも対象にする
+                for rep in d.rglob("*.rep"):
                     if self._replay_upload_key(rep) in self._uploaded_replay_keys:
                         continue
                     try:
@@ -1015,7 +1046,7 @@ class Controller:
 
         upload_key = self._replay_upload_key(chosen)
 
-        # 対戦相手側の報告 (host result / guest report) がまだ届いておらず
+        # 相手側の報告 (host result / client report) がまだ届いておらず
         # no_match になることがあるためリトライする
         resp: dict = {}
         for attempt in range(REPLAY_UPLOAD_RETRIES + 1):
@@ -1052,11 +1083,63 @@ class Controller:
         try:
             match_id = await asyncio.to_thread(self.local_store.record_local, **payload)
             self.log_sink("info", f"Local match recorded: {match_id}")
+            if self.is_logged_in():
+                if await self._sync_match_by_id(match_id):
+                    self._replay_result_reported = True
+                pulled = await self._pull_server_matches()
+                if pulled:
+                    self.log_sink("info", f"Stats pull: {pulled} new match(es)")
         except Exception as e:
             self.log_sink("warn", f"Local match record failed: {e}")
 
+    async def _sync_match_by_id(self, local_id: str) -> bool:
+        """1 件のローカル戦績を直ちにサーバーへ送る。"""
+        rows = await asyncio.to_thread(
+            self.local_store.fetch_unpushed_by_id, local_id
+        )
+        if not rows:
+            return False
+        resp = await self.api.sync_matches(
+            [self._sync_payload_from_row(rows[0])]
+        )
+        linked = False
+        for result in resp.get("results") or []:
+            if str(result.get("client_id", "")) != local_id:
+                continue
+            status = str(result.get("status", ""))
+            server_id = result.get("server_id")
+            sid = str(server_id) if server_id else None
+            await asyncio.to_thread(
+                self.local_store.mark_pushed, local_id, sid
+            )
+            if status in ("imported", "duplicate") and sid:
+                linked = True
+                self.log_sink("info", f"Stats push: synced {local_id}")
+        return linked
+
+    async def _pull_server_matches(self) -> int:
+        """サーバー側の新着戦績をローカルへ取り込む。"""
+        since = await asyncio.to_thread(self.local_store.max_server_played_at)
+        inserted = 0
+        while True:
+            resp = await self.api.fetch_my_matches(
+                since=since, limit=STATS_SYNC_BATCH
+            )
+            rows = resp.get("matches") or []
+            if rows:
+                ins = await asyncio.to_thread(
+                    self.local_store.merge_server_rows, rows
+                )
+                since = max(float(r["played_at"]) for r in rows)
+                inserted += ins
+            if len(rows) < STATS_SYNC_BATCH:
+                break
+        return inserted
+
     def _sync_payload_from_row(self, row: dict) -> dict:
         my_side = row["my_side"]
+        if my_side == "client":
+            my_side = "guest"
         if my_side == "host":
             my_char = row.get("host_char")
             opp_char = row.get("guest_char")
@@ -1126,25 +1209,12 @@ class Controller:
         pulled = 0
         pushed = 0
         try:
-            since = await asyncio.to_thread(self.local_store.max_server_played_at)
-            while True:
-                resp = await self.api.fetch_my_matches(
-                    since=since, limit=STATS_SYNC_BATCH
-                )
-                rows = resp.get("matches") or []
-                if rows:
-                    inserted = await asyncio.to_thread(
-                        self.local_store.merge_server_rows, rows
-                    )
-                    since = max(float(r["played_at"]) for r in rows)
-                    pulled += inserted
-                    if inserted:
-                        self.log_sink("info", f"Stats pull: {inserted} new match(es)")
-                if len(rows) < STATS_SYNC_BATCH:
-                    break
+            pulled += await self._pull_server_matches()
 
             while True:
-                unpushed = await asyncio.to_thread(self.local_store.fetch_unpushed)
+                unpushed = await asyncio.to_thread(
+                    self.local_store.fetch_unpushed, STATS_SYNC_DEFER_SEC
+                )
                 if not unpushed:
                     break
                 batch = unpushed[:STATS_SYNC_BATCH]

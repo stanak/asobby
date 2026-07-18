@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 import db
 import geoip
+import post_redis
 
 ALLOWED_STREAM_DOMAINS = {
     "youtube.com",
@@ -217,6 +218,40 @@ class PostRecord:
     sent_log: dict[str, dict] = field(default_factory=dict)
 
 
+POST_REDIS_TTL_SEC = POST_TTL_SEC + 30
+
+
+def post_record_to_dict(rec: PostRecord) -> dict[str, Any]:
+    return {
+        "post": asdict(rec.post),
+        "owner_token": rec.owner_token,
+        "creator_ip": rec.creator_ip,
+        "owner_user_id": rec.owner_user_id,
+        "guest_ip": rec.guest_ip,
+        "guest_user_id": rec.guest_user_id,
+        "guest_rank": rec.guest_rank,
+        "session_games": rec.session_games,
+        "pending_messages": list(rec.pending_messages),
+        "sent_log": dict(rec.sent_log),
+    }
+
+
+def post_record_from_dict(data: dict[str, Any]) -> PostRecord:
+    post_data = data.get("post") or {}
+    return PostRecord(
+        post=Post(**post_data),
+        owner_token=str(data.get("owner_token", "")),
+        creator_ip=str(data.get("creator_ip", "")),
+        owner_user_id=str(data.get("owner_user_id", "")),
+        guest_ip=str(data.get("guest_ip", "")),
+        guest_user_id=str(data.get("guest_user_id", "")),
+        guest_rank=str(data.get("guest_rank", "")),
+        session_games=int(data.get("session_games", 0) or 0),
+        pending_messages=list(data.get("pending_messages") or []),
+        sent_log=dict(data.get("sent_log") or {}),
+    )
+
+
 def now_ts() -> float:
     return time.time()
 
@@ -302,7 +337,7 @@ def _normalize_char(char: Optional[int]) -> Optional[int]:
 class SyncMatchIn(BaseModel):
     client_id: str
     played_at: float
-    my_side: Literal["host", "guest"]
+    my_side: Literal["host", "guest", "client"]
     winner: Literal["host", "guest", "draw"]
     my_char: Optional[int] = None
     opp_char: Optional[int] = None
@@ -539,6 +574,56 @@ RECORDS: Dict[str, PostRecord] = {}
 LAST_CREATE_AT: Dict[str, float] = {}
 
 
+async def _persist_record(rec: PostRecord) -> None:
+    if not post_redis.is_configured():
+        return
+    try:
+        await asyncio.to_thread(
+            post_redis.save_record_dict,
+            post_record_to_dict(rec),
+            ttl_sec=POST_REDIS_TTL_SEC,
+        )
+    except Exception as e:
+        print(f"post_redis save error: {e}")
+
+
+async def _delete_persisted_post(post_id: str) -> None:
+    if not post_redis.is_configured():
+        return
+    try:
+        await asyncio.to_thread(post_redis.delete_record, post_id)
+    except Exception as e:
+        print(f"post_redis delete error: {e}")
+
+
+async def _hydrate_records_from_redis() -> None:
+    if not post_redis.is_configured():
+        return
+    try:
+        rows = await asyncio.to_thread(post_redis.load_all_record_dicts)
+    except Exception as e:
+        print(f"post_redis load error: {e}")
+        return
+
+    now = time.time()
+    restored = 0
+    for data in rows:
+        try:
+            rec = post_record_from_dict(data)
+        except (TypeError, KeyError):
+            post_id = str((data.get("post") or {}).get("id", ""))
+            if post_id:
+                await _delete_persisted_post(post_id)
+            continue
+        if now - rec.post.updated_at >= POST_TTL_SEC:
+            await _delete_persisted_post(rec.post.id)
+            continue
+        RECORDS[rec.post.id] = rec
+        restored += 1
+    if restored:
+        print(f"post_redis: restored {restored} post(s)")
+
+
 async def cleanup_loop() -> None:
     while True:
         now = time.time()
@@ -550,6 +635,7 @@ async def cleanup_loop() -> None:
         for post_id in stale_ids:
             RECORDS.pop(post_id, None)
             cleanup_message_state_for_post(post_id)
+            await _delete_persisted_post(post_id)
             await HUB.publish("close", {"id": post_id, "reason": "ttl_expired", "ts": now_ts()})
         await asyncio.sleep(CLEANUP_INTERVAL_SEC)
 
@@ -602,6 +688,7 @@ async def lifespan(app: FastAPI):
         db.init_engine(DATABASE_URL)
     if await asyncio.to_thread(geoip.ensure_geoip_db):
         await asyncio.to_thread(geoip.init_geoip)
+    await _hydrate_records_from_redis()
     cleanup_task = asyncio.create_task(cleanup_loop())
     guest_probe_task = asyncio.create_task(guest_probe_loop())
     try:
@@ -1135,7 +1222,7 @@ def _parse_sync_played_at(ts: float) -> Optional[datetime]:
 
 
 def _match_to_stats_item(match: db.Match, user_id: str, has_replay: bool) -> dict[str, Any]:
-    my_side = "host" if match.host_user_id == user_id else "guest"
+    my_side = "host" if match.host_user_id == user_id else "client"
     return {
         "id": match.id,
         "played_at": _dt_ts(match.played_at) if match.played_at else 0.0,
@@ -1467,7 +1554,8 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
         )
         if near_match is not None:
             # 既存行に自分の側が未同定で残っていれば紐付ける
-            await db.claim_match_side(near_match.id, item.my_side, user_id)
+            side = "guest" if item.my_side == "client" else item.my_side
+            await db.claim_match_side(near_match.id, side, user_id)
             results.append({
                 "client_id": item.client_id,
                 "server_id": near_match.id,
@@ -1889,6 +1977,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
     )
     RECORDS[post.id] = rec
 
+    await _persist_record(rec)
     await HUB.publish("upsert", asdict(post))
     return {"post": asdict(post), "owner_token": rec.owner_token}
 
@@ -1925,6 +2014,7 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     rec.pending_messages.clear()
     data = asdict(p)
     data["messages"] = messages
+    await _persist_record(rec)
     await HUB.publish("upsert", asdict(p))
     return data
 
@@ -1986,6 +2076,7 @@ async def post_message(post_id: str, body: PostMessageIn, request: Request) -> d
             del rec.sent_log[oldest]
 
     MESSAGE_LAST_SENT[cooldown_key] = now
+    await _persist_record(rec)
     return {"ok": True, "cooldown_sec": int(MESSAGE_COOLDOWN_SEC)}
 
 
@@ -2000,6 +2091,7 @@ async def reply_post_message(body: PostReplyIn) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="already replied")
 
     entry["replied"] = True
+    await _persist_record(rec)
     await HUB.publish(
         "message_reply",
         {
@@ -2019,6 +2111,7 @@ async def close_post(body: ClosePostIn) -> dict[str, Any]:
 
     del RECORDS[body.id]
     cleanup_message_state_for_post(body.id)
+    await _delete_persisted_post(body.id)
     await HUB.publish("close", {"id": body.id, "reason": body.reason, "ts": now_ts()})
     return {"ok": True, "id": body.id}
 
@@ -2176,6 +2269,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
             rec.guest_user_id = user.id
             rec.guest_rank = user.rank
 
+    promoted = False
     if rec.guest_user_id:
         guest_match = await db.find_recent_guest_reported_match(rec.guest_user_id)
         if guest_match is not None:
@@ -2191,32 +2285,13 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 ranked=is_ranked,
                 match_rank=match_rank,
             )
-        else:
-            await db.insert_match_result(
-                host_user_id=rec.owner_user_id,
-                guest_user_id=rec.guest_user_id,
-                host_ip=host_ip,
-                guest_ip=rec.guest_ip,
-                winner=body.winner,
-                host_char=body.host_char,
-                guest_char=body.guest_char,
-                host_profile=body.host_profile,
-                guest_profile=body.guest_profile,
-                ranked=is_ranked,
-                match_rank=match_rank,
-                source="host",
-            )
-    else:
-        # ゲストを同定できなくても、先行するゲスト報告 (source=='guest')
-        # がプロファイル一致で見つかればそれを昇格して二重登録を防ぐ
+            promoted = True
+
+    if not promoted:
         near = await db.find_near_match_by_profiles(
             db.utcnow(), body.winner, body.host_profile, body.guest_profile
         )
-        if (
-            near is not None
-            and near.source == "guest"
-            and near.guest_user_id != rec.owner_user_id
-        ):
+        if near is not None and near.source in ("sync", "guest"):
             await db.promote_guest_match(
                 near.id,
                 host_user_id=rec.owner_user_id,
@@ -2229,21 +2304,25 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 ranked=is_ranked,
                 match_rank=match_rank,
             )
-        else:
-            await db.insert_match_result(
-                host_user_id=rec.owner_user_id,
-                guest_user_id=None,
-                host_ip=host_ip,
-                guest_ip=rec.guest_ip,
-                winner=body.winner,
-                host_char=body.host_char,
-                guest_char=body.guest_char,
-                host_profile=body.host_profile,
-                guest_profile=body.guest_profile,
-                ranked=is_ranked,
-                match_rank=match_rank,
-                source="host",
-            )
+            if rec.guest_user_id:
+                await db.claim_match_side(near.id, "guest", rec.guest_user_id)
+            promoted = True
+
+    if not promoted:
+        await db.insert_match_result(
+            host_user_id=rec.owner_user_id,
+            guest_user_id=rec.guest_user_id or None,
+            host_ip=host_ip,
+            guest_ip=rec.guest_ip,
+            winner=body.winner,
+            host_char=body.host_char,
+            guest_char=body.guest_char,
+            host_profile=body.host_profile,
+            guest_profile=body.guest_profile,
+            ranked=is_ranked,
+            match_rank=match_rank,
+            source="host",
+        )
     rec.session_games += 1
 
     if is_ranked:
@@ -2262,6 +2341,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 body.winner,
             )
 
+    await _persist_record(rec)
     return {"ok": True, "recorded": True, "ranked": is_ranked}
 
 
@@ -2422,6 +2502,7 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
             post.guest_avatar = ""
             post.guest_connected = False
             post.ranked_active = False
+            await _persist_record(rec)
             await HUB.publish("upsert", asdict(post))
         return
 
@@ -2457,6 +2538,7 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
         and rec.guest_rank == post.rank
     )
 
+    await _persist_record(rec)
     await HUB.publish("upsert", asdict(post))
 
 
