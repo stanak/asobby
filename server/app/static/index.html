@@ -385,6 +385,30 @@
     color: var(--muted);
   }
   .lobby-chat-header-spacer { flex: 1; }
+  .lobby-chat-tabs {
+    display: flex;
+    gap: 4px;
+    margin-right: 8px;
+  }
+  .lobby-chat-tab {
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    border-radius: 6px;
+    padding: 2px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .lobby-chat-tab.active {
+    color: var(--text);
+    border-color: var(--accent);
+    background: rgba(88, 166, 255, 0.12);
+  }
+  .lobby-chat-tab .chat-tab-badge {
+    margin-left: 4px;
+    color: var(--accent);
+    font-weight: 700;
+  }
   #lobby-chat-hide-btn {
     position: relative;
     background: transparent;
@@ -520,6 +544,14 @@
     padding: 0 16px 8px;
   }
   #lobby-chat-error:empty { display: none; }
+  .ping-cell {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--muted);
+    min-width: 3.5rem;
+  }
+  .ping-cell.ok { color: var(--text); }
+  .ping-cell.pending { opacity: 0.6; }
   .player-suggest {
     position: absolute;
     z-index: 20;
@@ -603,6 +635,7 @@
           <th data-i18n="lobby.colCap">Cap</th>
           <th data-i18n="lobby.colStream">Stream</th>
           <th data-i18n="lobby.colComment">Comment</th>
+          <th data-i18n="lobby.colPing">Ping</th>
           <th data-i18n="lobby.colAddr">Addr</th>
           <th></th>
         </tr>
@@ -625,6 +658,7 @@
         <th data-i18n="lobby.colCap">Cap</th>
         <th data-i18n="lobby.colStream">Stream</th>
         <th data-i18n="lobby.colComment">Comment</th>
+        <th data-i18n="lobby.colPing">Ping</th>
         <th data-i18n="lobby.colAddr">Addr</th>
       </tr>
     </thead>
@@ -643,6 +677,10 @@
   <div id="lobby-chat-panel" hidden>
     <div class="lobby-chat-header">
       <span data-i18n="lobby.chatTitle">ロビーチャット(感想戦などにもどうぞ)</span>
+      <div class="lobby-chat-tabs" role="tablist" aria-label="Lobby chat language">
+        <button type="button" class="lobby-chat-tab active" data-chat-lang="ja" data-i18n="lobby.chatTabJa">JP</button>
+        <button type="button" class="lobby-chat-tab" data-chat-lang="en" data-i18n="lobby.chatTabEn">EN</button>
+      </div>
       <span class="lobby-chat-header-spacer"></span>
       <button type="button" id="lobby-chat-hide-btn" data-i18n="lobby.chatHide">ロビーチャットを隠す</button>
     </div>
@@ -686,11 +724,22 @@ const messageCooldowns = new Map();
 const CHAT_MAX_TEXT = 500;
 const CHAT_MAX_LINES = 8;
 const CHAT_OPEN_STORAGE_KEY = "asobby-lobby-chat-open";
-let chatMessages = [];
+const CHAT_LANG_STORAGE_KEY = "asobby-lobby-chat-lang";
+const LOCAL_API_BASE = "http://127.0.0.1:49152";
+const PING_REFRESH_MS = 15000;
+const PING_HEALTH_TIMEOUT_MS = 1200;
+let chatMessagesByLang = { ja: [], en: [] };
+let activeChatLang = "ja";
 let chatOpen = true;
+let chatUnreadByLang = { ja: 0, en: 0 };
 let chatUnreadMentions = 0;
 let chatInitialized = false;
 let chatSending = false;
+let chatTabBtns = [];
+let clientPingAvailable = false;
+let pingByPostId = new Map();
+let pingInFlight = false;
+let pingTimer = null;
 
 const lobbyChatRootEl = document.getElementById("lobby-chat");
 const lobbyChatCollapsedEl = document.getElementById("lobby-chat-collapsed");
@@ -702,6 +751,8 @@ const lobbyChatInputEl = document.getElementById("lobby-chat-input");
 const lobbyChatSendEl = document.getElementById("lobby-chat-send");
 const lobbyChatErrorEl = document.getElementById("lobby-chat-error");
 const lobbyChatSuggestEl = document.getElementById("lobby-chat-suggest");
+const lobbyChatTabEls = () =>
+  Array.from(document.querySelectorAll(".lobby-chat-tab"));
 
 const REQ_TYPE_KEYS = {
   giuroll_request: "msg.typeGiurollRequest",
@@ -941,6 +992,98 @@ function buildMessageCell(p) {
   return cell;
 }
 
+function parsePostAddr(addr) {
+  if (!addr || typeof addr !== "string") return null;
+  const idx = addr.lastIndexOf(":");
+  if (idx <= 0) return null;
+  const host = addr.slice(0, idx);
+  const port = Number(addr.slice(idx + 1));
+  if (!host || !Number.isInteger(port) || port <= 0 || port >= 65536) return null;
+  return { host, port };
+}
+
+function buildPingCell(p) {
+  const cell = document.createElement("td");
+  cell.className = "ping-cell";
+  if (!clientPingAvailable) {
+    cell.textContent = t("lobby.pingUnavailable");
+    cell.title = t("lobby.pingClientRequired");
+    return cell;
+  }
+  const cached = pingByPostId.get(p.id);
+  if (cached === undefined) {
+    cell.classList.add("pending");
+    cell.textContent = "...";
+    return cell;
+  }
+  if (cached === null) {
+    cell.textContent = t("lobby.pingUnavailable");
+    return cell;
+  }
+  cell.classList.add("ok");
+  cell.textContent = `${cached}ms`;
+  return cell;
+}
+
+async function checkClientPingApi() {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PING_HEALTH_TIMEOUT_MS);
+    const res = await fetch(`${LOCAL_API_BASE}/health`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    clientPingAvailable = res.ok;
+  } catch (_) {
+    clientPingAvailable = false;
+  }
+}
+
+async function refreshHostPings() {
+  if (!loggedIn || !clientPingAvailable || pingInFlight) return;
+  const targets = [];
+  for (const p of posts.values()) {
+    const parsed = parsePostAddr(p.addr);
+    if (!parsed) continue;
+    targets.push({
+      id: p.id,
+      host: parsed.host,
+      port: parsed.port,
+      autopunch: !!p.autopunch,
+    });
+  }
+  if (!targets.length) {
+    render();
+    return;
+  }
+  pingInFlight = true;
+  try {
+    const res = await fetch(`${LOCAL_API_BASE}/lobby/ping`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targets }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.ok || !Array.isArray(data.results)) return;
+    for (const item of data.results) {
+      pingByPostId.set(item.id, item.ok ? item.rtt_ms : null);
+    }
+    render();
+  } catch (_) {
+    clientPingAvailable = false;
+    render();
+  } finally {
+    pingInFlight = false;
+  }
+}
+
+function schedulePingRefresh() {
+  if (pingTimer) clearInterval(pingTimer);
+  pingTimer = setInterval(async () => {
+    await checkClientPingApi();
+    await refreshHostPings();
+  }, PING_REFRESH_MS);
+}
+
 function buildRow(p) {
   const tr = document.createElement("tr");
   if (p.net_status === NET_BATTLE) tr.classList.add("battle");
@@ -1000,6 +1143,8 @@ function buildRow(p) {
   const comment = td(p.comment || "");
   comment.className = "comment";
   tr.appendChild(comment);
+
+  tr.appendChild(buildPingCell(p));
 
   const addr = document.createElement("td");
   addr.className = "addr-cell";
@@ -1166,6 +1311,10 @@ function showLoggedIn(user) {
   statusEl.hidden = false;
   lobbyChatRootEl.hidden = false;
   initLobbyChat();
+  checkClientPingApi().then(() => {
+    refreshHostPings();
+    schedulePingRefresh();
+  });
   render();
 }
 
@@ -1220,19 +1369,30 @@ function isChatMentioned(msg) {
   return msg.mentions.some((m) => m.user_id === myUserId);
 }
 
-function upsertChatMessage(msg) {
+function normalizeChatLang(lang) {
+  return lang === "en" ? "en" : "ja";
+}
+
+function activeChatMessages() {
+  return chatMessagesByLang[activeChatLang] || [];
+}
+
+function upsertChatMessage(msg, lang) {
   if (!msg || !msg.id) return;
-  const idx = chatMessages.findIndex((m) => m.id === msg.id);
+  const channel = normalizeChatLang(lang || msg.lang);
+  const list = chatMessagesByLang[channel];
+  const idx = list.findIndex((m) => m.id === msg.id);
   if (idx >= 0) {
-    chatMessages[idx] = msg;
+    list[idx] = msg;
   } else {
-    chatMessages.push(msg);
+    list.push(msg);
   }
-  chatMessages.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  list.sort((a, b) => (a.ts || 0) - (b.ts || 0));
 }
 
 function renderChatList() {
   lobbyChatMessagesEl.replaceChildren();
+  const chatMessages = activeChatMessages();
   if (!chatMessages.length) {
     const empty = document.createElement("div");
     empty.className = "chat-empty";
@@ -1289,11 +1449,28 @@ function setChatToggleBadge(btn, count) {
 }
 
 function updateChatMentionBadge() {
+  chatUnreadMentions =
+    (chatUnreadByLang.ja || 0) + (chatUnreadByLang.en || 0);
   setChatToggleBadge(lobbyChatHideBtnEl, chatUnreadMentions);
   setChatToggleBadge(lobbyChatShowBtnEl, chatUnreadMentions);
+  updateChatTabBadges();
+}
+
+function updateChatTabBadges() {
+  for (const btn of chatTabBtns) {
+    const lang = normalizeChatLang(btn.dataset.chatLang);
+    const count = chatUnreadByLang[lang] || 0;
+    btn.querySelector(".chat-tab-badge")?.remove();
+    if (count <= 0) continue;
+    const badge = document.createElement("span");
+    badge.className = "chat-tab-badge";
+    badge.textContent = count > 99 ? "99+" : String(count);
+    btn.appendChild(badge);
+  }
 }
 
 function clearChatMentionBadge() {
+  chatUnreadByLang = { ja: 0, en: 0 };
   chatUnreadMentions = 0;
   updateChatMentionBadge();
 }
@@ -1314,18 +1491,37 @@ function setChatPanelOpen(open, persist) {
 }
 
 function handleIncomingChatMessage(msg) {
-  upsertChatMessage(msg);
-  if (chatOpen) {
+  const lang = normalizeChatLang(msg.lang);
+  upsertChatMessage(msg, lang);
+  if (chatOpen && lang === activeChatLang) {
     renderChatList();
     scrollChatToBottom();
   }
   if (
     msg.user_id !== myUserId &&
     isChatMentioned(msg) &&
-    !chatOpen
+    (!chatOpen || lang !== activeChatLang)
   ) {
-    chatUnreadMentions += 1;
+    chatUnreadByLang[lang] = (chatUnreadByLang[lang] || 0) + 1;
     updateChatMentionBadge();
+  }
+}
+
+function setActiveChatLang(lang, persist) {
+  activeChatLang = normalizeChatLang(lang);
+  if (persist !== false) {
+    localStorage.setItem(CHAT_LANG_STORAGE_KEY, activeChatLang);
+  }
+  for (const btn of chatTabBtns) {
+    const isActive = normalizeChatLang(btn.dataset.chatLang) === activeChatLang;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", isActive ? "true" : "false");
+  }
+  chatUnreadByLang[activeChatLang] = 0;
+  updateChatMentionBadge();
+  if (chatOpen) {
+    renderChatList();
+    scrollChatToBottom();
   }
 }
 
@@ -1347,7 +1543,7 @@ async function sendChatMessage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, lang: activeChatLang }),
     });
     if (res.ok) {
       lobbyChatInputEl.value = "";
@@ -1374,6 +1570,15 @@ async function sendChatMessage() {
 function initLobbyChat() {
   if (chatInitialized) return;
   chatInitialized = true;
+
+  chatTabBtns = lobbyChatTabEls();
+  const storedLang = localStorage.getItem(CHAT_LANG_STORAGE_KEY);
+  setActiveChatLang(storedLang || getLang(), false);
+  for (const btn of chatTabBtns) {
+    btn.addEventListener("click", () => {
+      setActiveChatLang(btn.dataset.chatLang);
+    });
+  }
 
   const stored = localStorage.getItem(CHAT_OPEN_STORAGE_KEY);
   setChatPanelOpen(stored !== "0", false);
@@ -1457,17 +1662,20 @@ function connect() {
     posts.clear();
     for (const p of JSON.parse(e.data)) posts.set(p.id, p);
     render();
+    void refreshHostPings();
   });
 
   es.addEventListener("upsert", (e) => {
     const p = JSON.parse(e.data);
     posts.set(p.id, p);
     render();
+    void refreshHostPings();
   });
 
   es.addEventListener("close", (e) => {
     const d = JSON.parse(e.data);
     posts.delete(d.id);
+    pingByPostId.delete(d.id);
     render();
   });
 
@@ -1476,7 +1684,15 @@ function connect() {
   });
 
   es.addEventListener("chat_snapshot", (e) => {
-    chatMessages = JSON.parse(e.data);
+    const snap = JSON.parse(e.data);
+    if (Array.isArray(snap)) {
+      chatMessagesByLang = { ja: snap, en: [] };
+    } else {
+      chatMessagesByLang = {
+        ja: Array.isArray(snap.ja) ? snap.ja : [],
+        en: Array.isArray(snap.en) ? snap.en : [],
+      };
+    }
     if (chatOpen) {
       renderChatList();
       scrollChatToBottom();

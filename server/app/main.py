@@ -424,6 +424,7 @@ class SyncMatchesIn(BaseModel):
 
 class ChatMessageIn(BaseModel):
     text: str = Field(max_length=LOBBY_CHAT_MAX_TEXT + 50)
+    lang: str = "ja"
 
 
 # ----------------------------
@@ -669,7 +670,10 @@ def format_sse(event: str, data: Any) -> str:
 # App / state
 # ----------------------------
 HUB = SSEHub()
-LOBBY_CHAT: deque[dict[str, Any]] = deque(maxlen=LOBBY_CHAT_MAX_MESSAGES)
+LOBBY_CHAT_LANGS = ("ja", "en")
+LOBBY_CHATS: dict[str, deque[dict[str, Any]]] = {
+    lang: deque(maxlen=LOBBY_CHAT_MAX_MESSAGES) for lang in LOBBY_CHAT_LANGS
+}
 RECORDS: Dict[str, PostRecord] = {}
 LAST_CREATE_AT: Dict[str, float] = {}
 
@@ -728,33 +732,58 @@ async def _hydrate_chat_from_redis() -> None:
     if not post_redis.is_configured():
         return
     try:
-        messages = await asyncio.to_thread(
-            post_redis.load_chat_messages,
+        by_lang = await asyncio.to_thread(
+            post_redis.load_all_chat_messages,
             max_messages=LOBBY_CHAT_MAX_MESSAGES,
             max_age_sec=LOBBY_CHAT_MAX_AGE_SEC,
         )
     except Exception as e:
         print(f"post_redis chat load error: {e}")
         return
-    LOBBY_CHAT.clear()
-    for msg in messages:
-        LOBBY_CHAT.append(msg)
-    if messages:
-        print(f"post_redis: restored {len(messages)} chat message(s)")
+    total = 0
+    for lang in LOBBY_CHAT_LANGS:
+        LOBBY_CHATS[lang].clear()
+        for msg in by_lang.get(lang, []):
+            LOBBY_CHATS[lang].append(msg)
+            total += 1
+    if total:
+        print(f"post_redis: restored {total} chat message(s)")
 
 
 async def _sync_chat_to_redis() -> None:
     if not post_redis.is_configured():
         return
     try:
-        await asyncio.to_thread(
-            post_redis.replace_chat_messages,
-            list(LOBBY_CHAT),
-            max_messages=LOBBY_CHAT_MAX_MESSAGES,
-            max_age_sec=LOBBY_CHAT_MAX_AGE_SEC,
-        )
+        for lang in LOBBY_CHAT_LANGS:
+            await asyncio.to_thread(
+                post_redis.replace_chat_messages,
+                lang,
+                list(LOBBY_CHATS[lang]),
+                max_messages=LOBBY_CHAT_MAX_MESSAGES,
+                max_age_sec=LOBBY_CHAT_MAX_AGE_SEC,
+            )
     except Exception as e:
         print(f"post_redis chat save error: {e}")
+
+
+def _normalize_chat_lang(lang: str | None) -> str:
+    return post_redis.normalize_chat_lang(lang)
+
+
+def _trim_lobby_chat_by_age() -> bool:
+    cutoff = time.time() - LOBBY_CHAT_MAX_AGE_SEC
+    changed = False
+    for lang in LOBBY_CHAT_LANGS:
+        chat = LOBBY_CHATS[lang]
+        while chat and float(chat[0].get("ts", 0)) < cutoff:
+            chat.popleft()
+            changed = True
+    return changed
+
+
+def lobby_chat_snapshot() -> dict[str, list[dict[str, Any]]]:
+    _trim_lobby_chat_by_age()
+    return {lang: list(LOBBY_CHATS[lang]) for lang in LOBBY_CHAT_LANGS}
 
 
 def _normalize_chat_text(text: str) -> str:
@@ -771,22 +800,6 @@ def _validate_chat_text(text: str) -> str:
     if line_count > LOBBY_CHAT_MAX_LINES:
         raise HTTPException(status_code=422, detail="too many lines")
     return normalized
-
-
-def _trim_lobby_chat_by_age() -> bool:
-    if not LOBBY_CHAT:
-        return False
-    cutoff = time.time() - LOBBY_CHAT_MAX_AGE_SEC
-    changed = False
-    while LOBBY_CHAT and float(LOBBY_CHAT[0].get("ts", 0)) < cutoff:
-        LOBBY_CHAT.popleft()
-        changed = True
-    return changed
-
-
-def lobby_chat_snapshot() -> list[dict[str, Any]]:
-    _trim_lobby_chat_by_age()
-    return list(LOBBY_CHAT)
 
 
 async def cleanup_loop() -> None:
@@ -2661,6 +2674,7 @@ async def post_lobby_chat(body: ChatMessageIn, request: Request) -> dict[str, An
                 headers={"Retry-After": str(retry_after)},
             )
 
+    lang = _normalize_chat_lang(body.lang)
     mentions: list[dict[str, str]] = []
     if db.is_configured():
         for user in await db.users_mentioned_in_text(text):
@@ -2673,9 +2687,10 @@ async def post_lobby_chat(body: ChatMessageIn, request: Request) -> dict[str, An
         "avatar": sess.get("avatar") or "",
         "text": text,
         "mentions": mentions,
+        "lang": lang,
         "ts": now,
     }
-    LOBBY_CHAT.append(msg)
+    LOBBY_CHATS[lang].append(msg)
     if post_redis.is_configured():
         await asyncio.to_thread(
             post_redis.append_chat_message,

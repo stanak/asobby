@@ -21,6 +21,7 @@ from services import Post, NET_ALIVE, NET_BATTLE, __version__, format_system_ran
 from i18n import bind_locale, get_lang, post_type_label, t
 from config_manager import ConfigManager
 from tool_manager import ToolManager
+from local_api import start_local_api_server, LOCAL_API_PORT
 
 
 ActionType = Literal["create", "update", "close", "result", "guest_result"]
@@ -118,6 +119,12 @@ class Controller:
         self.update_my_post(**self._default_post_params())
 
         self.update_available: Optional[tuple[str, str]] = None
+
+        try:
+            start_local_api_server()
+            self.log_sink("info", f"Local lobby API listening on 127.0.0.1:{LOCAL_API_PORT}")
+        except OSError as e:
+            self.log_sink("warn", f"Local lobby API unavailable: {e}")
         self._notified_update_tag: str = ""
 
         # Discord ログイン（任意）。設定に保存済みのセッションを復元する。

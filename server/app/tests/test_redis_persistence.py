@@ -101,7 +101,9 @@ def test_chat_roundtrip(fake_redis):
         "ts": now,
     }
     post_redis.append_chat_message(msg, max_messages=100)
-    loaded = post_redis.load_chat_messages(max_messages=100, max_age_sec=3600, now=now)
+    loaded = post_redis.load_chat_messages(
+        "ja", max_messages=100, max_age_sec=3600, now=now
+    )
     assert len(loaded) == 1
     assert loaded[0]["id"] == "m1"
     assert loaded[0]["text"] == "hello"
@@ -120,7 +122,9 @@ def test_chat_max_messages(fake_redis):
             {"id": f"m{i}", "text": str(i), "ts": now + i},
             max_messages=3,
         )
-    loaded = post_redis.load_chat_messages(max_messages=3, max_age_sec=3600, now=now + 10)
+    loaded = post_redis.load_chat_messages(
+        "ja", max_messages=3, max_age_sec=3600, now=now + 10
+    )
     assert len(loaded) == 3
     assert loaded[0]["id"] == "m2"
     assert loaded[-1]["id"] == "m4"
@@ -199,22 +203,25 @@ async def test_hydrate_idle_post_dropped_when_stale(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_hydrate_chat_from_redis(monkeypatch):
-    main.LOBBY_CHAT.clear()
+    _clear = lambda: [main.LOBBY_CHATS[lang].clear() for lang in main.LOBBY_CHAT_LANGS]
+    _clear()
     now = time.time()
-    messages = [
-        {"id": "a", "text": "one", "ts": now},
-        {"id": "b", "text": "two", "ts": now + 1},
-    ]
+    messages = {
+        "ja": [{"id": "a", "text": "one", "lang": "ja", "ts": now}],
+        "en": [{"id": "b", "text": "two", "lang": "en", "ts": now + 1}],
+    }
 
     monkeypatch.setattr(post_redis, "is_configured", lambda: True)
     monkeypatch.setattr(
         post_redis,
-        "load_chat_messages",
-        lambda **kwargs: list(messages),
+        "load_all_chat_messages",
+        lambda **kwargs: {k: list(v) for k, v in messages.items()},
     )
 
     await main._hydrate_chat_from_redis()
     snap = main.lobby_chat_snapshot()
-    assert len(snap) == 2
-    assert snap[0]["id"] == "a"
-    main.LOBBY_CHAT.clear()
+    assert len(snap["ja"]) == 1
+    assert snap["ja"][0]["id"] == "a"
+    assert len(snap["en"]) == 1
+    assert snap["en"][0]["id"] == "b"
+    _clear()

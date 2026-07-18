@@ -102,6 +102,7 @@
     "lobby.colCap": "Cap",
     "lobby.colStream": "Stream",
     "lobby.colComment": "Comment",
+    "lobby.colPing": "Ping",
     "lobby.colAddr": "Addr",
     "lobby.emptyRanked": "現在ランクマ募集はありません",
     "lobby.emptyCasual": "現在カジュアル募集はありません",
@@ -115,12 +116,16 @@
     "lobby.rankDescLuna": "上級者以上",
 
     "lobby.chatTitle": "ロビーチャット(感想戦などにもどうぞ)",
+    "lobby.chatTabJa": "JP",
+    "lobby.chatTabEn": "EN",
     "lobby.chatPlaceholder": "メッセージを入力 (@でメンション)",
     "lobby.chatSend": "送信",
     "lobby.chatHide": "ロビーチャットを隠す",
     "lobby.chatShow": "ロビーチャットを表示",
     "lobby.chatEmpty": "まだメッセージはありません",
     "lobby.chatCooldown": "しばらく待ってから送ってください",
+    "lobby.pingUnavailable": "—",
+    "lobby.pingClientRequired": "asobby クライアント起動中のみ表示されます",
 
     // stats
     "stats.pageTitle": "asobby - 戦績",
@@ -457,6 +462,7 @@
     "lobby.colCap": "Cap",
     "lobby.colStream": "Stream",
     "lobby.colComment": "Comment",
+    "lobby.colPing": "Ping",
     "lobby.colAddr": "Addr",
     "lobby.emptyRanked": "No ranked listings right now",
     "lobby.emptyCasual": "No casual listings right now",
@@ -470,12 +476,16 @@
     "lobby.rankDescLuna": "Advanced and up",
 
     "lobby.chatTitle": "Lobby chat (post-match chat welcome)",
+    "lobby.chatTabJa": "JP",
+    "lobby.chatTabEn": "EN",
     "lobby.chatPlaceholder": "Type a message (@ to mention)",
     "lobby.chatSend": "Send",
     "lobby.chatHide": "Hide lobby chat",
     "lobby.chatShow": "Show lobby chat",
     "lobby.chatEmpty": "No messages yet",
     "lobby.chatCooldown": "Please wait before sending another message",
+    "lobby.pingUnavailable": "—",
+    "lobby.pingClientRequired": "Shown only while the asobby client is running",
 
     // stats
     "stats.pageTitle": "asobby - Stats",

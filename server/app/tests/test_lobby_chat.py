@@ -50,16 +50,21 @@ async def create_user(
         await s.commit()
 
 
+def _clear_lobby_chats() -> None:
+    for lang in main.LOBBY_CHAT_LANGS:
+        main.LOBBY_CHATS[lang].clear()
+
+
 @pytest.fixture(autouse=True)
 def clean_state(tmp_path):
     db_path = tmp_path / "asobby_lobby_chat_test.db"
     url = f"sqlite+aiosqlite:///{db_path}"
     os.environ["DATABASE_URL"] = url
     main.DATABASE_URL = url
-    main.LOBBY_CHAT.clear()
+    _clear_lobby_chats()
     main.LOBBY_CHAT_LAST_SENT.clear()
     yield
-    main.LOBBY_CHAT.clear()
+    _clear_lobby_chats()
     main.LOBBY_CHAT_LAST_SENT.clear()
 
 
@@ -92,8 +97,10 @@ async def test_chat_post_and_snapshot():
         assert "ts" in msg
 
         snap = main.lobby_chat_snapshot()
-        assert len(snap) == 1
-        assert snap[0]["id"] == msg["id"]
+        assert len(snap["ja"]) == 1
+        assert len(snap["en"]) == 0
+        assert snap["ja"][0]["id"] == msg["id"]
+        assert msg["lang"] == "ja"
 
 
 @pytest.mark.asyncio
@@ -171,9 +178,27 @@ async def test_chat_max_messages_ring_buffer():
             if i == 0:
                 first_id = res.json()["message"]["id"]
         snap = main.lobby_chat_snapshot()
-        assert len(snap) == main.LOBBY_CHAT_MAX_MESSAGES
-        ids = [m["id"] for m in snap]
+        assert len(snap["ja"]) == main.LOBBY_CHAT_MAX_MESSAGES
+        ids = [m["id"] for m in snap["ja"]]
         assert first_id not in ids
+
+
+@pytest.mark.asyncio
+async def test_chat_en_channel():
+    async with app_client() as client:
+        await create_user("u1", name="Alice")
+        token = bearer_token("u1", "Alice")
+        res = await client.post(
+            "/lobby/chat",
+            json={"text": "hello en", "lang": "en"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+        msg = res.json()["message"]
+        assert msg["lang"] == "en"
+        snap = main.lobby_chat_snapshot()
+        assert len(snap["en"]) == 1
+        assert len(snap["ja"]) == 0
 
 
 @pytest.mark.asyncio
