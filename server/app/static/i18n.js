@@ -278,7 +278,11 @@
       "asobby の利用（募集の自動投稿・Web ロビー・戦績・チャットなど）には、トレイメニューから Discord ログインが必要です。",
     "guide.sectionRanked": "ランクマの仕様",
     "guide.rankedIntro":
-      "ランクマ募集で、同じランク帯の相手（または「格上に挑戦」ON 時は 1 段上位）と Discord ログイン済みの相手が対戦すると、戦績がランクマとして記録されます。",
+      "ランクマ募集で、同じランク帯の相手（または「格上に挑戦」ON 時は 1 段上位）と Discord ログイン済みの相手が対戦すると、条件を満たす対戦はランクマとして記録されます。",
+    "guide.rankedSessionLimit":
+      "同じ相手との連続対戦では、ランクマとして数えられるのは最初の 3 戦までです。4 戦目以降はカジュアル扱いになります（募集タイプがランクマのままでも）。",
+    "guide.rankedGuestReset":
+      "相手が切断したり、別の人が入ったりするとセッションが切り替わり、対戦カウントがリセットされます。一度 3 戦終えた相手でも、間に別の人が入ったあとなら、再びランクマ 3 戦が可能です。",
     "guide.rankedEval":
       "昇格・降格は、現在のランク帯における直近 30 戦の勝率で判定します（30 戦揃ってから判定されます）。",
     "guide.rank.colRank": "ランク",
@@ -629,7 +633,11 @@
       "Discord login from the tray menu is required to use asobby (auto-posting, web lobby, stats, chat, and more).",
     "guide.sectionRanked": "Ranked rules",
     "guide.rankedIntro":
-      "On ranked posts, matches count as ranked when your opponent is logged in on the client and in the same rank band (or exactly one band above if Challenge upper rank is on).",
+      "On ranked posts, qualifying matches against a logged-in opponent in the same band (or one band above with Challenge upper rank) are recorded as ranked.",
+    "guide.rankedSessionLimit":
+      "With the same opponent in one session, only the first 3 matches count as ranked. From the 4th onward they are casual, even if your post stays ranked.",
+    "guide.rankedGuestReset":
+      "When your opponent disconnects or someone else connects, the session resets and the match counter starts over. After another guest sits in between, you can play up to 3 ranked matches again with the same person.",
     "guide.rankedEval":
       "Promotion and demotion use your win rate over the latest 30 ranked matches in your current band (evaluated once all 30 are recorded).",
     "guide.rank.colRank": "Rank",
