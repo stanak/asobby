@@ -62,6 +62,11 @@
     font-family: inherit;
   }
   header nav .lang-btn:hover { border-color: var(--accent); }
+  #online-count {
+    font-size: 13px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
   main {
     padding: 8px 20px 48px;
     max-width: 820px;
@@ -182,6 +187,7 @@
     <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
     <button type="button" id="lang-toggle" class="lang-btn"></button>
   </nav>
+  <span id="online-count" hidden aria-live="polite"></span>
 </header>
 
 <main>
@@ -264,6 +270,18 @@
   </section>
 
   <section class="panel">
+    <h2 data-i18n="guide.sectionHighPing">高 Ping 警告</h2>
+    <p data-i18n="guide.highPingIntro">ロビー閲覧者がホストへ接続する際の Ping を監視し、しきい値を超えたときにホスト PC へトースト通知します。対戦前に回線状況を把握するための機能です。</p>
+    <ul>
+      <li data-i18n="guide.highPingWhen">ゲストが接続したあとだけ判定します。募集中（ゲスト未接続）の間は警告しません。</li>
+      <li data-i18n="guide.highPingGuest">警告を送れるのは、接続中のゲスト本人（Discord ログイン済み）だけです。他の閲覧者の Ping では通知されません。</li>
+      <li data-i18n="guide.highPingThreshold">デフォルトのしきい値は通常 60ms、Giuroll 使用ホストは 100ms です。Giuroll ホストかどうかで自動的に使い分けます。</li>
+    </ul>
+    <p data-i18n="guide.highPingSettings">ON/OFF としきい値 (ms) は「投稿設定...」で変更できます。トレイメニューの「高 Ping 警告」チェックでも ON/OFF を切り替えられます（しきい値は投稿設定側）。</p>
+    <p data-i18n="guide.highPingLobby">Web ロビーの Ping 列は、閲覧者 PC で asobby クライアントが起動しているときだけ表示されます。緑 (良好) / 黄 (しきい値の 75% 以上) / 赤 (しきい値以上) で色分けされます。</p>
+  </section>
+
+  <section class="panel">
     <h2 data-i18n="guide.sectionIcon">トレイアイコンの色</h2>
     <ul class="icon-list">
       <li>
@@ -291,7 +309,11 @@
     </div>
     <div class="menu-item">
       <h3 data-i18n="guide.menu.settings.name">投稿設定...</h3>
-      <p data-i18n="guide.menu.settings.desc">募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、ランクマ時の「格上に挑戦」を設定します。OK でサーバーへ反映されます。</p>
+      <p data-i18n="guide.menu.settings.desc">募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、ランクマ時の「格上に挑戦」、高 Ping 警告 (ON/OFF・通常 60ms / Giuroll 100ms) を設定します。OK でサーバーへ反映されます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.pingWarn.name">高 Ping 警告</h3>
+      <p data-i18n="guide.menu.pingWarn.desc">高 Ping 警告の ON/OFF を切り替えます。しきい値 (ms) の変更は「投稿設定...」から行います。</p>
     </div>
     <div class="menu-item">
       <h3 data-i18n="guide.menu.stats.name">戦績を見る...</h3>
@@ -366,13 +388,14 @@
       <li data-i18n="guide.notifyLogin">ログインが必要 — ランクマ募集や戦績同期の前に Discord ログインしてください。</li>
       <li data-i18n="guide.notifyCasual">カジュアル扱い — ランクマ募集でも、相手が未ログインまたはランク帯不一致（格上挑戦 OFF 時）だと戦績はカジュアルになります。</li>
       <li data-i18n="guide.notifyUpdate">更新あり — 新しい exe が公開されたとき。トレイからダウンロードできます。</li>
-      <li data-i18n="guide.notifyHighPing">Ping 警告 — ロビー閲覧者の Ping が設定値以上 (通常 60ms / Giuroll 100ms) のとき、ホストへ通知します。ロビーの Ping 列は緑 (良好) / 黄 (しきい値付近) / 赤 (しきい値超) で表示されます。しきい値は「投稿設定...」で変更できます。</li>
+      <li data-i18n="guide.notifyHighPing">高 Ping 警告 — 接続中ゲストの Ping がしきい値以上のとき、ホスト PC にトースト通知します（例: 「○○ さんからの Ping が 80ms です (警告: 60ms 以上)」）。</li>
     </ul>
   </section>
 </main>
 <script>
 applyDocumentI18n();
 initLangToggle();
+initOnlinePresence();
 </script>
 </body>
 </html>

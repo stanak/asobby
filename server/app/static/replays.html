@@ -71,6 +71,11 @@
   header nav .lang-btn:hover {
     border-color: var(--accent);
   }
+  #online-count {
+    font-size: 13px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
   main { padding: 8px 20px 32px; max-width: 1400px; }
   .panel {
     background: var(--panel);
@@ -233,6 +238,7 @@
     <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
     <button type="button" id="lang-toggle" class="lang-btn"></button>
   </nav>
+  <span id="online-count" hidden aria-live="polite"></span>
 </header>
 
 <main>
@@ -615,6 +621,7 @@ attachPlayerSuggest({
 
 applyDocumentI18n();
 initLangToggle();
+initOnlinePresence();
 playerEl.placeholder = t("replays.playerPlaceholder");
 fetchResults(true);
 </script>

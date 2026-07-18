@@ -28,7 +28,14 @@ from urllib.parse import quote, urlencode, urlparse
 import httpx
 import trueskill
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -56,6 +63,12 @@ POST_BATTLE_TTL_SEC = 600
 CLEANUP_INTERVAL_SEC = 5
 GUEST_PROBE_INTERVAL_SEC = 10
 SSE_PING_INTERVAL_SEC = 15
+
+VISITOR_COOKIE = "asobby_visitor"
+PRESENCE_TTL_SEC = 90.0
+_VISITOR_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{8,64}$")
+PRESENCE_LOCAL: dict[str, float] = {}
+_PRESENCE_LOCK = threading.Lock()
 
 # ランクマッチ: 昇降格判定に必要な最低試合数
 RANKED_EVAL_MIN_GAMES = 30
@@ -1869,6 +1882,80 @@ async def stats_me(request: Request) -> dict[str, Any]:
             "char_ratings": char_ratings,
         },
     }
+
+
+def _prune_presence_local(now: float) -> None:
+    cutoff = now - PRESENCE_TTL_SEC
+    stale = [k for k, ts in PRESENCE_LOCAL.items() if ts < cutoff]
+    for k in stale:
+        del PRESENCE_LOCAL[k]
+
+
+def _valid_visitor_id(raw: str | None) -> str | None:
+    raw = (raw or "").strip()
+    if _VISITOR_ID_RE.fullmatch(raw):
+        return raw
+    return None
+
+
+def _new_visitor_id() -> str:
+    return secrets.token_urlsafe(16)
+
+
+def _resolve_visitor_id(request: Request) -> tuple[str, bool]:
+    existing = _valid_visitor_id(request.cookies.get(VISITOR_COOKIE))
+    if existing:
+        return existing, False
+    return _new_visitor_id(), True
+
+
+def _set_visitor_cookie(response: Response, visitor_id: str) -> None:
+    response.set_cookie(
+        key=VISITOR_COOKIE,
+        value=visitor_id,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=86400 * 30,
+        path="/",
+    )
+
+
+async def _presence_touch(visitor_id: str) -> int:
+    now = time.time()
+    if post_redis.is_configured():
+        return await asyncio.to_thread(post_redis.presence_touch, visitor_id, now=now)
+    with _PRESENCE_LOCK:
+        PRESENCE_LOCAL[visitor_id] = now
+        _prune_presence_local(now)
+        return len(PRESENCE_LOCAL)
+
+
+async def _presence_count() -> int:
+    now = time.time()
+    if post_redis.is_configured():
+        return await asyncio.to_thread(post_redis.presence_count, now=now)
+    with _PRESENCE_LOCK:
+        _prune_presence_local(now)
+        return len(PRESENCE_LOCAL)
+
+
+@app.post("/presence/heartbeat")
+async def presence_heartbeat(request: Request) -> JSONResponse:
+    """ページ閲覧中の訪問者を記録する (cookie + TTL)。"""
+    visitor_id, set_cookie = _resolve_visitor_id(request)
+    count = await _presence_touch(visitor_id)
+    resp = JSONResponse({"ok": True, "count": count})
+    if set_cookie:
+        _set_visitor_cookie(resp, visitor_id)
+    return resp
+
+
+@app.get("/presence/count")
+async def presence_count_endpoint() -> dict[str, Any]:
+    """TTL 内に asobby.com を閲覧中の人数。"""
+    count = await _presence_count()
+    return {"ok": True, "count": count}
 
 
 @app.get("/")

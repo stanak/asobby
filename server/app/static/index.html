@@ -72,9 +72,10 @@
   header nav .lang-btn:hover {
     border-color: var(--accent);
   }
-  #status {
+  #online-count {
     font-size: 13px;
     color: var(--muted);
+    white-space: nowrap;
   }
   #auth-info {
     font-size: 13px;
@@ -88,8 +89,6 @@
     text-decoration: none;
   }
   #auth-info a:hover { text-decoration: underline; }
-  #status.connected::before { content: "●"; color: var(--ok); margin-right: 6px; }
-  #status.disconnected::before { content: "●"; color: var(--err); margin-right: 6px; }
   .section-title {
     padding: 12px 20px 6px;
     font-size: 14px;
@@ -150,9 +149,17 @@
   button.copy:hover { border-color: var(--accent); }
   button.copy.copied { color: var(--ok); border-color: var(--ok); }
   td.addr-cell {
-    display: flex;
+    vertical-align: middle;
+  }
+  td.addr-cell .addr-inner {
+    display: inline-flex;
     align-items: center;
     gap: 6px;
+    max-width: 100%;
+  }
+  td.addr-cell button.copy {
+    font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+    white-space: nowrap;
   }
   .country-flag {
     cursor: help;
@@ -609,8 +616,8 @@
     <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
     <button type="button" id="lang-toggle" class="lang-btn"></button>
   </nav>
+  <span id="online-count" hidden aria-live="polite"></span>
   <span id="auth-info" hidden></span>
-  <span id="status" class="disconnected" hidden data-i18n="common.connecting">接続中...</span>
 </header>
 
 <div id="rank-choice-banner" hidden>
@@ -820,7 +827,6 @@ const casualCountEl = document.getElementById("casual-count");
 const loginGateEl = document.getElementById("login-gate");
 const lobbyBodyEl = document.getElementById("lobby-body");
 const rankedSectionEl = document.getElementById("ranked-section");
-const statusEl = document.getElementById("status");
 const authInfoEl = document.getElementById("auth-info");
 const rankChoiceBannerEl = document.getElementById("rank-choice-banner");
 const rankChoiceBtnsEl = document.getElementById("rank-choice-btns");
@@ -1041,6 +1047,7 @@ function buildPingCell(p) {
   }
   if (cached === null) {
     cell.textContent = t("lobby.pingUnavailable");
+    cell.title = t("lobby.pingProbeFailed");
     return cell;
   }
   const threshold = pingWarnThresholdForPost(p);
@@ -1063,7 +1070,12 @@ async function checkClientPingApi() {
 }
 
 async function refreshHostPings() {
-  if (!loggedIn || !clientPingAvailable || pingInFlight) return;
+  if (!loggedIn || pingInFlight) return;
+  await checkClientPingApi();
+  if (!clientPingAvailable) {
+    render();
+    return;
+  }
   const targets = [];
   for (const p of posts.values()) {
     const parsed = parsePostAddr(p.addr);
@@ -1108,7 +1120,7 @@ async function refreshHostPings() {
     }
     render();
   } catch (_) {
-    clientPingAvailable = false;
+    await checkClientPingApi();
     render();
   } finally {
     pingInFlight = false;
@@ -1202,9 +1214,11 @@ function buildRow(p) {
 
   const addr = document.createElement("td");
   addr.className = "addr-cell";
+  const addrInner = document.createElement("div");
+  addrInner.className = "addr-inner";
   if (p.country_code) {
     const flag = countryFlagElement(p.country_code);
-    if (flag) addr.appendChild(flag);
+    if (flag) addrInner.appendChild(flag);
   }
   const btn = document.createElement("button");
   btn.className = "copy";
@@ -1229,7 +1243,8 @@ function buildRow(p) {
       btn.textContent = orig;
     }, 1200);
   });
-  addr.appendChild(btn);
+  addrInner.appendChild(btn);
+  addr.appendChild(addrInner);
   tr.appendChild(addr);
 
   tr.appendChild(buildMessageCell(p));
@@ -1362,7 +1377,6 @@ function showLoggedIn(user) {
       rank: RANK_LABEL[myRank] || myRank,
     })
   ));
-  statusEl.hidden = false;
   lobbyChatRootEl.hidden = false;
   initLobbyChat();
   checkClientPingApi().then(() => {
@@ -1379,7 +1393,6 @@ function showLoginRequired() {
   myRank = null;
   rankChoiceBannerEl.hidden = true;
   authInfoEl.hidden = true;
-  statusEl.hidden = true;
   lobbyChatRootEl.hidden = true;
   render();
 }
@@ -1707,11 +1720,6 @@ async function initAuth() {
 function connect() {
   const es = new EventSource("/sse/posts");
 
-  es.addEventListener("open", () => {
-    statusEl.className = "connected";
-    statusEl.textContent = t("common.realtimeUpdating");
-  });
-
   es.addEventListener("snapshot", (e) => {
     posts.clear();
     for (const p of JSON.parse(e.data)) posts.set(p.id, p);
@@ -1760,15 +1768,11 @@ function connect() {
   es.addEventListener("chat_message", (e) => {
     handleIncomingChatMessage(JSON.parse(e.data));
   });
-
-  es.addEventListener("error", () => {
-    statusEl.className = "disconnected";
-    statusEl.textContent = t("common.reconnecting");
-  });
 }
 
 applyDocumentI18n();
 initLangToggle();
+initOnlinePresence();
 initAuth();
 
 document.addEventListener("click", () => {

@@ -279,3 +279,30 @@ def replace_chat_messages(
         json.dumps(m, separators=(",", ":"), ensure_ascii=False) for m in kept
     ]
     redis.rpush(key, *payloads)
+
+
+PRESENCE_ZSET_KEY = "asobby:presence"
+PRESENCE_TTL_SEC = 90
+
+
+def presence_touch(visitor_id: str, *, now: float | None = None) -> int:
+    """訪問者の last_seen を更新し、TTL 内の人数を返す。"""
+    if not is_configured():
+        raise RuntimeError("redis not configured")
+    now = now if now is not None else time.time()
+    redis = _client()
+    redis.zadd(PRESENCE_ZSET_KEY, {visitor_id: now})
+    redis.zremrangebyscore(PRESENCE_ZSET_KEY, 0, now - PRESENCE_TTL_SEC)
+    card = redis.zcard(PRESENCE_ZSET_KEY)
+    return int(card or 0)
+
+
+def presence_count(*, now: float | None = None) -> int:
+    """TTL 内の訪問者数を返す (期限切れエントリは削除)。"""
+    if not is_configured():
+        raise RuntimeError("redis not configured")
+    now = now if now is not None else time.time()
+    redis = _client()
+    redis.zremrangebyscore(PRESENCE_ZSET_KEY, 0, now - PRESENCE_TTL_SEC)
+    card = redis.zcard(PRESENCE_ZSET_KEY)
+    return int(card or 0)

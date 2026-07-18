@@ -68,6 +68,8 @@
     "common.connecting": "接続中...",
     "common.reconnecting": "再接続中...",
     "common.realtimeUpdating": "リアルタイム更新中",
+    "common.onlineCount": "オンライン {n}人",
+    "common.onlineCountTitle": "現在 asobby.com を閲覧中の人数",
     "common.discordLoginRequired": "Discord ログインが必要です",
     "common.loginGateClientHint":
       "asobby クライアント（トレイメニュー「Discord でログイン」）からログインしてください。",
@@ -125,7 +127,10 @@
     "lobby.chatEmpty": "まだメッセージはありません",
     "lobby.chatCooldown": "しばらく待ってから送ってください",
     "lobby.pingUnavailable": "—",
-    "lobby.pingClientRequired": "asobby クライアント起動中のみ表示されます",
+    "lobby.pingClientRequired":
+      "閲覧者 PC で asobby クライアントを起動すると、あなたから各ホストへの Ping を測定できます",
+    "lobby.pingProbeFailed":
+      "あなたの PC からホストへ UDP で到達できません (Autopunch / ポート開放 / 天則ホスト待機を確認)",
     "lobby.pingThresholdHint": "警告しきい値: {threshold}ms",
 
     // stats
@@ -320,6 +325,19 @@
     "guide.statsFilterOppProfile": "相手プロファイル別 — 相手のプロファイル名でフィルタ",
     "guide.statsFilterNote":
       "フィルタは対戦履歴・集計の両方に反映されます。チップの × または「クリア」で解除できます。",
+    "guide.sectionHighPing": "高 Ping 警告",
+    "guide.highPingIntro":
+      "ロビー閲覧者がホストへ接続する際の Ping を監視し、しきい値を超えたときにホスト PC へトースト通知します。対戦前に回線状況を把握するための機能です。",
+    "guide.highPingWhen":
+      "ゲストが接続したあとだけ判定します。募集中（ゲスト未接続）の間は警告しません。",
+    "guide.highPingGuest":
+      "警告を送れるのは、接続中のゲスト本人（Discord ログイン済み）だけです。他の閲覧者の Ping では通知されません。",
+    "guide.highPingThreshold":
+      "デフォルトのしきい値は通常 60ms、Giuroll 使用ホストは 100ms です。Giuroll ホストかどうかで自動的に使い分けます。",
+    "guide.highPingSettings":
+      "ON/OFF としきい値 (ms) は「投稿設定...」で変更できます。トレイメニューの「高 Ping 警告」チェックでも ON/OFF を切り替えられます（しきい値は投稿設定側）。",
+    "guide.highPingLobby":
+      "Web ロビーの Ping 列は、閲覧者 PC で asobby クライアントが起動しているときだけ表示されます。緑 (良好) / 黄 (しきい値の 75% 以上) / 赤 (しきい値以上) で色分けされます。",
     "guide.sectionIcon": "トレイアイコンの色",
     "guide.iconIdle": "灰色 — 待機中。天則でホストを立てると自動投稿を開始します。",
     "guide.iconRecruit": "緑 — 募集中。ロビーに掲載中です。",
@@ -332,6 +350,9 @@
     "guide.menu.settings.name": "投稿設定...",
     "guide.menu.settings.desc":
       "募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、ランクマ時の「格上に挑戦」、高 Ping 警告 (ON/OFF・通常 60ms / Giuroll 100ms) を設定します。OK でサーバーへ反映されます。",
+    "guide.menu.pingWarn.name": "高 Ping 警告",
+    "guide.menu.pingWarn.desc":
+      "高 Ping 警告の ON/OFF を切り替えます。しきい値 (ms) の変更は「投稿設定...」から行います。",
     "guide.menu.stats.name": "戦績を見る...",
     "guide.menu.stats.desc":
       "PC 内に保存した対戦記録をウィンドウで表示します。フィルタやソートで自分の戦績を確認できます。",
@@ -390,7 +411,7 @@
     "guide.notifyUpdate":
       "更新あり — 新しい exe が公開されたとき。トレイからダウンロードできます。",
     "guide.notifyHighPing":
-      "Ping 警告 — ゲストが接続したあと、接続中ゲスト (Discord ログイン済み) の Ping が設定値以上 (通常 60ms / Giuroll 100ms) のときだけホストへ通知します。「投稿設定...」またはトレイの「高 Ping 警告」で ON/OFF・しきい値を変更できます。ロビーの Ping 列は緑 / 黄 / 赤で表示されます。",
+      "高 Ping 警告 — 接続中ゲストの Ping がしきい値以上のとき、ホスト PC にトースト通知します（例: 「○○ さんからの Ping が 80ms です (警告: 60ms 以上)」）。",
   };
 
   const en = {
@@ -431,6 +452,8 @@
     "common.connecting": "Connecting…",
     "common.reconnecting": "Reconnecting…",
     "common.realtimeUpdating": "Live updates",
+    "common.onlineCount": "{n} online",
+    "common.onlineCountTitle": "People currently viewing asobby.com",
     "common.discordLoginRequired": "Discord login required",
     "common.loginGateClientHint":
       'Log in from the asobby client (tray menu "Log in with Discord").',
@@ -488,7 +511,10 @@
     "lobby.chatEmpty": "No messages yet",
     "lobby.chatCooldown": "Please wait before sending another message",
     "lobby.pingUnavailable": "—",
-    "lobby.pingClientRequired": "Shown only while the asobby client is running",
+    "lobby.pingClientRequired":
+      "Run the asobby client on your PC to measure your ping to each host",
+    "lobby.pingProbeFailed":
+      "UDP probe from your PC failed (check Autopunch, port forwarding, or host waiting screen)",
     "lobby.pingThresholdHint": "Warning threshold: {threshold}ms",
 
     // stats
@@ -683,6 +709,19 @@
     "guide.statsFilterOppProfile": "Opponent profile — filter by opponent profile name",
     "guide.statsFilterNote":
       "Filters apply to both history and summaries. Clear them with the chip × or Clear button.",
+    "guide.sectionHighPing": "High ping warnings",
+    "guide.highPingIntro":
+      "Monitors lobby viewers’ ping to your host and shows a toast on your PC when it exceeds your threshold—useful before starting a match.",
+    "guide.highPingWhen":
+      "Warnings run only after a guest connects. No alerts while you are still recruiting with no guest.",
+    "guide.highPingGuest":
+      "Only the connected guest (Discord login required) can trigger a warning. Other viewers’ ping does not notify you.",
+    "guide.highPingThreshold":
+      "Default thresholds are 60ms normally and 100ms for Giuroll hosts. The client picks the Giuroll threshold automatically when Giuroll is in use.",
+    "guide.highPingSettings":
+      "Turn warnings on/off and set thresholds (ms) in Post settings…. The tray item “High ping warnings” toggles on/off only (thresholds stay in Post settings).",
+    "guide.highPingLobby":
+      "The lobby Ping column appears only while the asobby client is running on the viewer’s PC. Colors: green (good), yellow (≥75% of threshold), red (≥ threshold).",
     "guide.sectionIcon": "Tray icon colors",
     "guide.iconIdle": "Gray — idle. Start a host in Hisoutensoku to begin auto-posting.",
     "guide.iconRecruit": "Green — recruiting. Your post is live on the lobby.",
@@ -695,6 +734,9 @@
     "guide.menu.settings.name": "Post settings...",
     "guide.menu.settings.desc":
       "Post mode (casual / ranked), comment presets, stream URL presets, “Challenge upper rank” for ranked mode, and Ping warning thresholds (default 60ms / Giuroll 100ms). OK applies to the server.",
+    "guide.menu.pingWarn.name": "High ping warnings",
+    "guide.menu.pingWarn.desc":
+      "Toggle high ping warnings on or off. Change thresholds (ms) in Post settings….",
     "guide.menu.stats.name": "View stats...",
     "guide.menu.stats.desc":
       "Opens a window with match history stored on this PC. Filter and sort your records.",
@@ -753,7 +795,7 @@
     "guide.notifyUpdate":
       "Update available — a new exe is published; download it from the tray menu.",
     "guide.notifyHighPing":
-      "High ping warning — after a guest connects, only that logged-in guest can trigger a host toast when their ping is at or above your threshold (default 60ms / Giuroll 100ms). Toggle and thresholds are in Post settings… or the tray “High ping warnings” item. The Ping column stays green / yellow / red.",
+      "High ping warning — toast on your PC when the connected guest’s ping is at or above your threshold (e.g. “High ping from Alice: 80ms (warn threshold: 60ms+)”).",
   };
 
   const dicts = { ja, en };
@@ -809,6 +851,57 @@
     updateLabel();
     btn.addEventListener("click", () => {
       setLang(lang === "ja" ? "en" : "ja");
+    });
+  }
+
+  const PRESENCE_HEARTBEAT_MS = 45000;
+  const PRESENCE_COUNT_MS = 30000;
+
+  /** @param {number} n */
+  function renderOnlineCount(n) {
+    const el = document.getElementById("online-count");
+    if (!el) return;
+    el.textContent = t("common.onlineCount", { n });
+    el.title = t("common.onlineCountTitle");
+    el.hidden = false;
+  }
+
+  async function sendPresenceHeartbeat() {
+    try {
+      const res = await fetch("/presence/heartbeat", {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.ok && typeof data.count === "number") {
+        renderOnlineCount(data.count);
+      }
+    } catch (_) {}
+  }
+
+  async function refreshOnlineCount() {
+    try {
+      const res = await fetch("/presence/count");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.ok && typeof data.count === "number") {
+        renderOnlineCount(data.count);
+      }
+    } catch (_) {}
+  }
+
+  function initOnlinePresence() {
+    if (!document.getElementById("online-count")) return;
+    sendPresenceHeartbeat();
+    refreshOnlineCount();
+    window.setInterval(sendPresenceHeartbeat, PRESENCE_HEARTBEAT_MS);
+    window.setInterval(refreshOnlineCount, PRESENCE_COUNT_MS);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        sendPresenceHeartbeat();
+        refreshOnlineCount();
+      }
     });
   }
 
@@ -875,5 +968,6 @@
   window.setLang = setLang;
   window.applyDocumentI18n = applyDocumentI18n;
   window.initLangToggle = initLangToggle;
+  window.initOnlinePresence = initOnlinePresence;
   window.tError = tError;
 })();

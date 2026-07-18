@@ -107,9 +107,10 @@ def probe_rtt_ms(
     port: int,
     *,
     autopunch: bool = False,
-    timeout_sec: float = 0.35,
+    timeout_sec: float = 1.0,
+    attempts: int = 2,
 ) -> Optional[int]:
-    """ホストへ 1 回 echo を送り、有効応答までの RTT (ms) を返す。"""
+    """ホストへ echo を送り、有効応答までの RTT (ms) を返す。"""
     try:
         ipaddress.IPv4Address(host)
     except ValueError:
@@ -125,9 +126,13 @@ def probe_rtt_ms(
         probe_port = nat_port
 
     packet = soku_echo_packet()
-    started = time.monotonic()
-    reply = probe_host_once(host, probe_port, packet, timeout_sec=timeout_sec)
-    if reply is None or not is_valid_reply(reply):
-        return None
-    elapsed_ms = int((time.monotonic() - started) * 1000)
-    return max(elapsed_ms, 1)
+    tries = max(1, int(attempts))
+    for i in range(tries):
+        started = time.monotonic()
+        reply = probe_host_once(host, probe_port, packet, timeout_sec=timeout_sec)
+        if reply is not None and is_valid_reply(reply):
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            return max(elapsed_ms, 1)
+        if i + 1 < tries:
+            time.sleep(0.05)
+    return None

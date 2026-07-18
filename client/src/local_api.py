@@ -41,26 +41,28 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         return
 
+    def _write_cors_headers(self, origin: str) -> None:
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # https://asobby.com → 127.0.0.1 呼び出し (Chrome Private Network Access)
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Vary", "Origin")
+
     def _send_json(self, status: int, body: dict[str, Any]) -> None:
         payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
         origin = _cors_origin(self.headers.get("Origin"))
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Access-Control-Allow-Origin", origin)
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Vary", "Origin")
+        self._write_cors_headers(origin)
         self.end_headers()
         self.wfile.write(payload)
 
     def do_OPTIONS(self) -> None:
         origin = _cors_origin(self.headers.get("Origin"))
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", origin)
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Vary", "Origin")
+        self._write_cors_headers(origin)
         self.end_headers()
 
     def do_GET(self) -> None:
