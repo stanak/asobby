@@ -4,7 +4,7 @@ import asyncio
 import os
 import time
 import webbrowser
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, fields
 from pathlib import Path
 from typing import Dict, Optional, Literal, Any, Tuple
 from urllib.parse import parse_qsl, urlsplit
@@ -48,6 +48,8 @@ STATS_SYNC_BATCH = 500
 STATS_SYNC_DEFER_SEC = 8.0
 
 PENDING_REQUEST_TTL_SEC = 600  # 未返信リクエストの保持期限
+
+_POST_FIELD_NAMES = {f.name for f in fields(Post)}
 
 
 @dataclass
@@ -527,23 +529,26 @@ class Controller:
             my_ip = ""
 
         while not self._stop.is_set():
-            st: DetectionState = read_detection_state()
-            self._track_detect_error(st.detect_error)
-            self._log_detect_snapshot(st)
-            # 天則を検出したら soku path を自動設定する (未設定時のみ)
-            if st.alive and st.exe_path and not self.tool_mgr.path("soku"):
-                self.tool_mgr.set_path("soku", st.exe_path)
-                self.log_sink("info", f"Soku path auto-set: {st.exe_path}")
-            self.update_btn_labels("soku", st.alive)
-            self.update_btn_labels("autopunch", st.autopunch)
-            self.update_btn_labels("giuroll", st.giuroll)
-            act = self.on_detect(st, my_ip=my_ip)
-            if act:
-                await self._action_q.put(act)
-            if self._pending_local_match is not None:
-                payload = self._pending_local_match
-                self._pending_local_match = None
-                asyncio.create_task(self._record_local_match(payload))
+            try:
+                st: DetectionState = read_detection_state()
+                self._track_detect_error(st.detect_error)
+                self._log_detect_snapshot(st)
+                # 天則を検出したら soku path を自動設定する (未設定時のみ)
+                if st.alive and st.exe_path and not self.tool_mgr.path("soku"):
+                    self.tool_mgr.set_path("soku", st.exe_path)
+                    self.log_sink("info", f"Soku path auto-set: {st.exe_path}")
+                self.update_btn_labels("soku", st.alive)
+                self.update_btn_labels("autopunch", st.autopunch)
+                self.update_btn_labels("giuroll", st.giuroll)
+                act = self.on_detect(st, my_ip=my_ip)
+                if act:
+                    await self._action_q.put(act)
+                if self._pending_local_match is not None:
+                    payload = self._pending_local_match
+                    self._pending_local_match = None
+                    asyncio.create_task(self._record_local_match(payload))
+            except Exception as e:
+                self.log_sink("error", f"Detector loop error: {e}")
             await asyncio.sleep(DETECT_INTERVAL_SEC)
 
     async def api_loop(self) -> None:
@@ -1508,7 +1513,10 @@ class Controller:
     # external updates
     # -----------------
     def update_my_post(self, **kwargs) -> None:
-        self.my_post = replace(self.my_post, **kwargs)
+        filtered = {k: v for k, v in kwargs.items() if k in _POST_FIELD_NAMES}
+        if not filtered:
+            return
+        self.my_post = replace(self.my_post, **filtered)
         self.my_post_sink(self.my_post)
 
     def update_btn_labels(self, tool_name: str, is_active: bool) -> None:
