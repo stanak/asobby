@@ -79,6 +79,7 @@ class Controller:
         self.request_sink = app.emit_request
         self.my_post_sink = app.emit_my_post
         self.btn_labels_sink = app.emit_btn_labels
+        self.pause_ui_sink = app.emit_pause_state_changed
 
         self.config_mgr = ConfigManager()
         bind_locale(
@@ -308,12 +309,14 @@ class Controller:
         label = self._pause_duration_label(seconds)
         self.log_sink("info", f"Auto detect paused for {label}")
         self.notify_sink(t("notify.pause", label=label))
+        self.pause_ui_sink()
 
     def resume_auto_detect(self) -> None:
         if self._detect_pause_until:
             self._detect_pause_until = 0.0
             self.log_sink("info", "Auto detect resumed manually")
             self.notify_sink(t("notify.pause_resumed"))
+            self.pause_ui_sink()
 
     def _track_detect_error(self, err: str) -> None:
         """検知異常の遷移をログ・通知し、トレイ表示を更新する。"""
@@ -368,6 +371,19 @@ class Controller:
         """残り停止時間 (分、切り上げ)。停止していなければ 0。"""
         rest = self._detect_pause_until - time.time()
         return max(0, int(rest // 60) + (1 if rest % 60 > 0 else 0)) if rest > 0 else 0
+
+    def detect_pause_remaining_label(self) -> str:
+        """UI 用の残り時間文字列 (分・時間単位、切り上げ)。"""
+        minutes = self.detect_pause_remaining_min()
+        if minutes <= 0:
+            return t("pause.remaining_m", min=0)
+        if minutes >= 60:
+            hours = minutes // 60
+            rem_min = minutes % 60
+            if rem_min:
+                return t("pause.remaining_hm", hours=hours, min=rem_min)
+            return t("pause.remaining_h", hours=hours)
+        return t("pause.remaining_m", min=minutes)
 
     def _stable_key(self, key: str, need: int, *, seen: bool) -> bool:
         if seen:
@@ -702,6 +718,7 @@ class Controller:
             self._detect_pause_until = 0.0
             self.log_sink("info", "Auto detect pause expired")
             self.notify_sink(t("notify.pause_resumed"))
+            self.pause_ui_sink()
 
         # -----------------
         # process dead

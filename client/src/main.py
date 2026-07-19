@@ -70,6 +70,7 @@ class TrayApp:
             "recruit": make_icon_image(COLOR_RECRUIT),
             "battle": make_icon_image(COLOR_BATTLE),
         }
+        self._pause_tick_after_id: str | None = None
 
     # -----------------
     # Controller sinks
@@ -108,6 +109,9 @@ class TrayApp:
     def emit_my_post(self, post: Post) -> None:
         self.post = post
         self._refresh_icon()
+
+    def emit_pause_state_changed(self) -> None:
+        self._on_tk(self._schedule_pause_ui_tick)
 
     def emit_btn_labels(self, d: dict) -> None:
         if self.icon:
@@ -148,8 +152,8 @@ class TrayApp:
         if self.controller.detect_error == "access_denied":
             return t("tray.detect_denied")
         if self.controller.is_detect_paused():
-            rest = self.controller.detect_pause_remaining_min()
-            return t("tray.detect_paused", min=rest)
+            remaining = self.controller.detect_pause_remaining_label()
+            return t("tray.detect_paused", remaining=remaining)
         if not self.post.id:
             return t("tray.idle")
         mode = self._post_type_label()
@@ -173,6 +177,28 @@ class TrayApp:
         self.icon.icon = self._icons[key]
         self.icon.title = f"asobby v{__version__} - {self._status_text()}"
         self.icon.update_menu()
+
+    def _cancel_pause_ui_tick(self) -> None:
+        if self.tk_root is None or self._pause_tick_after_id is None:
+            return
+        try:
+            self.tk_root.after_cancel(self._pause_tick_after_id)
+        except ValueError:
+            pass
+        self._pause_tick_after_id = None
+
+    def _schedule_pause_ui_tick(self) -> None:
+        """一時停止中はトレイ表示を定期的に更新して残り時間をカウントダウンする。"""
+        self._cancel_pause_ui_tick()
+        if not self.controller.is_detect_paused():
+            self._refresh_icon()
+            return
+        self._refresh_icon()
+        if self.tk_root is not None:
+            self._pause_tick_after_id = self.tk_root.after(
+                30_000,
+                self._schedule_pause_ui_tick,
+            )
 
     # -----------------
     # menu actions
@@ -422,19 +448,21 @@ class TrayApp:
         def make_pause(seconds: int):
             def act(icon, item):
                 self.controller.pause_auto_detect(seconds)
-                if self.icon:
-                    self.icon.update_menu()
             return act
 
         def resume(icon, item):
             self.controller.resume_auto_detect()
-            if self.icon:
-                self.icon.update_menu()
 
         paused = self.controller.is_detect_paused()
         if paused:
-            rest = self.controller.detect_pause_remaining_min()
-            yield MenuItem(t("tray.pause_running", min=rest), None, enabled=False)
+            yield MenuItem(
+                lambda item: t(
+                    "tray.pause_running",
+                    remaining=self.controller.detect_pause_remaining_label(),
+                ),
+                None,
+                enabled=False,
+            )
             yield MenuItem(t("tray.pause_resume"), resume)
             yield Menu.SEPARATOR
         yield MenuItem(t("tray.pause_30m"), make_pause(30 * 60))
@@ -443,8 +471,8 @@ class TrayApp:
 
     def _pause_menu_label(self) -> str:
         if self.controller.is_detect_paused():
-            rest = self.controller.detect_pause_remaining_min()
-            return t("tray.pause_active", min=rest)
+            remaining = self.controller.detect_pause_remaining_label()
+            return t("tray.pause_active", remaining=remaining)
         return t("tray.pause")
 
     def _toggle_copy_addr(self) -> None:
