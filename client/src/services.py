@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from i18n import post_type_label, post_type_options, t
 
-__version__ = "0.4.22"
+__version__ = "0.4.23"
 
 RANK_LABEL = {
     "easy": "E",
