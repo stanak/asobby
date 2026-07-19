@@ -35,6 +35,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "ping_warn_enabled": True,
         "ping_warn_ms": 60,
         "ping_warn_giuroll_ms": 100,
+        "session_score_notify_enabled": False,
+        "session_score_notify_mode": "rules",
+        "session_score_notify_rules": [],
     },
 }
 

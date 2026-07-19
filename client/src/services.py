@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from i18n import post_type_label, post_type_options, t
 
-__version__ = "0.4.25"
+__version__ = "0.4.26"
 
 RANK_LABEL = {
     "easy": "E",
@@ -222,6 +222,196 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
     win.bind("<Escape>", lambda _e: do_cancel())
 
     # 画面中央に配置してフォーカスを与える
+    win.update_idletasks()
+    x = (win.winfo_screenwidth() - win.winfo_width()) // 2
+    y = (win.winfo_screenheight() - win.winfo_height()) // 2
+    win.geometry(f"+{x}+{y}")
+    win.lift()
+    win.focus_force()
+
+
+def edit_session_score_notify_settings(parent, current: dict, on_ok) -> None:
+    """セッション戦績通知の設定ダイアログ。tk メインスレッドで呼ぶこと。"""
+    import tkinter as tk
+    from tkinter import ttk
+
+    win = tk.Toplevel(parent)
+    win.title(t("session_score.settings_title"))
+    win.attributes("-topmost", True)
+    win.resizable(False, False)
+
+    frame = ttk.Frame(win, padding=12)
+    frame.grid(sticky="nsew")
+
+    enabled_var = tk.BooleanVar(
+        value=bool(current.get("session_score_notify_enabled", False))
+    )
+    ttk.Checkbutton(
+        frame,
+        text=t("session_score.enabled"),
+        variable=enabled_var,
+    ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+
+    mode_labels = {
+        "all": t("session_score.mode.all"),
+        "rules": t("session_score.mode.rules"),
+    }
+    label_by_mode = mode_labels
+    mode_by_label = {label: key for key, label in mode_labels.items()}
+    initial_mode = str(current.get("session_score_notify_mode", "rules"))
+    if initial_mode not in ("all", "rules"):
+        initial_mode = "rules"
+    mode_var = tk.StringVar(value=mode_labels[initial_mode])
+
+    ttk.Label(frame, text=t("session_score.mode_label")).grid(
+        row=1, column=0, sticky="e", padx=(0, 8), pady=4
+    )
+    mode_box = ttk.Combobox(
+        frame,
+        textvariable=mode_var,
+        values=[mode_labels["all"], mode_labels["rules"]],
+        state="readonly",
+        width=28,
+    )
+    mode_box.grid(row=1, column=1, columnspan=2, sticky="w", pady=4)
+
+    rules_frame = ttk.LabelFrame(frame, text=t("session_score.rules_label"), padding=8)
+    rules_frame.grid(row=2, column=0, columnspan=3, sticky="we", pady=(8, 4))
+
+    rule_rows: list[dict] = []
+
+    def remove_rule_row(row_info: dict) -> None:
+        row_info["frame"].destroy()
+        if row_info in rule_rows:
+            rule_rows.remove(row_info)
+        sync_rules_state()
+
+    def add_rule_row(count: int = 1, kind: str = "win") -> None:
+        row = ttk.Frame(rules_frame)
+        row.pack(fill="x", pady=2)
+        count_var = tk.StringVar(value=str(max(1, int(count))))
+        kind_label = t("session_score.kind.win" if kind == "win" else "session_score.kind.loss")
+        kind_var = tk.StringVar(value=kind_label)
+        kind_values = [t("session_score.kind.win"), t("session_score.kind.loss")]
+        ttk.Label(row, text=t("session_score.rule_prefix")).pack(side="left")
+        ttk.Entry(row, textvariable=count_var, width=5).pack(side="left", padx=(4, 4))
+        ttk.Label(row, text=t("session_score.rule_suffix")).pack(side="left")
+        kind_box = ttk.Combobox(
+            row,
+            textvariable=kind_var,
+            values=kind_values,
+            state="readonly",
+            width=8,
+        )
+        kind_box.pack(side="left", padx=(4, 8))
+        row_info = {
+            "frame": row,
+            "count_var": count_var,
+            "kind_var": kind_var,
+        }
+        ttk.Button(
+            row,
+            text=t("session_score.remove_rule"),
+            command=lambda info=row_info: remove_rule_row(info),
+            width=4,
+        ).pack(side="right")
+        rule_rows.append(row_info)
+        sync_rules_state()
+
+    def sync_rules_state(*_args) -> None:
+        selected = mode_var.get()
+        mode = mode_by_label.get(selected, selected)
+        if mode not in ("all", "rules"):
+            mode = "rules"
+        enabled = mode == "rules"
+        for row_info in rule_rows:
+            for widget in row_info["frame"].winfo_children():
+                if isinstance(widget, ttk.Combobox):
+                    widget.configure(state="readonly" if enabled else "disabled")
+                else:
+                    try:
+                        widget.configure(state="normal" if enabled else "disabled")
+                    except tk.TclError:
+                        pass
+        add_btn.configure(state="normal" if enabled else "disabled")
+
+    def load_rules() -> None:
+        for item in current.get("session_score_notify_rules") or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                count = int(item.get("count", 1))
+            except (TypeError, ValueError):
+                count = 1
+            kind = str(item.get("kind", "win"))
+            if kind not in ("win", "loss"):
+                kind = "win"
+            add_rule_row(count=count, kind=kind)
+
+    btn_row = ttk.Frame(rules_frame)
+    btn_row.pack(fill="x", pady=(6, 0))
+    add_btn = ttk.Button(
+        btn_row,
+        text=t("session_score.add_rule"),
+        command=lambda: add_rule_row(),
+        width=6,
+    )
+    add_btn.pack(side="left")
+
+    load_rules()
+    mode_var.trace_add("write", sync_rules_state)
+    sync_rules_state()
+
+    hint = ttk.Label(
+        frame,
+        text=t("session_score.hint"),
+        foreground="#888",
+        wraplength=360,
+        justify="left",
+    )
+    hint.grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+    def selected_mode() -> str:
+        selected = mode_var.get()
+        mode = mode_by_label.get(selected, selected)
+        return mode if mode in ("all", "rules") else "rules"
+
+    def collect_rules() -> list[dict[str, int | str]]:
+        rules: list[dict[str, int | str]] = []
+        win_label = t("session_score.kind.win")
+        for row in rule_rows:
+            try:
+                count = int(str(row["count_var"].get()).strip())
+            except ValueError:
+                continue
+            count = max(1, min(999, count))
+            kind_label = str(row["kind_var"].get())
+            kind = "win" if kind_label == win_label else "loss"
+            rules.append({"count": count, "kind": kind})
+        return rules
+
+    def do_ok() -> None:
+        result = {
+            "session_score_notify_enabled": bool(enabled_var.get()),
+            "session_score_notify_mode": selected_mode(),
+            "session_score_notify_rules": collect_rules(),
+        }
+        win.destroy()
+        on_ok(result)
+
+    def do_cancel() -> None:
+        win.destroy()
+
+    btns = ttk.Frame(frame)
+    btns.grid(row=4, column=0, columnspan=3, sticky="e", pady=(12, 0))
+    ttk.Button(btns, text=t("settings.ok"), command=do_ok).grid(
+        row=0, column=0, padx=(0, 8)
+    )
+    ttk.Button(btns, text=t("settings.cancel"), command=do_cancel).grid(row=0, column=1)
+
+    win.protocol("WM_DELETE_WINDOW", do_cancel)
+    win.bind("<Escape>", lambda _e: do_cancel())
+
     win.update_idletasks()
     x = (win.winfo_screenwidth() - win.winfo_width()) // 2
     y = (win.winfo_screenheight() - win.winfo_height()) // 2

@@ -153,6 +153,13 @@ class Controller:
         # ホスト自動検知 (自動投稿) の一時停止。0 なら停止していない
         self._detect_pause_until: float = 0.0
 
+        # 同一相手との連続対戦セッション戦績 (ホスト勝-クライアント勝)
+        self._session_score_key: str = ""
+        self._session_host_wins: int = 0
+        self._session_client_wins: int = 0
+        self._session_my_wins: int = 0
+        self._session_my_losses: int = 0
+
         # ホスト検知時の IP:Port クリップボードコピー (1 ホストセッション 1 回)
         self._addr_copied = False
 
@@ -221,6 +228,146 @@ class Controller:
         value = max(1, min(5000, int(ms)))
         self.config_mgr.set_value("options", "ping_warn_giuroll_ms", value)
         self.log_sink("info", t("log.ping_warn_giuroll_ms", ms=value))
+
+    def session_score_notify_enabled(self) -> bool:
+        return bool(
+            self.config_mgr.get_value("options", "session_score_notify_enabled", False)
+        )
+
+    def set_session_score_notify_enabled(self, enabled: bool) -> None:
+        value = bool(enabled)
+        self.config_mgr.set_value("options", "session_score_notify_enabled", value)
+        self.log_sink(
+            "info",
+            t(
+                "log.session_score_notify_enabled",
+                state=t("common.on" if value else "common.off"),
+            ),
+        )
+
+    def session_score_notify_mode(self) -> str:
+        mode = str(
+            self.config_mgr.get_value("options", "session_score_notify_mode", "rules")
+        )
+        return mode if mode in ("all", "rules") else "rules"
+
+    def set_session_score_notify_mode(self, mode: str) -> None:
+        value = mode if mode in ("all", "rules") else "rules"
+        self.config_mgr.set_value("options", "session_score_notify_mode", value)
+        self.log_sink(
+            "info",
+            t(
+                "log.session_score_notify_mode",
+                mode=t(f"session_score.mode.{value}"),
+            ),
+        )
+
+    def session_score_notify_rules(self) -> list[dict[str, int | str]]:
+        raw = self.config_mgr.get_value("options", "session_score_notify_rules", [])
+        if not isinstance(raw, list):
+            return []
+        out: list[dict[str, int | str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                count = int(item.get("count", 0))
+            except (TypeError, ValueError):
+                continue
+            kind = str(item.get("kind", ""))
+            if count >= 1 and kind in ("win", "loss"):
+                out.append({"count": count, "kind": kind})
+        return out
+
+    def set_session_score_notify_rules(
+        self, rules: list[dict[str, int | str]]
+    ) -> None:
+        normalized: list[dict[str, int | str]] = []
+        for item in rules:
+            try:
+                count = int(item.get("count", 0))
+            except (TypeError, ValueError):
+                continue
+            kind = str(item.get("kind", ""))
+            if count >= 1 and kind in ("win", "loss"):
+                normalized.append({"count": count, "kind": kind})
+        self.config_mgr.set_value(
+            "options", "session_score_notify_rules", normalized
+        )
+        self.log_sink(
+            "info",
+            t("log.session_score_notify_rules", count=len(normalized)),
+        )
+
+    def _reset_session_score(self) -> None:
+        if (
+            not self._session_score_key
+            and self._session_host_wins == 0
+            and self._session_client_wins == 0
+        ):
+            return
+        self._session_score_key = ""
+        self._session_host_wins = 0
+        self._session_client_wins = 0
+        self._session_my_wins = 0
+        self._session_my_losses = 0
+
+    def _session_opponent_key(self, payload: dict) -> str:
+        my_side = str(payload.get("my_side", ""))
+        if my_side == "host":
+            opp = str(payload.get("guest_profile") or "").strip()
+            return f"guest:{opp}" if opp else "guest:?"
+        if my_side == "client":
+            opp = str(payload.get("host_profile") or "").strip()
+            return f"host:{opp}" if opp else "host:?"
+        return ""
+
+    def _should_notify_session_score(self, my_wins: int, my_losses: int) -> bool:
+        if not self.session_score_notify_enabled():
+            return False
+        if self.session_score_notify_mode() == "all":
+            return True
+        for rule in self.session_score_notify_rules():
+            if rule["kind"] == "win" and my_wins == rule["count"]:
+                return True
+            if rule["kind"] == "loss" and my_losses == rule["count"]:
+                return True
+        return False
+
+    def _handle_session_score(self, payload: dict) -> None:
+        key = self._session_opponent_key(payload)
+        if not key:
+            return
+        if key != self._session_score_key:
+            self._session_score_key = key
+            self._session_host_wins = 0
+            self._session_client_wins = 0
+            self._session_my_wins = 0
+            self._session_my_losses = 0
+
+        winner = str(payload.get("winner", ""))
+        my_side = str(payload.get("my_side", ""))
+        if winner == "host":
+            self._session_host_wins += 1
+        elif winner == "guest":
+            self._session_client_wins += 1
+
+        i_won = (my_side == "host" and winner == "host") or (
+            my_side == "client" and winner == "guest"
+        )
+        if i_won:
+            self._session_my_wins += 1
+        else:
+            self._session_my_losses += 1
+
+        if not self._should_notify_session_score(
+            self._session_my_wins, self._session_my_losses
+        ):
+            return
+
+        score = f"{self._session_host_wins}-{self._session_client_wins}"
+        self.notify_sink(t("notify.session_score", score=score))
+        self.log_sink("info", t("log.session_score", score=score))
 
     def comment_presets(self) -> list[str]:
         v = self.config_mgr.get_value("post_defaults", "comment_presets", [])
@@ -574,6 +721,7 @@ class Controller:
                 if self._pending_local_match is not None:
                     payload = self._pending_local_match
                     self._pending_local_match = None
+                    self._handle_session_score(payload)
                     asyncio.create_task(self._record_local_match(payload))
             except Exception as e:
                 self.log_sink("error", f"Detector loop error: {e}")
@@ -726,6 +874,7 @@ class Controller:
         if not st.alive:
             self.tool_mgr.reset_state()
             self._addr_copied = False
+            self._reset_session_score()
             if self.has_active_post() and not self._close_pending:
                 self._close_pending = True
                 return Action("close", {"reason": "process_dead"})
@@ -751,6 +900,9 @@ class Controller:
             or st.mode == "charsel"
             or st.net_side is not None
         )
+
+        if self._stable_for("session_score_idle", 5.0, seen=not in_net_flow):
+            self._reset_session_score()
 
         if in_net_flow and st.net_side != "client":
             self._last_keepalive_ts = now

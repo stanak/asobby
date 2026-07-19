@@ -24,6 +24,7 @@ from i18n import (
 from services import (
     Post,
     edit_post_settings,
+    edit_session_score_notify_settings,
     NET_BATTLE,
     __version__,
 )
@@ -244,6 +245,39 @@ class TrayApp:
                 self.icon.update_menu()
 
         self._on_tk(lambda: edit_post_settings(self.tk_root, current, apply))
+
+    def _open_session_score_settings(self) -> None:
+        current = {
+            "session_score_notify_enabled": self.controller.session_score_notify_enabled(),
+            "session_score_notify_mode": self.controller.session_score_notify_mode(),
+            "session_score_notify_rules": self.controller.session_score_notify_rules(),
+        }
+
+        def apply(result: dict) -> None:
+            self.controller.set_session_score_notify_enabled(
+                bool(result.get("session_score_notify_enabled", False))
+            )
+            self.controller.set_session_score_notify_mode(
+                str(result.get("session_score_notify_mode", "rules"))
+            )
+            self.controller.set_session_score_notify_rules(
+                result.get("session_score_notify_rules") or []
+            )
+            if self.icon:
+                self.icon.update_menu()
+
+        self._on_tk(
+            lambda: edit_session_score_notify_settings(
+                self.tk_root, current, apply
+            )
+        )
+
+    def _toggle_session_score_notify(self) -> None:
+        self.controller.set_session_score_notify_enabled(
+            not self.controller.session_score_notify_enabled()
+        )
+        if self.icon:
+            self.icon.update_menu()
 
     def _open_stats(self) -> None:
         self._on_tk(
@@ -585,6 +619,15 @@ class TrayApp:
                 t("tray.ping_warn"),
                 lambda: self._toggle_ping_warn(),
                 checked=lambda item: self.controller.ping_warn_enabled(),
+            ),
+            MenuItem(
+                t("tray.session_score_notify"),
+                lambda: self._toggle_session_score_notify(),
+                checked=lambda item: self.controller.session_score_notify_enabled(),
+            ),
+            MenuItem(
+                t("tray.session_score_settings"),
+                lambda: self._open_session_score_settings(),
             ),
             MenuItem(
                 t("tray.reply_requests"),
