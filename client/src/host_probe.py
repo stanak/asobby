@@ -218,6 +218,4 @@ def probe_rtt_ms(
     if direct is not None:
         return direct
 
-    if not autopunch:
-        return _probe_rtt_autopunch(host, port)
     return None

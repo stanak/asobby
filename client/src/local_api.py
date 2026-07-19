@@ -6,7 +6,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 from host_probe import probe_rtt_ms
@@ -14,6 +14,23 @@ from services import __version__
 
 DEFAULT_PORT = 49152
 LOCAL_API_PORT = int(os.environ.get("ASOBBY_LOCAL_API_PORT", str(DEFAULT_PORT)))
+
+_ping_probe_guard: Optional[Callable[[], bool]] = None
+
+
+def set_ping_probe_guard(guard: Optional[Callable[[], bool]]) -> None:
+    """ローカル天則がネット対戦中なら False を返すガードを登録する。"""
+    global _ping_probe_guard
+    _ping_probe_guard = guard
+
+
+def ping_probes_allowed() -> bool:
+    if _ping_probe_guard is None:
+        return True
+    try:
+        return bool(_ping_probe_guard())
+    except Exception:
+        return True
 
 ALLOWED_ORIGINS = {
     "https://asobby.com",
@@ -115,6 +132,14 @@ class _Handler(BaseHTTPRequestHandler):
                 continue
             autopunch = bool(item.get("autopunch"))
             jobs.append((post_id, host, port, autopunch))
+
+        if not ping_probes_allowed():
+            results = [
+                {"id": post_id, "rtt_ms": None, "ok": False, "skipped": True}
+                for post_id, _host, _port, _ap in jobs
+            ]
+            self._send_json(200, {"ok": True, "results": results, "paused": True})
+            return
 
         results: list[dict[str, Any]] = []
         futures = {

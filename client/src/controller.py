@@ -21,7 +21,7 @@ from services import Post, NET_ALIVE, NET_BATTLE, __version__, format_system_ran
 from i18n import bind_locale, get_lang, post_type_label, t
 from config_manager import ConfigManager
 from tool_manager import ToolManager
-from local_api import start_local_api_server, LOCAL_API_PORT
+from local_api import start_local_api_server, set_ping_probe_guard, LOCAL_API_PORT
 
 
 ActionType = Literal["create", "update", "close", "result", "guest_result"]
@@ -125,6 +125,7 @@ class Controller:
 
         try:
             start_local_api_server()
+            set_ping_probe_guard(lambda: not self.local_net_active())
             self.log_sink("info", f"Local lobby API listening on 127.0.0.1:{LOCAL_API_PORT}")
         except OSError as e:
             self.log_sink("warn", f"Local lobby API unavailable: {e}")
@@ -159,6 +160,9 @@ class Controller:
         self._session_client_wins: int = 0
         self._session_my_wins: int = 0
         self._session_my_losses: int = 0
+
+        # ローカル天則がネット対戦フロー中 (ロビー Ping を止める)
+        self._local_net_active: bool = False
 
         # ホスト検知時の IP:Port クリップボードコピー (1 ホストセッション 1 回)
         self._addr_copied = False
@@ -228,6 +232,10 @@ class Controller:
         value = max(1, min(5000, int(ms)))
         self.config_mgr.set_value("options", "ping_warn_giuroll_ms", value)
         self.log_sink("info", t("log.ping_warn_giuroll_ms", ms=value))
+
+    def local_net_active(self) -> bool:
+        """ローカル天則がホスト待ち・キャラセレ・対戦などネットフロー中。"""
+        return self._local_net_active
 
     def session_score_notify_enabled(self) -> bool:
         return bool(
@@ -890,6 +898,7 @@ class Controller:
         if not st.alive:
             self.tool_mgr.reset_state()
             self._addr_copied = False
+            self._local_net_active = False
             self._reset_session_score()
             if self.has_active_post() and not self._close_pending:
                 self._close_pending = True
@@ -916,6 +925,7 @@ class Controller:
             or st.mode == "charsel"
             or st.net_side is not None
         )
+        self._local_net_active = in_net_flow
 
         if self._stable_for("session_score_idle", 5.0, seen=not in_net_flow):
             self._reset_session_score()
