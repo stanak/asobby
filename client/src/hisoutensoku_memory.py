@@ -669,9 +669,10 @@ def read_detection_state() -> DetectionState:
         if pnet:
             lprof = _sanitize_profile(_read_cpsz_cp932(h, pnet + LPROFOFS, PROFSZ))
             rprof = _sanitize_profile(_read_cpsz_cp932(h, pnet + RPROFOFS, PROFSZ))
-            # 相手プロフィールはネット対戦系シーン以外では意味を持たない
+            # プロフィール名はネット対戦系シーン以外では意味を持たない
             # (giuroll 環境では未初期化のゴミが残ることがある)
             if scene_id not in NET_SCENES:
+                lprof = ""
                 rprof = ""
             adrbeg = _read_u32le(h, pnet + ADRBEGOFS)
             if adrbeg:
@@ -690,7 +691,10 @@ def read_detection_state() -> DetectionState:
 
         # +0x04 決め打ちで募集シグネチャが取れない場合のフォールバック走査
         global _scan_last_ts, _scan_hit
-        if pnet and adrbeg and not (server08 == 513 and server09 == 2):
+        in_host_context = comm_mode == COMM_SERVER or scene_id in NET_SIDE_HOST
+        if not in_host_context:
+            _scan_hit = None
+        elif pnet and adrbeg and not (server08 == 513 and server09 == 2):
             hit_port: Optional[int] = None
             if _scan_hit is not None:
                 # 前回ヒットの再検証 (走査より遥かに安い)

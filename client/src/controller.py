@@ -728,11 +728,15 @@ class Controller:
         # -----------------
         is_recruiting = (st.mode == "host_wait") and (st.port is not None)
         is_battle = (st.mode == "battle")
-        has_profile = bool((st.lprof or "").strip() or (st.rprof or "").strip())
+        in_net_flow = (
+            is_recruiting
+            or is_battle
+            or st.mode == "charsel"
+            or st.net_side is not None
+        )
 
-        if is_battle or has_profile or is_recruiting:
-            if st.net_side != "client":
-                self._last_keepalive_ts = now
+        if in_net_flow and st.net_side != "client":
+            self._last_keepalive_ts = now
 
         match_status = self._build_match_status(
             st,
@@ -967,12 +971,17 @@ class Controller:
         # -----------------
         if not paused and self.has_active_post() and (now - self._last_heartbeat_ts) >= HEARTBEAT_SEC:
             self._last_heartbeat_ts = now
+            net_status = (
+                NET_BATTLE
+                if is_battle and st.net_side == "host"
+                else NET_ALIVE
+            )
             payload = self._build_payload(
                 addr=self.my_post.addr or "",
                 giuroll=self.my_post.giuroll,
                 autopunch=self.my_post.autopunch,
                 match_status=self.my_post.match_status or "",
-                net_status=self.my_post.net_status or NET_ALIVE,
+                net_status=net_status,
             )
             return Action("update", payload)
 
@@ -984,7 +993,7 @@ class Controller:
             quiet = self._stable_for(
                 "idle_or_other",
                 5.0,
-                seen=(not is_recruiting and not has_profile and not is_battle),
+                seen=not in_net_flow,
             )
 
             if grace_ok and quiet and (not is_battle):
