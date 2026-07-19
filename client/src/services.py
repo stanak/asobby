@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from i18n import post_type_label, post_type_options, t
 
-__version__ = "0.4.26"
+__version__ = "0.4.27"
 
 RANK_LABEL = {
     "easy": "E",
@@ -295,15 +295,15 @@ def edit_session_score_notify_settings(parent, current: dict, on_ok) -> None:
         kind_values = [t("session_score.kind.win"), t("session_score.kind.loss")]
         ttk.Label(row, text=t("session_score.rule_prefix")).pack(side="left")
         ttk.Entry(row, textvariable=count_var, width=5).pack(side="left", padx=(4, 4))
-        ttk.Label(row, text=t("session_score.rule_suffix")).pack(side="left")
         kind_box = ttk.Combobox(
             row,
             textvariable=kind_var,
             values=kind_values,
             state="readonly",
-            width=8,
+            width=6,
         )
-        kind_box.pack(side="left", padx=(4, 8))
+        kind_box.pack(side="left", padx=(0, 4))
+        ttk.Label(row, text=t("session_score.rule_suffix")).pack(side="left")
         row_info = {
             "frame": row,
             "count_var": count_var,
