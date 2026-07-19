@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from i18n import post_type_label, post_type_options, t
 
-__version__ = "0.4.27"
+__version__ = "0.4.28"
 
 RANK_LABEL = {
     "easy": "E",
@@ -391,10 +391,15 @@ def edit_session_score_notify_settings(parent, current: dict, on_ok) -> None:
         return rules
 
     def do_ok() -> None:
+        mode = selected_mode()
+        rules = collect_rules()
+        enabled = bool(enabled_var.get())
+        if enabled and mode == "rules" and not rules:
+            mode = "all"
         result = {
-            "session_score_notify_enabled": bool(enabled_var.get()),
-            "session_score_notify_mode": selected_mode(),
-            "session_score_notify_rules": collect_rules(),
+            "session_score_notify_enabled": enabled,
+            "session_score_notify_mode": mode,
+            "session_score_notify_rules": rules,
         }
         win.destroy()
         on_ok(result)

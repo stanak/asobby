@@ -237,6 +237,8 @@ class Controller:
     def set_session_score_notify_enabled(self, enabled: bool) -> None:
         value = bool(enabled)
         self.config_mgr.set_value("options", "session_score_notify_enabled", value)
+        if value and not self.session_score_notify_rules():
+            self.config_mgr.set_value("options", "session_score_notify_mode", "all")
         self.log_sink(
             "info",
             t(
@@ -327,7 +329,10 @@ class Controller:
             return False
         if self.session_score_notify_mode() == "all":
             return True
-        for rule in self.session_score_notify_rules():
+        rules = self.session_score_notify_rules()
+        if not rules:
+            return True
+        for rule in rules:
             if rule["kind"] == "win" and my_wins == rule["count"]:
                 return True
             if rule["kind"] == "loss" and my_losses == rule["count"]:
@@ -360,12 +365,23 @@ class Controller:
         else:
             self._session_my_losses += 1
 
+        score = f"{self._session_host_wins}-{self._session_client_wins}"
+        if self.session_score_notify_enabled():
+            self.log_sink(
+                "info",
+                t(
+                    "log.session_score_updated",
+                    score=score,
+                    my_wins=self._session_my_wins,
+                    my_losses=self._session_my_losses,
+                ),
+            )
+
         if not self._should_notify_session_score(
             self._session_my_wins, self._session_my_losses
         ):
             return
 
-        score = f"{self._session_host_wins}-{self._session_client_wins}"
         self.notify_sink(t("notify.session_score", score=score))
         self.log_sink("info", t("log.session_score", score=score))
 

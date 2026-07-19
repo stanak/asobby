@@ -80,9 +80,15 @@ class TrayApp:
         self._append_log(level, text)
 
     def emit_notify(self, text: str) -> None:
-        self._notify(text)
-        if self.icon:
-            self.icon.update_menu()
+        def show() -> None:
+            self._notify(text)
+            if self.icon:
+                self.icon.update_menu()
+
+        if self.tk_root is not None:
+            self.tk_root.after(0, show)
+        else:
+            show()
 
     def emit_request(self, req, text: str) -> None:
         def callback(reply: str) -> None:
