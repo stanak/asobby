@@ -128,7 +128,17 @@
     "lobby.chatCooldown": "しばらく待ってから送ってください",
     "lobby.pingUnavailable": "—",
     "lobby.pingClientRequired":
-      "閲覧者 PC で asobby クライアントを起動すると、あなたから各ホストへの Ping を測定できます",
+      "閲覧者 PC で asobby クライアントを起動し、ブラウザで localhost への接続を許可すると Ping を表示できます",
+    "lobby.pingBannerTitle": "Ping 列を表示するには追加の設定が必要です",
+    "lobby.pingBannerBody":
+      "ロビーは閲覧者 PC の asobby クライアント (127.0.0.1) と通信して Ping を測定します。初回はブラウザが「ローカル ネットワークへのアクセス」の許可を求めます。",
+    "lobby.pingBannerDenied":
+      "ブラウザでローカル接続がブロックされています。アドレスバー左のサイト設定 → 「ローカル ネットワークへのアクセス」（または「ループバック ネットワークへのアクセス」）を「許可」にしてから再試行してください。",
+    "lobby.pingBannerChecklist":
+      "確認: (1) asobby クライアントが起動している (2) ブラウザで localhost への接続を許可している",
+    "lobby.pingBannerRetry": "接続を再試行",
+    "lobby.pingBannerRetrying": "確認中…",
+    "lobby.pingBannerGuide": "詳しい手順（使い方）",
     "lobby.pingProbeFailed":
       "あなたの PC からホストへ UDP で到達できません (Autopunch / ポート開放 / 天則ホスト待機を確認)",
     "lobby.pingThresholdHint": "警告しきい値: {threshold}ms",
@@ -338,6 +348,20 @@
       "ON/OFF としきい値 (ms) は「投稿設定...」で変更できます。トレイメニューの「高 Ping 警告」チェックでも ON/OFF を切り替えられます（しきい値は投稿設定側）。",
     "guide.highPingLobby":
       "Web ロビーの Ping 列は、閲覧者 PC で asobby クライアントが起動しているときだけ表示されます。緑 (良好) / 黄 (しきい値の 75% 以上) / 赤 (しきい値以上) で色分けされます。",
+    "guide.highPingBrowserTitle": "ブラウザのローカル接続許可（Ping 列）",
+    "guide.highPingBrowserIntro":
+      "Ping 列は Web ロビー (asobby.com) から、閲覧者 PC 上の asobby クライアント API (127.0.0.1:49152) へ接続して測定します。",
+    "guide.highPingBrowserPrompt":
+      "Chrome / Edge 142 以降では、初回アクセス時にブラウザが「ローカル ネットワークへのアクセス」（127.0.0.1 の場合は「ループバック ネットワークへのアクセス」）の許可を求めます。「許可」を選ぶと Ping 列が使えます。",
+    "guide.highPingBrowserStepsTitle": "誤ってブロックした場合の再許可",
+    "guide.highPingBrowserStep1":
+      "asobby.com のロビーを開いた状態で、アドレスバー左の鍵（または調整）アイコン → 「サイトの設定」",
+    "guide.highPingBrowserStep2":
+      "「ローカル ネットワークへのアクセス」（または「ループバック ネットワークへのアクセス」）を「許可」に変更",
+    "guide.highPingBrowserStep3":
+      "ページを再読み込みするか、ロビー上部の「接続を再試行」を押す",
+    "guide.highPingBrowserNote":
+      "クライアント未起動の場合も Ping は「—」のままです。asobby トレイアイコンが表示されているかも確認してください。",
     "guide.sectionIcon": "トレイアイコンの色",
     "guide.iconIdle": "灰色 — 待機中。天則でホストを立てると自動投稿を開始します。",
     "guide.iconRecruit": "緑 — 募集中。ロビーに掲載中です。",
@@ -512,7 +536,17 @@
     "lobby.chatCooldown": "Please wait before sending another message",
     "lobby.pingUnavailable": "—",
     "lobby.pingClientRequired":
-      "Run the asobby client on your PC to measure your ping to each host",
+      "Run the asobby client on your PC and allow localhost access in your browser to show ping",
+    "lobby.pingBannerTitle": "Extra setup is required to show the Ping column",
+    "lobby.pingBannerBody":
+      "The lobby talks to the asobby client on your PC (127.0.0.1) to measure ping. On first use, your browser asks for Local network access.",
+    "lobby.pingBannerDenied":
+      "Your browser is blocking local connections. Open site settings from the lock icon → set Local network access (or Loopback network access) to Allow, then retry.",
+    "lobby.pingBannerChecklist":
+      "Check: (1) the asobby client is running (2) your browser allows connections to localhost",
+    "lobby.pingBannerRetry": "Retry connection",
+    "lobby.pingBannerRetrying": "Checking…",
+    "lobby.pingBannerGuide": "Full instructions (guide)",
     "lobby.pingProbeFailed":
       "UDP probe from your PC failed (check Autopunch, port forwarding, or host waiting screen)",
     "lobby.pingThresholdHint": "Warning threshold: {threshold}ms",
@@ -722,6 +756,20 @@
       "Turn warnings on/off and set thresholds (ms) in Post settings…. The tray item “High ping warnings” toggles on/off only (thresholds stay in Post settings).",
     "guide.highPingLobby":
       "The lobby Ping column appears only while the asobby client is running on the viewer’s PC. Colors: green (good), yellow (≥75% of threshold), red (≥ threshold).",
+    "guide.highPingBrowserTitle": "Browser local network permission (Ping column)",
+    "guide.highPingBrowserIntro":
+      "The Ping column works by connecting from the web lobby (asobby.com) to the asobby client API on your PC (127.0.0.1:49152).",
+    "guide.highPingBrowserPrompt":
+      "In Chrome / Edge 142+, the first connection triggers a Local network access prompt (Loopback network access for 127.0.0.1). Choose Allow to enable the Ping column.",
+    "guide.highPingBrowserStepsTitle": "If you blocked it by mistake",
+    "guide.highPingBrowserStep1":
+      "On the asobby.com lobby, click the lock (or tune) icon left of the address bar → Site settings",
+    "guide.highPingBrowserStep2":
+      "Set Local network access (or Loopback network access) to Allow",
+    "guide.highPingBrowserStep3":
+      "Reload the page or click Retry connection at the top of the lobby",
+    "guide.highPingBrowserNote":
+      "Ping stays “—” if the client is not running too. Check that the asobby tray icon is visible.",
     "guide.sectionIcon": "Tray icon colors",
     "guide.iconIdle": "Gray — idle. Start a host in Hisoutensoku to begin auto-posting.",
     "guide.iconRecruit": "Green — recruiting. Your post is live on the lobby.",

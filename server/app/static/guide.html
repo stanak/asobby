@@ -279,6 +279,16 @@
     </ul>
     <p data-i18n="guide.highPingSettings">ON/OFF としきい値 (ms) は「投稿設定...」で変更できます。トレイメニューの「高 Ping 警告」チェックでも ON/OFF を切り替えられます（しきい値は投稿設定側）。</p>
     <p data-i18n="guide.highPingLobby">Web ロビーの Ping 列は、閲覧者 PC で asobby クライアントが起動しているときだけ表示されます。緑 (良好) / 黄 (しきい値の 75% 以上) / 赤 (しきい値以上) で色分けされます。</p>
+    <h3 id="high-ping-browser" data-i18n="guide.highPingBrowserTitle">ブラウザのローカル接続許可（Ping 列）</h3>
+    <p data-i18n="guide.highPingBrowserIntro">Ping 列は Web ロビー (asobby.com) から、閲覧者 PC 上の asobby クライアント API (127.0.0.1:49152) へ接続して測定します。</p>
+    <p data-i18n="guide.highPingBrowserPrompt">Chrome / Edge 142 以降では、初回アクセス時にブラウザが「ローカル ネットワークへのアクセス」（127.0.0.1 の場合は「ループバック ネットワークへのアクセス」）の許可を求めます。「許可」を選ぶと Ping 列が使えます。</p>
+    <p data-i18n="guide.highPingBrowserStepsTitle">誤ってブロックした場合の再許可</p>
+    <ol>
+      <li data-i18n="guide.highPingBrowserStep1">asobby.com のロビーを開いた状態で、アドレスバー左の鍵（または調整）アイコン → 「サイトの設定」</li>
+      <li data-i18n="guide.highPingBrowserStep2">「ローカル ネットワークへのアクセス」（または「ループバック ネットワークへのアクセス」）を「許可」に変更</li>
+      <li data-i18n="guide.highPingBrowserStep3">ページを再読み込みするか、ロビー上部の「接続を再試行」を押す</li>
+    </ol>
+    <p data-i18n="guide.highPingBrowserNote">クライアント未起動の場合も Ping は「—」のままです。asobby トレイアイコンが表示されているかも確認してください。</p>
   </section>
 
   <section class="panel">

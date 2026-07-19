@@ -243,6 +243,55 @@
     font-size: 13px;
     color: var(--err);
   }
+  #ping-banner {
+    margin: 0 20px 12px;
+    padding: 14px 16px;
+    background: var(--panel);
+    border: 1px solid #4a5568;
+    border-radius: 8px;
+  }
+  #ping-banner h2 {
+    margin: 0 0 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  #ping-banner-body {
+    margin: 0 0 12px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--muted);
+  }
+  .ping-banner-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    align-items: center;
+  }
+  #ping-banner-retry {
+    padding: 7px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+  }
+  #ping-banner-retry:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: #1a1f27;
+  }
+  #ping-banner-retry:disabled {
+    opacity: 0.65;
+    cursor: wait;
+  }
+  .ping-banner-actions a {
+    color: var(--accent);
+    font-size: 13px;
+    text-decoration: none;
+  }
+  .ping-banner-actions a:hover { text-decoration: underline; }
   .avatar {
     width: 22px;
     height: 22px;
@@ -647,6 +696,14 @@
 </div>
 
 <div id="lobby-body" hidden>
+<div id="ping-banner" hidden>
+  <h2 data-i18n="lobby.pingBannerTitle">Ping 列を表示するには追加の設定が必要です</h2>
+  <p id="ping-banner-body"></p>
+  <div class="ping-banner-actions">
+    <button type="button" id="ping-banner-retry" data-i18n="lobby.pingBannerRetry">接続を再試行</button>
+    <a href="/guide#high-ping-browser" data-i18n="lobby.pingBannerGuide">詳しい手順（使い方）</a>
+  </div>
+</div>
 <div class="section-title" data-i18n="lobby.sectionRanked">ランクマ募集</div>
 <div id="ranked-section" hidden>
   <div class="count" id="ranked-count"></div>
@@ -763,6 +820,7 @@ let chatInitialized = false;
 let chatSending = false;
 let chatTabBtns = [];
 let clientPingAvailable = false;
+let localNetworkPermission = "unknown";
 let pingByPostId = new Map();
 let pingInFlight = false;
 let pingTimer = null;
@@ -847,6 +905,9 @@ const authInfoEl = document.getElementById("auth-info");
 const rankChoiceBannerEl = document.getElementById("rank-choice-banner");
 const rankChoiceBtnsEl = document.getElementById("rank-choice-btns");
 const rankChoiceErrorEl = document.getElementById("rank-choice-error");
+const pingBannerEl = document.getElementById("ping-banner");
+const pingBannerBodyEl = document.getElementById("ping-banner-body");
+const pingBannerRetryEl = document.getElementById("ping-banner-retry");
 
 function rankLabel(p) {
   const key = (p.rank || "easy").toLowerCase();
@@ -1073,6 +1134,48 @@ function buildPingCell(p) {
   return cell;
 }
 
+async function probeLocalNetworkPermission() {
+  if (!navigator.permissions?.query) {
+    localNetworkPermission = "unknown";
+    return;
+  }
+  for (const name of ["loopback-network", "local-network-access", "local-network"]) {
+    try {
+      const status = await navigator.permissions.query({ name });
+      localNetworkPermission = status.state;
+      status.onchange = () => {
+        localNetworkPermission = status.state;
+        updatePingBanner();
+        if (status.state === "granted") {
+          void refreshHostPings();
+        }
+      };
+      return;
+    } catch (_) {
+      /* permission name not supported in this browser */
+    }
+  }
+  localNetworkPermission = "unknown";
+}
+
+function updatePingBanner() {
+  if (!pingBannerEl) return;
+  if (!loggedIn || clientPingAvailable) {
+    pingBannerEl.hidden = true;
+    return;
+  }
+  pingBannerEl.hidden = false;
+  if (pingBannerBodyEl) {
+    const parts = [t("lobby.pingBannerBody")];
+    if (localNetworkPermission === "denied") {
+      parts.push(t("lobby.pingBannerDenied"));
+    } else {
+      parts.push(t("lobby.pingBannerChecklist"));
+    }
+    pingBannerBodyEl.textContent = parts.join(" ");
+  }
+}
+
 async function checkClientPingApi() {
   try {
     const ctrl = new AbortController();
@@ -1082,6 +1185,25 @@ async function checkClientPingApi() {
     clientPingAvailable = res.ok;
   } catch (_) {
     clientPingAvailable = false;
+  }
+  updatePingBanner();
+}
+
+async function retryPingClientConnection() {
+  if (!pingBannerRetryEl || pingBannerRetryEl.disabled) return;
+  pingBannerRetryEl.disabled = true;
+  pingBannerRetryEl.textContent = t("lobby.pingBannerRetrying");
+  try {
+    await probeLocalNetworkPermission();
+    await checkClientPingApi();
+    if (clientPingAvailable) {
+      await refreshHostPings();
+    } else {
+      render();
+    }
+  } finally {
+    pingBannerRetryEl.disabled = false;
+    pingBannerRetryEl.textContent = t("lobby.pingBannerRetry");
   }
 }
 
@@ -1399,9 +1521,11 @@ function showLoggedIn(user) {
   ));
   lobbyChatRootEl.hidden = false;
   initLobbyChat();
-  checkClientPingApi().then(() => {
-    refreshHostPings();
-    schedulePingRefresh();
+  void probeLocalNetworkPermission().then(() => {
+    checkClientPingApi().then(() => {
+      refreshHostPings();
+      schedulePingRefresh();
+    });
   });
   render();
 }
@@ -1411,7 +1535,14 @@ function showLoginRequired() {
   myUserId = null;
   myName = "";
   myRank = null;
+  clientPingAvailable = false;
+  localNetworkPermission = "unknown";
+  if (pingTimer) {
+    clearInterval(pingTimer);
+    pingTimer = null;
+  }
   rankChoiceBannerEl.hidden = true;
+  updatePingBanner();
   authInfoEl.hidden = true;
   lobbyChatRootEl.hidden = true;
   render();
@@ -1793,6 +1924,11 @@ function connect() {
 applyDocumentI18n();
 initLangToggle();
 initOnlinePresence();
+if (pingBannerRetryEl) {
+  pingBannerRetryEl.addEventListener("click", () => {
+    void retryPingClientConnection();
+  });
+}
 initAuth();
 
 document.addEventListener("click", () => {

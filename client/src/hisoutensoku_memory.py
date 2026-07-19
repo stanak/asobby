@@ -64,6 +64,13 @@ NET_SCENES = {
     SCENE_BATTLESV, SCENE_BATTLECL, SCENE_BATTLEWATCH,
 }
 
+# InGameHostlist はバニラのネットメニューを scene 2 で差し替える。
+# ホスト待機中も scene 8 / COMM_SERVER にならず、server シグネチャも
+# バニラの (513, 2) ではなく (1280, 5) になる (実測)。
+SCENE_INGAME_HOSTLIST = 2
+IGH_RECRUIT_S08 = 1280
+IGH_RECRUIT_S09 = 5
+
 LCHARID = 0x00899D10
 RCHARID = 0x00899D30
 
@@ -385,6 +392,37 @@ def detect_tools_from_loaded_modules(pid: int) -> tuple[bool, bool]:
     return giu, ap
 
 
+def _has_ingame_hostlist(modules: str) -> bool:
+    return "ingamehostlist" in modules.lower()
+
+
+def _valid_udp_port(port: Optional[int]) -> bool:
+    return port is not None and 0 < port < 65536
+
+
+def _looks_like_igh_host_wait(
+    *,
+    has_igh: bool,
+    scene_id: Optional[int],
+    pnet: Optional[int],
+    server: Optional[int],
+    server08: Optional[int],
+    server09: Optional[int],
+    port: Optional[int],
+) -> bool:
+    if not has_igh:
+        return False
+    if scene_id != SCENE_INGAME_HOSTLIST:
+        return False
+    if not pnet or not server:
+        return False
+    if not _valid_udp_port(port):
+        return False
+    if server08 is None or server09 is None:
+        return False
+    return server08 == IGH_RECRUIT_S08 and server09 == IGH_RECRUIT_S09
+
+
 def nonsystem_modules(mods: list[tuple[str, str]]) -> str:
     """システムフォルダ以外から読まれているモジュール名を列挙する。
 
@@ -494,7 +532,16 @@ def _read_battle_result(
     return (btl_mode, lwin, rwin)
 
 
-def _decide_mode(server08: Optional[int], server09: Optional[int], scene_id: Optional[int]) -> str:
+def _decide_mode(
+    server08: Optional[int],
+    server09: Optional[int],
+    scene_id: Optional[int],
+    *,
+    has_igh: bool = False,
+    pnet: Optional[int] = None,
+    server: Optional[int] = None,
+    port: Optional[int] = None,
+) -> str:
     # 対戦 (シーン ID で確定。giuroll はシーン遷移を差し替えないため
     # MOD 有無に関わらず安定して判定できる)
     if scene_id in NET_BATTLE_SCENES:
@@ -508,6 +555,17 @@ def _decide_mode(server08: Optional[int], server09: Optional[int], scene_id: Opt
 
     # 募集（確定）
     if server08 == 513 and server09 == 2:
+        return "host_wait"
+
+    if _looks_like_igh_host_wait(
+        has_igh=has_igh,
+        scene_id=scene_id,
+        pnet=pnet,
+        server=server,
+        server08=server08,
+        server09=server09,
+        port=port,
+    ):
         return "host_wait"
 
     # キャラセレ（確定）
@@ -574,7 +632,10 @@ def _scan_server_in_vector(h: wt.HANDLE, adrbeg: int) -> Optional[tuple[int, int
 
 
 def _derive_net_side(
-    scene_id: Optional[int], comm_mode: Optional[int]
+    scene_id: Optional[int],
+    comm_mode: Optional[int],
+    *,
+    mode: Optional[str] = None,
 ) -> Optional[str]:
     """ネット対戦での自分の役割を返す。
 
@@ -595,6 +656,9 @@ def _derive_net_side(
         return "client"
     if scene_id in NET_SIDE_WATCH:
         return "watch"
+    # InGameHostlist ホスト待機は scene 2 のまま COMM_SERVER にならない。
+    if mode == "host_wait" and scene_id == SCENE_INGAME_HOSTLIST:
+        return "host"
     return None
 
 
@@ -659,6 +723,7 @@ def read_detection_state() -> DetectionState:
         )
 
     try:
+        has_igh = _has_ingame_hostlist(modules)
         scene_id = _read_u32le(h, SCENEID)
         comm_mode = _read_u32le(h, COMMMODE)
 
@@ -691,7 +756,16 @@ def read_detection_state() -> DetectionState:
 
         # +0x04 決め打ちで募集シグネチャが取れない場合のフォールバック走査
         global _scan_last_ts, _scan_hit
-        in_host_context = comm_mode == COMM_SERVER or scene_id in NET_SIDE_HOST
+        in_host_context = (
+            comm_mode == COMM_SERVER
+            or scene_id in NET_SIDE_HOST
+            or (
+                has_igh
+                and scene_id == SCENE_INGAME_HOSTLIST
+                and pnet
+                and adrbeg
+            )
+        )
         if not in_host_context:
             _scan_hit = None
         elif pnet and adrbeg and not (server08 == 513 and server09 == 2):
@@ -714,7 +788,15 @@ def read_detection_state() -> DetectionState:
         elif not pnet:
             _scan_hit = None
 
-        mode = _decide_mode(server08, server09, scene_id)
+        mode = _decide_mode(
+            server08,
+            server09,
+            scene_id,
+            has_igh=has_igh,
+            pnet=pnet,
+            server=server,
+            port=port,
+        )
 
         lcid = _read_u32le(h, LCHARID)
         rcid = _read_u32le(h, RCHARID)
@@ -727,7 +809,8 @@ def read_detection_state() -> DetectionState:
             f"scene={scene_id} comm={comm_mode} pnet={'y' if pnet else 'n'} "
             f"adr={adrbeg or 0:x} srv={server or 0:x} scan={_scan_hit or 0:x} "
             f"s08={server08} s09={server09} port={port} "
-            f"giu={'y' if giu else 'n'} ap={'y' if ap else 'n'} mode={mode}"
+            f"giu={'y' if giu else 'n'} ap={'y' if ap else 'n'} "
+            f"igh={'y' if has_igh else 'n'} mode={mode}"
         )
 
         # 構造診断ダンプ: server チェーンが読めない異常時と、正常な
@@ -754,7 +837,7 @@ def read_detection_state() -> DetectionState:
             rchar_id=rcid,
             lchar_name=_char_name(lcid),
             rchar_name=_char_name(rcid),
-            net_side=_derive_net_side(scene_id, comm_mode),
+            net_side=_derive_net_side(scene_id, comm_mode, mode=mode),
             btl_mode=btl_mode,
             lwin=lwin,
             rwin=rwin,
