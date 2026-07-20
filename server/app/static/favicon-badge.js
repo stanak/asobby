@@ -82,13 +82,22 @@
   }
 
   function drawBadgeDot(ctx, x, y, color) {
+    const outerR = 6.75;
+    const innerR = 5.25;
+
+    ctx.fillStyle = rgb([0, 0, 0], 170);
+    ctx.beginPath();
+    ctx.arc(x + 0.6, y + 0.8, outerR + 0.35, 0, Math.PI * 2);
+    ctx.fill();
+
     ctx.fillStyle = rgb([255, 255, 255]);
     ctx.beginPath();
-    ctx.ellipse(x, y, 4, 4, 0, 0, Math.PI * 2);
+    ctx.arc(x, y, outerR, 0, Math.PI * 2);
     ctx.fill();
+
     ctx.fillStyle = rgb(color);
     ctx.beginPath();
-    ctx.ellipse(x, y, 3, 3, 0, 0, Math.PI * 2);
+    ctx.arc(x, y, innerR, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -100,8 +109,8 @@
     if (!ctx) return "";
 
     drawMark(ctx);
-    if (next.casual) drawBadgeDot(ctx, 7, 5, BADGE_CASUAL);
-    if (next.ranked) drawBadgeDot(ctx, 25, 5, BADGE_RANKED);
+    if (next.casual) drawBadgeDot(ctx, 6.5, 6.5, BADGE_CASUAL);
+    if (next.ranked) drawBadgeDot(ctx, 25.5, 6.5, BADGE_RANKED);
     return canvas.toDataURL("image/png");
   }
 
