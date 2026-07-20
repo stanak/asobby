@@ -720,7 +720,7 @@ class TrayApp:
 
         self.icon = TrayIcon(
             "asobby",
-            icon=self._icons["idle"],
+            icon=self._icon_for("idle", badge=False),
             title=f"asobby v{__version__} - {self._status_text()}",
             menu=self._build_menu(),
         )
