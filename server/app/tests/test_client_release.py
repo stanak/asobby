@@ -29,6 +29,21 @@ def reset_release_cache(monkeypatch):
     monkeypatch.delenv("ASOBBY_CLIENT_LATEST_VERSION", raising=False)
 
 
+def test_update_info_for_current():
+    latest = {
+        "tag": "v0.4.32",
+        "version": "0.4.32",
+        "html_url": "https://example.com",
+    }
+    fresh = client_release.update_info_for_current(latest, "0.4.32")
+    assert fresh["update_available"] is False
+    old = client_release.update_info_for_current(latest, "0.4.30")
+    assert old["update_available"] is True
+    assert old["outdated"] is True
+    assert old["current"] == "0.4.30"
+    assert old["latest"] == "0.4.32"
+
+
 def test_parse_version():
     assert client_release.parse_version("v0.4.13") == (0, 4, 13)
     assert client_release.is_older("0.4.12", "0.4.13")
@@ -45,7 +60,22 @@ async def test_client_latest_from_env(monkeypatch):
     assert body["ok"] is True
     assert body["tag"] == "v0.9.0"
     assert body["version"] == "0.9.0"
+    assert body["update_available"] is False
+    assert body["outdated"] is False
     assert "download_url" in body
+
+
+@pytest.mark.asyncio
+async def test_client_latest_marks_outdated(monkeypatch):
+    monkeypatch.setenv("ASOBBY_CLIENT_LATEST_VERSION", "0.9.0")
+    async with app_client() as client:
+        res = await client.get("/client/latest?current=0.4.12")
+    body = res.json()
+    assert body["ok"] is True
+    assert body["current"] == "0.4.12"
+    assert body["latest"] == "0.9.0"
+    assert body["update_available"] is True
+    assert body["outdated"] is True
 
 
 @pytest.mark.asyncio

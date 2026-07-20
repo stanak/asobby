@@ -918,6 +918,7 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(geoip.init_geoip)
     await _hydrate_records_from_redis()
     await _hydrate_chat_from_redis()
+    await client_release.get_latest_release()
     cleanup_task = asyncio.create_task(cleanup_loop())
     guest_probe_task = asyncio.create_task(guest_probe_loop())
     try:
@@ -2066,12 +2067,21 @@ async def index() -> FileResponse:
 
 
 @app.get("/client/latest")
-async def client_latest() -> dict[str, Any]:
-    """Web / クライアント向け: GitHub 最新リリース情報 (キャッシュ)。"""
+async def client_latest(
+    request: Request,
+    current: str = "",
+) -> dict[str, Any]:
+    """Web / クライアント向け: 最新リリース情報 (キャッシュ)。
+
+    `current` クエリまたは `X-Asobby-Client-Version` ヘッダーで
+    実行中バージョンを渡すと `update_available` / `outdated` を付与する。
+    """
     info = await client_release.get_latest_release()
     if info is None:
         return {"ok": False}
-    return {"ok": True, **info}
+    cur = (current or request.headers.get("X-Asobby-Client-Version") or "").strip()
+    payload = client_release.update_info_for_current(info, cur)
+    return {"ok": True, **payload}
 
 
 @app.get("/myip")

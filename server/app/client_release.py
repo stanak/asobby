@@ -34,6 +34,22 @@ def is_older(current: str, latest: str) -> bool:
     return parse_version(current) < parse_version(latest)
 
 
+def update_info_for_current(
+    latest: dict[str, Any], current: str = ""
+) -> dict[str, Any]:
+    """Web / API 向け: 最新版情報に更新要否を付与する。"""
+    cur = (current or "").strip()
+    latest_version = str(latest.get("version") or latest.get("tag", "")).lstrip("vV")
+    outdated = bool(cur and latest_version and is_older(cur, latest_version))
+    return {
+        **latest,
+        "current": cur or None,
+        "latest": latest_version or None,
+        "update_available": outdated,
+        "outdated": outdated,
+    }
+
+
 def _release_from_env() -> Optional[dict[str, Any]]:
     raw = (os.environ.get("ASOBBY_CLIENT_LATEST_VERSION") or "").strip()
     if not raw:

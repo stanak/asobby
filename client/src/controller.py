@@ -1074,10 +1074,11 @@ class Controller:
                 "guest_profile": (st.rprof or ""),
             })
 
-        if not is_battle:
+        # KO 確定 (btl_mode==5) がキャラセレでも残る間は再報告しない。
+        # is_battle だけで _result_reported をリセットすると二重登録になる。
+        if st.btl_mode != 5:
             self._result_reported = False
-            if st.btl_mode != 5:
-                self._local_match_recorded = False
+            self._local_match_recorded = False
 
         # -----------------
         # リプレイ収集 (ホスト/クライアント両方)
