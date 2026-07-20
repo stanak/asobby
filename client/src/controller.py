@@ -47,6 +47,8 @@ STATS_SYNC_INTERVAL_SEC = 60.0
 STATS_SYNC_BATCH = 500
 STATS_SYNC_DEFER_SEC = 8.0
 
+LOBBY_POLL_INTERVAL_SEC = 15.0
+
 PENDING_REQUEST_TTL_SEC = 600  # 未返信リクエストの保持期限
 
 _POST_FIELD_NAMES = {f.name for f in fields(Post)}
@@ -64,6 +66,22 @@ def _parse_version(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in v.lstrip("v").split(".") if x.isdigit())
 
 
+def _ko_decided(st: DetectionState) -> bool:
+    return (
+        st.btl_mode == 5
+        and st.lwin is not None
+        and st.rwin is not None
+        and 0 <= st.lwin <= 2
+        and 0 <= st.rwin <= 2
+        and (st.lwin == 2 or st.rwin == 2)
+    )
+
+
+def _ko_detect_visible(*, is_battle: bool, mode: str) -> bool:
+    """KO 確定は対戦シーンの末尾、または直後のキャラセレでしか読めない。"""
+    return is_battle or mode == "charsel"
+
+
 @dataclass
 class Action:
     type: ActionType
@@ -78,6 +96,7 @@ class Controller:
         self.notify_sink = app.emit_notify
         self.request_sink = app.emit_request
         self.my_post_sink = app.emit_my_post
+        self.lobby_activity_sink = app.emit_lobby_activity
         self.btn_labels_sink = app.emit_btn_labels
         self.pause_ui_sink = app.emit_pause_state_changed
 
@@ -135,6 +154,7 @@ class Controller:
         auth = self.config_mgr.get_section("auth")
         self.api.session_token = str(auth.get("session_token", ""))
         self.discord_user: str = str(auth.get("username", "")) if self.api.session_token else ""
+        self._lobby_has_other_posts = False
         self._login_in_progress = False
         self._notified_login_required = False
         self._auto_login_attempted = False
@@ -154,7 +174,7 @@ class Controller:
         # ホスト自動検知 (自動投稿) の一時停止。0 なら停止していない
         self._detect_pause_until: float = 0.0
 
-        # 同一相手との連続対戦セッション戦績 (ホスト勝-クライアント勝)
+        # 同一相手との連続対戦の勝敗数 (ホスト勝-クライアント勝)
         self._session_score_key: str = ""
         self._session_host_wins: int = 0
         self._session_client_wins: int = 0
@@ -257,9 +277,15 @@ class Controller:
 
     def session_score_notify_mode(self) -> str:
         mode = str(
-            self.config_mgr.get_value("options", "session_score_notify_mode", "rules")
+            self.config_mgr.get_value("options", "session_score_notify_mode", "all")
         )
-        return mode if mode in ("all", "rules") else "rules"
+        return mode if mode in ("all", "rules") else "all"
+
+    def _effective_session_score_notify_mode(self) -> str:
+        mode = self.session_score_notify_mode()
+        if mode == "rules" and not self.session_score_notify_rules():
+            return "all"
+        return mode
 
     def set_session_score_notify_mode(self, mode: str) -> None:
         value = mode if mode in ("all", "rules") else "rules"
@@ -335,12 +361,9 @@ class Controller:
     def _should_notify_session_score(self, my_wins: int, my_losses: int) -> bool:
         if not self.session_score_notify_enabled():
             return False
-        if self.session_score_notify_mode() == "all":
+        if self._effective_session_score_notify_mode() == "all":
             return True
-        rules = self.session_score_notify_rules()
-        if not rules:
-            return True
-        for rule in rules:
+        for rule in self.session_score_notify_rules():
             if rule["kind"] == "win" and my_wins == rule["count"]:
                 return True
             if rule["kind"] == "loss" and my_losses == rule["count"]:
@@ -458,6 +481,38 @@ class Controller:
 
     def has_active_post(self) -> bool:
         return bool(self.my_post.id and self.owner_token)
+
+    def lobby_has_other_posts(self) -> bool:
+        return self._lobby_has_other_posts
+
+    def _is_other_lobby_post(self, post: dict) -> bool:
+        if self.my_post.id and post.get("id") == self.my_post.id:
+            return False
+        if self.discord_user and post.get("owner_name") == self.discord_user:
+            return False
+        return True
+
+    async def _refresh_lobby_badge(self) -> None:
+        if not self.is_logged_in():
+            new_val = False
+        else:
+            try:
+                posts = await self.api.list_posts()
+            except httpx.HTTPError:
+                return
+            new_val = any(self._is_other_lobby_post(p) for p in posts)
+        if new_val == self._lobby_has_other_posts:
+            return
+        self._lobby_has_other_posts = new_val
+        self.lobby_activity_sink()
+
+    async def lobby_poll_loop(self) -> None:
+        while not self._stop.is_set():
+            await self._refresh_lobby_badge()
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=LOBBY_POLL_INTERVAL_SEC)
+            except asyncio.TimeoutError:
+                pass
 
     # -----------------
     # ホスト自動検知の一時停止
@@ -682,6 +737,7 @@ class Controller:
                 self.discord_user = name
                 self.config_mgr.set_value("auth", "username", name)
             self.log_sink("info", f"Discord ログイン中: {self.discord_user}")
+            await self._refresh_lobby_badge()
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
                 self._clear_expired_session()
@@ -745,7 +801,6 @@ class Controller:
                 if self._pending_local_match is not None:
                     payload = self._pending_local_match
                     self._pending_local_match = None
-                    self._handle_session_score(payload)
                     asyncio.create_task(self._record_local_match(payload))
             except Exception as e:
                 self.log_sink("error", f"Detector loop error: {e}")
@@ -955,14 +1010,9 @@ class Controller:
         # -----------------
         if (
             st.net_side in ("host", "client")
-            and is_battle
             and not self._local_match_recorded
-            and st.btl_mode == 5
-            and st.lwin is not None
-            and st.rwin is not None
-            and 0 <= st.lwin <= 2
-            and 0 <= st.rwin <= 2
-            and (st.lwin == 2 or st.rwin == 2)
+            and _ko_decided(st)
+            and _ko_detect_visible(is_battle=is_battle, mode=st.mode)
         ):
             self._local_match_recorded = True
             my_side = "host" if st.net_side == "host" else "client"
@@ -974,7 +1024,7 @@ class Controller:
                 and self.my_post.post_type == "ranked"
             ):
                 ranked = 1
-            self._pending_local_match = {
+            payload = {
                 "my_side": my_side,
                 "winner": winner,
                 "host_char": st.lchar_id,
@@ -983,21 +1033,18 @@ class Controller:
                 "guest_profile": (st.rprof or ""),
                 "ranked": ranked,
             }
+            self._pending_local_match = payload
+            self._handle_session_score(payload)
 
         # -----------------
         # 0b) KO 確定 -> result (ホスト側のみ。クライアントとして凸った対戦は自分の募集に反映しない)
         # -----------------
         if (
             st.net_side == "host"
-            and is_battle
             and self.has_active_post()
             and not self._result_reported
-            and st.btl_mode == 5
-            and st.lwin is not None
-            and st.rwin is not None
-            and 0 <= st.lwin <= 2
-            and 0 <= st.rwin <= 2
-            and (st.lwin == 2 or st.rwin == 2)
+            and _ko_decided(st)
+            and _ko_detect_visible(is_battle=is_battle, mode=st.mode)
         ):
             self._result_reported = True
             winner = "host" if st.lwin == 2 else "guest"
@@ -1012,15 +1059,10 @@ class Controller:
         # クライアント側: ホストが asobby 非導入でも戦績を補完報告する
         if (
             st.net_side == "client"
-            and is_battle
             and not self._result_reported
             and self.is_logged_in()
-            and st.btl_mode == 5
-            and st.lwin is not None
-            and st.rwin is not None
-            and 0 <= st.lwin <= 2
-            and 0 <= st.rwin <= 2
-            and (st.lwin == 2 or st.rwin == 2)
+            and _ko_decided(st)
+            and _ko_detect_visible(is_battle=is_battle, mode=st.mode)
         ):
             self._result_reported = True
             winner = "host" if st.lwin == 2 else "guest"
@@ -1034,7 +1076,8 @@ class Controller:
 
         if not is_battle:
             self._result_reported = False
-            self._local_match_recorded = False
+            if st.btl_mode != 5:
+                self._local_match_recorded = False
 
         # -----------------
         # リプレイ収集 (ホスト/クライアント両方)
@@ -1048,12 +1091,8 @@ class Controller:
 
         if (
             is_net_battle
-            and st.btl_mode == 5
-            and st.lwin is not None
-            and st.rwin is not None
-            and 0 <= st.lwin <= 2
-            and 0 <= st.rwin <= 2
-            and (st.lwin == 2 or st.rwin == 2)
+            and _ko_decided(st)
+            and _ko_detect_visible(is_battle=is_battle, mode=st.mode)
         ):
             self._replay_pending = True
             self._replay_match_meta = {
@@ -1677,6 +1716,7 @@ class Controller:
                 self._auto_login_attempted = False
                 self.log_sink("info", f"Discord にログインしました: {self.discord_user}")
                 self.notify_sink(t("notify.discord_login_ok", name=self.discord_user))
+                await self._refresh_lobby_badge()
         except asyncio.TimeoutError:
             self.log_sink("warn", "Discord ログインがタイムアウトしました")
         except httpx.HTTPStatusError as e:
@@ -1713,6 +1753,8 @@ class Controller:
         self.api.session_token = ""
         self.discord_user = ""
         self.config_mgr.set_values("auth", session_token="", username="")
+        self._lobby_has_other_posts = False
+        self.lobby_activity_sink()
         # 明示的なログアウト後はブラウザ連携の自動ログインを走らせない
         self._auto_login_attempted = True
         self.log_sink("info", "Discord からログアウトしました")
@@ -1721,6 +1763,8 @@ class Controller:
         self.api.session_token = ""
         self.discord_user = ""
         self.config_mgr.set_values("auth", session_token="", username="")
+        self._lobby_has_other_posts = False
+        self.lobby_activity_sink()
         # 期限切れは自動再ログインの対象にする
         self._auto_login_attempted = False
         self.log_sink("warn", "Discord セッションが期限切れです。再ログインしてください")

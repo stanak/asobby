@@ -40,11 +40,17 @@ COLOR_RECRUIT = (46, 160, 67)    # 募集中
 COLOR_BATTLE = (219, 109, 40)    # 対戦中
 
 
-def make_icon_image(color: tuple[int, int, int]) -> Image.Image:
+def make_icon_image(
+    color: tuple[int, int, int], *, badge: bool = False
+) -> Image.Image:
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.ellipse((4, 4, 60, 60), fill=color + (255,))
     d.ellipse((20, 20, 44, 44), fill=(255, 255, 255, 230))
+    if badge:
+        # 他人の募集あり: 右上に青点 (状態色と独立して見える)
+        d.ellipse((42, 2, 58, 18), fill=(255, 255, 255, 255))
+        d.ellipse((44, 4, 56, 16), fill=(90, 158, 255, 255))
     return img
 
 
@@ -66,11 +72,7 @@ class TrayApp:
         self.loop = asyncio.new_event_loop()
         self.controller = Controller(self)
 
-        self._icons = {
-            "idle": make_icon_image(COLOR_IDLE),
-            "recruit": make_icon_image(COLOR_RECRUIT),
-            "battle": make_icon_image(COLOR_BATTLE),
-        }
+        self._icon_cache: dict[tuple[str, bool], Image.Image] = {}
         self._pause_tick_after_id: str | None = None
 
     # -----------------
@@ -117,6 +119,9 @@ class TrayApp:
         self.post = post
         self._refresh_icon()
 
+    def emit_lobby_activity(self) -> None:
+        self._on_tk(self._refresh_icon)
+
     def emit_pause_state_changed(self) -> None:
         self._on_tk(self._schedule_pause_ui_tick)
 
@@ -155,6 +160,19 @@ class TrayApp:
     def _post_type_label(self) -> str:
         return post_type_label(self.post.post_type)
 
+    def _icon_for(self, key: str, *, badge: bool) -> Image.Image:
+        cache_key = (key, badge)
+        if cache_key not in self._icon_cache:
+            colors = {
+                "idle": COLOR_IDLE,
+                "recruit": COLOR_RECRUIT,
+                "battle": COLOR_BATTLE,
+            }
+            self._icon_cache[cache_key] = make_icon_image(
+                colors[key], badge=badge
+            )
+        return self._icon_cache[cache_key]
+
     def _status_text(self) -> str:
         if self.controller.detect_error == "access_denied":
             return t("tray.detect_denied")
@@ -162,15 +180,20 @@ class TrayApp:
             remaining = self.controller.detect_pause_remaining_label()
             return t("tray.detect_paused", remaining=remaining)
         if not self.post.id:
-            return t("tray.idle")
-        mode = self._post_type_label()
-        if self.post.net_status == NET_BATTLE:
-            return t(
-                "tray.battle",
-                mode=mode,
-                detail=self.post.match_status or self.post.addr,
-            )
-        return t("tray.recruiting", mode=mode, addr=self.post.addr)
+            base = t("tray.idle")
+        else:
+            mode = self._post_type_label()
+            if self.post.net_status == NET_BATTLE:
+                base = t(
+                    "tray.battle",
+                    mode=mode,
+                    detail=self.post.match_status or self.post.addr,
+                )
+            else:
+                base = t("tray.recruiting", mode=mode, addr=self.post.addr)
+        if self.controller.lobby_has_other_posts():
+            return base + f" · {t('tray.lobby_recruitment')}"
+        return base
 
     def _refresh_icon(self) -> None:
         if not self.icon:
@@ -181,7 +204,8 @@ class TrayApp:
             key = "battle"
         else:
             key = "recruit"
-        self.icon.icon = self._icons[key]
+        badge = self.controller.lobby_has_other_posts()
+        self.icon.icon = self._icon_for(key, badge=badge)
         self.icon.title = f"asobby v{__version__} - {self._status_text()}"
         self.icon.update_menu()
 
@@ -264,7 +288,7 @@ class TrayApp:
                 bool(result.get("session_score_notify_enabled", False))
             )
             self.controller.set_session_score_notify_mode(
-                str(result.get("session_score_notify_mode", "rules"))
+                str(result.get("session_score_notify_mode", "all"))
             )
             self.controller.set_session_score_notify_rules(
                 result.get("session_score_notify_rules") or []
@@ -678,6 +702,7 @@ class TrayApp:
             await self.controller.sync_initial()
             asyncio.ensure_future(self.controller.update_check_loop())
             asyncio.ensure_future(self.controller.stats_sync_loop())
+            asyncio.ensure_future(self.controller.lobby_poll_loop())
             asyncio.ensure_future(self.controller.detector_loop())
             asyncio.ensure_future(self.controller.api_loop())
 

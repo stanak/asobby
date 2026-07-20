@@ -11,7 +11,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, SmallInteger, String, and_, exists, func, or_, select, union
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, SmallInteger, String, and_, exists, func, or_, select, union
 from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -60,11 +60,50 @@ class User(Base):
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    settings: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 
 
 PH_CHAR_IDS: tuple[int, ...] = tuple(range(21))  # 0–19 + Random (20)
 DEFAULT_TS_MU = 25.0
 DEFAULT_TS_SIGMA = 8.333333333333334
+
+DEFAULT_FAVICON_NOTIFY: dict[str, Any] = {
+    "ranked_enabled": True,
+    "casual_enabled": True,
+    "ranked_same_band_only": True,
+    "max_ping_ms": 60,
+    "require_ping": False,
+    "exclude_in_battle": True,
+}
+
+
+def normalize_favicon_notify(raw: Any) -> dict[str, Any]:
+    src = raw if isinstance(raw, dict) else {}
+    out = dict(DEFAULT_FAVICON_NOTIFY)
+    for key in DEFAULT_FAVICON_NOTIFY:
+        if key not in src:
+            continue
+        val = src[key]
+        if key == "max_ping_ms":
+            try:
+                out[key] = max(1, min(999, int(val)))
+            except (TypeError, ValueError):
+                pass
+        elif key in (
+            "ranked_enabled",
+            "casual_enabled",
+            "ranked_same_band_only",
+            "require_ping",
+            "exclude_in_battle",
+        ):
+            out[key] = bool(val)
+    return out
+
+
+def normalize_user_settings(raw: Any) -> dict[str, Any]:
+    src = raw if isinstance(raw, dict) else {}
+    favicon_raw = src.get("favicon_notify")
+    return {"favicon_notify": normalize_favicon_notify(favicon_raw)}
 
 
 class UserCharRating(Base):
@@ -266,6 +305,32 @@ async def touch_user(user_id: str, ip: str) -> None:
 async def get_user(user_id: str) -> Optional[User]:
     async with session() as s:
         return await s.get(User, user_id)
+
+
+async def get_user_settings(user_id: str) -> dict[str, Any]:
+    async with session() as s:
+        user = await s.get(User, user_id)
+        if user is None:
+            return normalize_user_settings({})
+        return normalize_user_settings(user.settings or {})
+
+
+async def update_user_settings(user_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    async with session() as s:
+        user = await s.get(User, user_id)
+        if user is None:
+            raise ValueError("user not found")
+        current = normalize_user_settings(user.settings or {})
+        favicon_patch = patch.get("favicon_notify")
+        if isinstance(favicon_patch, dict):
+            merged = dict(current["favicon_notify"])
+            for key in DEFAULT_FAVICON_NOTIFY:
+                if key in favicon_patch:
+                    merged[key] = favicon_patch[key]
+            current["favicon_notify"] = normalize_favicon_notify(merged)
+        user.settings = current
+        await s.commit()
+        return current
 
 
 async def find_user_by_ip(ip: str) -> Optional[User]:

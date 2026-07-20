@@ -802,7 +802,8 @@ def read_detection_state() -> DetectionState:
         rcid = _read_u32le(h, RCHARID)
 
         btl_mode = lwin = rwin = None
-        if scene_id in NET_BATTLE_SCENES:
+        # KO 確定 (btl_mode==5) は対戦→キャラセレ遷移の短い間だけ観測できる。
+        if scene_id in NET_BATTLE_SCENES or scene_id in NET_CHARSEL_SCENES:
             btl_mode, lwin, rwin = _read_battle_result(h, giu)
 
         raw = (

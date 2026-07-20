@@ -110,7 +110,7 @@ def refresh_ranked_active(rec: PostRecord) -> None:
         rec.post, rec.guest_user_id, rec.guest_rank
     )
 
-# 作成レート制限（IP 単位）
+NET_BATTLE = 4  # hisoutensoku net_status: 対戦中
 CREATE_MIN_INTERVAL_SEC = 2.0
 MAX_ACTIVE_POSTS_PER_IP = 2
 
@@ -391,6 +391,19 @@ class ClientExchangeIn(BaseModel):
 
 class ChooseRankIn(BaseModel):
     rank: Literal["easy", "normal", "ex", "hard", "luna"]
+
+
+class FaviconNotifyIn(BaseModel):
+    ranked_enabled: Optional[bool] = None
+    casual_enabled: Optional[bool] = None
+    ranked_same_band_only: Optional[bool] = None
+    max_ping_ms: Optional[int] = Field(default=None, ge=1, le=999)
+    require_ping: Optional[bool] = None
+    exclude_in_battle: Optional[bool] = None
+
+
+class UserSettingsPatchIn(BaseModel):
+    favicon_notify: Optional[FaviconNotifyIn] = None
 
 
 class PostMessageIn(BaseModel):
@@ -974,6 +987,85 @@ def sorted_public_posts() -> list[dict[str, Any]]:
     return [asdict(r.post) for r in records]
 
 
+def user_has_other_posts(user_id: str) -> bool:
+    if not user_id:
+        return False
+    return any(rec.owner_user_id != user_id for rec in RECORDS.values())
+
+
+def is_other_post(rec: PostRecord, user_id: str, user_name: str) -> bool:
+    if user_id and rec.owner_user_id == user_id:
+        return False
+    if user_name and rec.post.owner_name == user_name:
+        return False
+    return True
+
+
+def ping_passes_notify(prefs: dict[str, Any], ping_ms: Optional[int]) -> bool:
+    max_ping = int(prefs.get("max_ping_ms", 60))
+    if prefs.get("require_ping"):
+        return ping_ms is not None and ping_ms <= max_ping
+    if ping_ms is not None and ping_ms > max_ping:
+        return False
+    return True
+
+
+def classify_post_notify(
+    post: Post,
+    *,
+    prefs: dict[str, Any],
+    viewer_rank: str,
+    ping_ms: Optional[int] = None,
+) -> tuple[bool, bool]:
+    """Returns (ranked_notify, casual_notify) for a single post."""
+    if prefs.get("exclude_in_battle") and (
+        post.guest_connected or post.net_status == NET_BATTLE
+    ):
+        return False, False
+    if not ping_passes_notify(prefs, ping_ms):
+        return False, False
+
+    post_type = post.post_type or "casual"
+    ranked = False
+    casual = False
+    if post_type == "ranked":
+        if prefs.get("ranked_enabled", True):
+            if prefs.get("ranked_same_band_only", True):
+                band = (viewer_rank or "").lower()
+                if band and (post.rank or "easy").lower() == band:
+                    ranked = True
+            else:
+                ranked = True
+    elif prefs.get("casual_enabled", True):
+        casual = True
+    return ranked, casual
+
+
+def compute_favicon_badges(
+    user_id: str,
+    user_name: str,
+    viewer_rank: str,
+    prefs: dict[str, Any],
+    ping_by_post_id: Optional[dict[str, Optional[int]]] = None,
+) -> dict[str, bool]:
+    ranked_any = False
+    casual_any = False
+    pings = ping_by_post_id or {}
+    for rec in RECORDS.values():
+        if not is_other_post(rec, user_id, user_name):
+            continue
+        ping_ms = pings.get(rec.post.id)
+        ranked, casual = classify_post_notify(
+            rec.post,
+            prefs=prefs,
+            viewer_rank=viewer_rank,
+            ping_ms=ping_ms,
+        )
+        ranked_any = ranked_any or ranked
+        casual_any = casual_any or casual
+    return {"ranked": ranked_any, "casual": casual_any}
+
+
 def get_record_or_raise(post_id: str, owner_token: str) -> PostRecord:
     rec = RECORDS.get(post_id)
     if rec is None:
@@ -1010,6 +1102,16 @@ async def stats_page() -> FileResponse:
 @app.get("/guide")
 async def guide_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "guide.html")
+
+
+@app.get("/settings")
+async def settings_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "settings.html")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon_ico() -> FileResponse:
+    return FileResponse(STATIC_DIR / "favicon.ico", media_type="image/x-icon")
 
 
 def _match_is_win(match: db.Match, user_id: str) -> bool:
@@ -2210,7 +2312,46 @@ async def auth_me(request: Request) -> dict[str, Any]:
     sess = await resolve_session(request)
     if sess is None:
         raise HTTPException(status_code=401, detail="invalid or expired session")
-    return sess
+    settings = await db.get_user_settings(sess["id"])
+    prefs = settings["favicon_notify"]
+    badges = compute_favicon_badges(
+        sess["id"],
+        sess.get("name") or "",
+        sess.get("rank") or "",
+        prefs,
+    )
+    return {
+        **sess,
+        "settings": settings,
+        "favicon_badges": badges,
+        "has_other_posts": badges["ranked"] or badges["casual"],
+    }
+
+
+@app.get("/user/settings")
+async def get_user_settings(request: Request) -> dict[str, Any]:
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="login required")
+    return await db.get_user_settings(sess["id"])
+
+
+@app.patch("/user/settings")
+async def patch_user_settings(
+    body: UserSettingsPatchIn, request: Request
+) -> dict[str, Any]:
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="login required")
+    if not db.is_configured():
+        raise HTTPException(status_code=503, detail="database not configured")
+    patch: dict[str, Any] = {}
+    if body.favicon_notify is not None:
+        patch["favicon_notify"] = body.favicon_notify.model_dump(exclude_none=True)
+    try:
+        return await db.update_user_settings(sess["id"], patch)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="user not found")
 
 
 @app.get("/auth/client/handoff")

@@ -4,8 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title data-i18n="lobby.pageTitle">asobby - 非想天則ロビー</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" data-asobby="1">
+<link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <script src="/static/i18n.js"></script>
 <script src="/static/client-update.js"></script>
+<script src="/static/favicon-notify.js"></script>
+<script src="/static/favicon-badge.js"></script>
 <script src="/static/player-suggest.js"></script>
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-RJSLH3FRBR"></script>
@@ -676,6 +681,7 @@
     <a href="/stats" data-i18n="nav.stats">戦績</a>
     <a href="/replays" data-i18n="nav.replays">リプレイ検索</a>
     <a href="/guide" data-i18n="nav.guide">使い方</a>
+    <a href="/settings" data-i18n="nav.settings">設定</a>
     <a id="nav-client-dl" href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
     <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
     <button type="button" id="lang-toggle" class="lang-btn"></button>
@@ -822,6 +828,7 @@ let chatTabBtns = [];
 let clientPingAvailable = false;
 let localNetworkPermission = "unknown";
 let pingByPostId = new Map();
+let faviconNotifySettings = { ...AsobbyNotify.DEFAULT_FAVICON_NOTIFY };
 let pingInFlight = false;
 let pingTimer = null;
 const pingReportedPosts = new Set();
@@ -942,6 +949,30 @@ function setMessageCooldown(postId, sec) {
 
 function isOwnPost(p) {
   return loggedIn && myName && p.owner_name === myName;
+}
+
+function faviconNotifyContext() {
+  return {
+    loggedIn,
+    myUserId,
+    myName,
+    myRank,
+  };
+}
+
+function updateFaviconBadge() {
+  if (!window.AsobbyFavicon || !window.AsobbyNotify) return;
+  if (!loggedIn) {
+    AsobbyFavicon.setBadges({ ranked: false, casual: false });
+    return;
+  }
+  const badges = AsobbyNotify.evaluateBadges(
+    [...posts.values()],
+    faviconNotifySettings,
+    faviconNotifyContext(),
+    pingByPostId,
+  );
+  AsobbyFavicon.setBadges(badges);
 }
 
 async function sendMessage(postId, type, statusEl, btn) {
@@ -1404,6 +1435,7 @@ function fillTable(tbody, list) {
 function render() {
   loginGateEl.hidden = loggedIn;
   lobbyBodyEl.hidden = !loggedIn;
+  updateFaviconBadge();
   if (!loggedIn) return;
   if (openPopoverId) {
     const openPost = posts.get(openPopoverId);
@@ -1510,6 +1542,11 @@ function showLoggedIn(user) {
   myUserId = user.id || null;
   myName = user.name || "";
   myRank = (user.rank || "normal").toLowerCase();
+  if (user.settings && window.AsobbyNotify) {
+    faviconNotifySettings = AsobbyNotify.normalizeFaviconNotify(
+      user.settings.favicon_notify,
+    );
+  }
   setupRankChoiceBanner(user);
   authInfoEl.hidden = false;
   authInfoEl.textContent = "";
@@ -1864,8 +1901,24 @@ async function initAuth() {
   // クライアント経由でログインが完了したらリロードなしで反映する
   authPollTimer = setInterval(checkAuth, 10000);
   document.addEventListener("visibilitychange", () => {
-    if (!loggedIn && document.visibilityState === "visible") checkAuth();
+    if (document.visibilityState !== "visible") return;
+    if (!loggedIn) {
+      checkAuth();
+      return;
+    }
+    void reloadFaviconSettings();
   });
+}
+
+async function reloadFaviconSettings() {
+  if (!loggedIn || !window.AsobbyNotify) return;
+  try {
+    const settings = await AsobbyNotify.fetchUserSettings();
+    faviconNotifySettings = settings.favicon_notify;
+    updateFaviconBadge();
+  } catch {
+    /* keep current */
+  }
 }
 
 function connect() {
@@ -1924,6 +1977,7 @@ function connect() {
 applyDocumentI18n();
 initLangToggle();
 initOnlinePresence();
+if (window.AsobbyFavicon) AsobbyFavicon.setBadges({ ranked: false, casual: false });
 if (pingBannerRetryEl) {
   pingBannerRetryEl.addEventListener("click", () => {
     void retryPingClientConnection();

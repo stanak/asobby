@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="settings.pageTitle">asobby - 設定</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" data-asobby="1">
+<link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<script src="/static/i18n.js"></script>
+<script src="/static/client-update.js"></script>
+<script src="/static/favicon-notify.js"></script>
+<script src="/static/favicon-badge.js"></script>
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-RJSLH3FRBR"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-RJSLH3FRBR');
+</script>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1c2129;
+    --border: #2c3440;
+    --text: #d8dee9;
+    --muted: #7b8794;
+    --accent: #6ab0f3;
+    --ok: #57c07d;
+    --err: #e06c75;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 12px;
+    padding: 16px 20px 8px;
+  }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: 1px; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header nav { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-left: auto; }
+  header nav a { color: var(--accent); text-decoration: none; }
+  header nav a:hover { text-decoration: underline; }
+  header nav .lang-btn {
+    padding: 2px 8px;
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  header nav .lang-btn:hover { border-color: var(--accent); }
+  main { max-width: 640px; margin: 0 auto; padding: 8px 20px 40px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .panel h2 { margin: 0 0 8px; font-size: 17px; }
+  .panel p.hint { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+  .badge-legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .badge-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.8);
+  }
+  .dot.ranked { background: #5a9eff; }
+  .dot.casual { background: #57c07d; }
+  label.row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 12px 0;
+    cursor: pointer;
+  }
+  label.row input[type="checkbox"] { margin-top: 3px; }
+  .field { margin: 16px 0; }
+  .field label { display: block; margin-bottom: 6px; font-size: 14px; }
+  .field input[type="number"] {
+    width: 100px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 15px;
+  }
+  .actions { display: flex; align-items: center; gap: 12px; margin-top: 20px; }
+  button.primary {
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #0d1117;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.primary:disabled { opacity: 0.5; cursor: default; }
+  #status { font-size: 13px; color: var(--muted); }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--err); }
+  #gate p { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1 data-i18n="settings.title">asobby 設定</h1>
+  <span class="sub" data-i18n="settings.subtitle">通知と表示</span>
+  <nav>
+    <a href="/" data-i18n="nav.lobby">ロビー</a>
+    <a href="/stats" data-i18n="nav.stats">戦績</a>
+    <a href="/replays" data-i18n="nav.replays">リプレイ検索</a>
+    <a href="/guide" data-i18n="nav.guide">使い方</a>
+    <a id="nav-client-dl" href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
+    <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
+    <button type="button" id="lang-toggle" class="lang-btn"></button>
+  </nav>
+</header>
+
+<main>
+  <div id="loading" data-i18n="common.loading">読み込み中...</div>
+  <div id="gate" hidden>
+    <p data-i18n="settings.gateLine1">設定を変更するには Discord ログインが必要です</p>
+    <p data-i18n="common.loginGateClientHint">asobby クライアント（トレイメニュー「Discord でログイン」）からログインしてください</p>
+  </div>
+  <form id="form" hidden>
+    <div class="panel">
+      <h2 data-i18n="settings.faviconSection">タブ favicon 通知</h2>
+      <p class="hint" data-i18n="settings.faviconHint">ロビーに条件を満たす他人の募集があるとき、ブラウザタブのアイコンに色付きの点が表示されます。Ping 条件はデスクトップクライアント起動時のみ有効です。</p>
+      <div class="badge-legend">
+        <span><i class="dot ranked" aria-hidden="true"></i><span data-i18n="settings.legendRanked">青 — ランクマ</span></span>
+        <span><i class="dot casual" aria-hidden="true"></i><span data-i18n="settings.legendCasual">緑 — カジュアル</span></span>
+      </div>
+
+      <label class="row">
+        <input type="checkbox" id="ranked_enabled" name="ranked_enabled">
+        <span data-i18n="settings.rankedEnabled">ランクマ募集を通知する</span>
+      </label>
+      <label class="row">
+        <input type="checkbox" id="ranked_same_band_only" name="ranked_same_band_only">
+        <span data-i18n="settings.rankedSameBand">自分と同じランク帯のランクマのみ</span>
+      </label>
+      <label class="row">
+        <input type="checkbox" id="casual_enabled" name="casual_enabled">
+        <span data-i18n="settings.casualEnabled">カジュアル募集を通知する</span>
+      </label>
+      <label class="row">
+        <input type="checkbox" id="exclude_in_battle" name="exclude_in_battle">
+        <span data-i18n="settings.excludeInBattle">対戦中の募集は除外する</span>
+      </label>
+
+      <div class="field">
+        <label for="max_ping_ms" data-i18n="settings.maxPingMs">Ping 上限 (ms)</label>
+        <input type="number" id="max_ping_ms" name="max_ping_ms" min="1" max="999" step="1">
+      </div>
+      <label class="row">
+        <input type="checkbox" id="require_ping" name="require_ping">
+        <span data-i18n="settings.requirePing">Ping が測れない募集は通知しない</span>
+      </label>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="primary" id="save-btn" data-i18n="settings.save">保存</button>
+      <span id="status" aria-live="polite"></span>
+    </div>
+  </form>
+</main>
+
+<script>
+const loadingEl = document.getElementById("loading");
+const gateEl = document.getElementById("gate");
+const formEl = document.getElementById("form");
+const statusEl = document.getElementById("status");
+const saveBtn = document.getElementById("save-btn");
+
+const fields = [
+  "ranked_enabled",
+  "ranked_same_band_only",
+  "casual_enabled",
+  "exclude_in_battle",
+  "require_ping",
+];
+
+function readForm() {
+  return AsobbyNotify.normalizeFaviconNotify({
+    ranked_enabled: document.getElementById("ranked_enabled").checked,
+    ranked_same_band_only: document.getElementById("ranked_same_band_only").checked,
+    casual_enabled: document.getElementById("casual_enabled").checked,
+    exclude_in_battle: document.getElementById("exclude_in_battle").checked,
+    require_ping: document.getElementById("require_ping").checked,
+    max_ping_ms: document.getElementById("max_ping_ms").value,
+  });
+}
+
+function fillForm(prefs) {
+  const normalized = AsobbyNotify.normalizeFaviconNotify(prefs);
+  for (const name of fields) {
+    document.getElementById(name).checked = !!normalized[name];
+  }
+  document.getElementById("max_ping_ms").value = normalized.max_ping_ms;
+}
+
+function setStatus(text, kind) {
+  statusEl.textContent = text || "";
+  statusEl.className = kind || "";
+}
+
+async function loadSettings() {
+  const res = await fetch("/user/settings", { credentials: "same-origin" });
+  if (res.status === 401) {
+    loadingEl.hidden = true;
+    gateEl.hidden = false;
+    return;
+  }
+  if (!res.ok) throw new Error("load failed");
+  const data = await res.json();
+  fillForm(data.favicon_notify);
+  loadingEl.hidden = true;
+  formEl.hidden = false;
+}
+
+formEl.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  saveBtn.disabled = true;
+  setStatus(t("settings.saving"), "");
+  try {
+    const res = await fetch("/user/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ favicon_notify: readForm() }),
+    });
+    if (!res.ok) throw new Error("save failed");
+    const data = await res.json();
+    fillForm(data.favicon_notify);
+    setStatus(t("settings.saved"), "ok");
+  } catch {
+    setStatus(t("settings.saveFailed"), "err");
+  } finally {
+    saveBtn.disabled = false;
+  }
+});
+
+applyDocumentI18n();
+initLangToggle();
+if (window.AsobbyFavicon) AsobbyFavicon.initFromAuth();
+loadSettings().catch(() => {
+  loadingEl.hidden = true;
+  gateEl.hidden = false;
+});
+</script>
+</body>
+</html>

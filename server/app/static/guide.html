@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title data-i18n="guide.pageTitle">asobby - 使い方</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" data-asobby="1">
+<link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-RJSLH3FRBR"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
@@ -13,6 +16,8 @@
 </script>
 <script src="/static/i18n.js"></script>
 <script src="/static/client-update.js"></script>
+<script src="/static/favicon-notify.js"></script>
+<script src="/static/favicon-badge.js"></script>
 <style>
   :root {
     --bg: #14171c;
@@ -183,6 +188,7 @@
     <a href="/" data-i18n="nav.lobby">ロビー</a>
     <a href="/stats" data-i18n="nav.stats">戦績</a>
     <a href="/replays" data-i18n="nav.replays">リプレイ検索</a>
+    <a href="/settings" data-i18n="nav.settings">設定</a>
     <a id="nav-client-dl" href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
     <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
     <button type="button" id="lang-toggle" class="lang-btn"></button>
@@ -404,6 +410,7 @@
 </main>
 <script>
 applyDocumentI18n();
+if (window.AsobbyFavicon) AsobbyFavicon.initFromAuth();
 initLangToggle();
 initOnlinePresence();
 </script>

@@ -30,6 +30,11 @@ class ApiClient:
         r.raise_for_status()
         return r.json()["ip"]
 
+    async def list_posts(self) -> list[dict]:
+        r = await self.http.get(f"{self.base}/posts", headers=self._request_headers())
+        r.raise_for_status()
+        return r.json()
+
     async def create(self, payload: dict) -> dict:
         """投稿を新規作成する。返り値は {"post": {...}, "owner_token": "..."}"""
         r = await self.http.post(

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from i18n import post_type_label, post_type_options, t
 
-__version__ = "0.4.30"
+__version__ = "0.4.31"
 
 RANK_LABEL = {
     "easy": "E",
@@ -231,7 +231,7 @@ def edit_post_settings(parent, current: dict, on_ok) -> None:
 
 
 def edit_session_score_notify_settings(parent, current: dict, on_ok) -> None:
-    """セッション戦績通知の設定ダイアログ。tk メインスレッドで呼ぶこと。"""
+    """勝敗数通知の設定ダイアログ。tk メインスレッドで呼ぶこと。"""
     import tkinter as tk
     from tkinter import ttk
 
@@ -258,7 +258,7 @@ def edit_session_score_notify_settings(parent, current: dict, on_ok) -> None:
     }
     label_by_mode = mode_labels
     mode_by_label = {label: key for key, label in mode_labels.items()}
-    initial_mode = str(current.get("session_score_notify_mode", "rules"))
+    initial_mode = str(current.get("session_score_notify_mode", "all"))
     if initial_mode not in ("all", "rules"):
         initial_mode = "rules"
     mode_var = tk.StringVar(value=mode_labels[initial_mode])
