@@ -21,6 +21,7 @@ from services import Post, NET_ALIVE, NET_BATTLE, __version__, format_system_ran
 from i18n import bind_locale, get_lang, post_type_label, t
 from config_manager import ConfigManager
 from tool_manager import ToolManager
+from host_probe import probe_rtt_ms
 from local_api import start_local_api_server, set_ping_probe_guard, LOCAL_API_PORT
 
 
@@ -48,6 +49,8 @@ STATS_SYNC_BATCH = 500
 STATS_SYNC_DEFER_SEC = 8.0
 
 LOBBY_POLL_INTERVAL_SEC = 15.0
+HOST_SELF_CHECK_INTERVAL_SEC = 20  # 投稿停止中のローカル到達性チェック間隔
+PAUSE_UNTIL_RESUME = float("inf")  # pause_auto_detect() 用の無期限 sentinel
 
 PENDING_REQUEST_TTL_SEC = 600  # 未返信リクエストの保持期限
 
@@ -99,6 +102,7 @@ class Controller:
         self.lobby_activity_sink = app.emit_lobby_activity
         self.btn_labels_sink = app.emit_btn_labels
         self.pause_ui_sink = app.emit_pause_state_changed
+        self.detect_ui_sink = app.emit_detect_ui_changed
 
         self.config_mgr = ConfigManager()
         bind_locale(
@@ -171,8 +175,15 @@ class Controller:
 
         self.pending_requests: list[PendingRequest] = []
 
-        # ホスト自動検知 (自動投稿) の一時停止。0 なら停止していない
+        # ホスト自動投稿の一時停止。0 なら停止していない (検知自体は止めない)
         self._detect_pause_until: float = 0.0
+        self._last_host_self_check_ts: float = 0.0
+        self._host_unreachable_notified: bool = False
+
+        # トレイ表示用 (検知状態。投稿の有無とは独立)
+        self._tray_icon_key: str = "idle"
+        self._tray_host_addr: str = ""
+        self._tray_match_detail: str = ""
 
         # 同一相手との連続対戦の勝敗数 (ホスト勝-クライアント勝)
         self._session_score_key: str = ""
@@ -515,9 +526,11 @@ class Controller:
                 pass
 
     # -----------------
-    # ホスト自動検知の一時停止
+    # ホスト自動投稿の一時停止
     # -----------------
     def _pause_duration_label(self, seconds: float) -> str:
+        if seconds == PAUSE_UNTIL_RESUME:
+            return t("pause.until_resume")
         minutes = int(seconds / 60)
         if minutes == 30:
             return t("pause.30m")
@@ -530,19 +543,122 @@ class Controller:
         return t("notify.pause_minutes", min=minutes)
 
     def pause_auto_detect(self, seconds: float) -> None:
-        """ホスト自動検知 (自動投稿) を指定秒数だけ止める。既存の募集は閉じる。"""
-        self._detect_pause_until = time.time() + seconds
+        """asobby.com への自動投稿だけを止める。検知・到達性チェックは継続。"""
+        self._host_unreachable_notified = False
+        if seconds == PAUSE_UNTIL_RESUME:
+            self._detect_pause_until = PAUSE_UNTIL_RESUME
+        else:
+            self._detect_pause_until = time.time() + seconds
         label = self._pause_duration_label(seconds)
-        self.log_sink("info", f"Auto detect paused for {label}")
+        self.log_sink("info", f"Auto posting paused for {label}")
         self.notify_sink(t("notify.pause", label=label))
         self.pause_ui_sink()
 
     def resume_auto_detect(self) -> None:
         if self._detect_pause_until:
             self._detect_pause_until = 0.0
-            self.log_sink("info", "Auto detect resumed manually")
+            self._host_unreachable_notified = False
+            self.log_sink("info", "Auto posting resumed manually")
             self.notify_sink(t("notify.pause_resumed"))
             self.pause_ui_sink()
+
+    def tray_icon_key(self) -> str:
+        return self._tray_icon_key
+
+    def tray_status_text(self) -> str:
+        if self.detect_error == "access_denied":
+            return t("tray.detect_denied")
+        mode = post_type_label(self.my_post.post_type)
+        if self._tray_icon_key == "battle":
+            base = t(
+                "tray.battle",
+                mode=mode,
+                detail=self._tray_match_detail,
+            )
+        elif self._tray_icon_key == "recruit":
+            base = t("tray.recruiting", mode=mode, addr=self._tray_host_addr)
+        else:
+            base = t("tray.idle")
+        extras: list[str] = []
+        if self.is_detect_paused():
+            extras.append(
+                t("tray.post_paused", remaining=self.detect_pause_remaining_label())
+            )
+        if self._lobby_has_other_posts:
+            extras.append(t("tray.lobby_recruitment"))
+        if extras:
+            return base + " · " + " · ".join(extras)
+        return base
+
+    def _update_tray_ui_state_idle(self) -> None:
+        if (
+            self._tray_icon_key == "idle"
+            and not self._tray_host_addr
+            and not self._tray_match_detail
+        ):
+            return
+        self._tray_icon_key = "idle"
+        self._tray_host_addr = ""
+        self._tray_match_detail = ""
+        self.detect_ui_sink()
+
+    def _update_tray_ui_state(
+        self,
+        *,
+        is_recruiting: bool,
+        is_battle: bool,
+        st: DetectionState,
+        my_ip: str,
+        match_status: str,
+    ) -> None:
+        if is_battle and st.net_side == "host":
+            key = "battle"
+            addr = self.my_post.addr or self._current_addr(my_ip, st.port) or ""
+            detail = match_status or addr
+        elif is_recruiting and st.net_side != "client":
+            key = "recruit"
+            addr = self._current_addr(my_ip, st.port) or ""
+            detail = ""
+        else:
+            key = "idle"
+            addr = ""
+            detail = ""
+
+        changed = (
+            key != self._tray_icon_key
+            or addr != self._tray_host_addr
+            or detail != self._tray_match_detail
+        )
+        self._tray_icon_key = key
+        self._tray_host_addr = addr
+        self._tray_match_detail = detail
+        if changed:
+            self.detect_ui_sink()
+
+    async def _self_check_host_when_paused(self, addr: str, autopunch: bool) -> None:
+        if not self.is_detect_paused():
+            return
+        try:
+            host, port_s = addr.rsplit(":", 1)
+            port = int(port_s)
+        except ValueError:
+            return
+        rtt = await asyncio.to_thread(
+            probe_rtt_ms, host, port, autopunch=autopunch
+        )
+        if not self.is_detect_paused():
+            return
+        if rtt is None:
+            if not self._host_unreachable_notified:
+                self._host_unreachable_notified = True
+                self.log_sink(
+                    "error",
+                    "Host not reachable while posting paused. "
+                    "Please open the port or start autopunch.",
+                )
+                self.notify_sink(t("notify.post_failed"))
+        else:
+            self._host_unreachable_notified = False
 
     def _track_detect_error(self, err: str) -> None:
         """検知異常の遷移をログ・通知し、トレイ表示を更新する。"""
@@ -593,13 +709,20 @@ class Controller:
     def is_detect_paused(self) -> bool:
         return time.time() < self._detect_pause_until
 
+    def is_pause_indefinite(self) -> bool:
+        return self._detect_pause_until == PAUSE_UNTIL_RESUME
+
     def detect_pause_remaining_min(self) -> int:
         """残り停止時間 (分、切り上げ)。停止していなければ 0。"""
+        if self.is_pause_indefinite():
+            return 0
         rest = self._detect_pause_until - time.time()
         return max(0, int(rest // 60) + (1 if rest % 60 > 0 else 0)) if rest > 0 else 0
 
     def detect_pause_remaining_label(self) -> str:
         """UI 用の残り時間文字列 (分・時間単位、切り上げ)。"""
+        if self.is_pause_indefinite():
+            return t("pause.until_resume")
         minutes = self.detect_pause_remaining_min()
         if minutes <= 0:
             return t("pause.remaining_m", min=0)
@@ -940,10 +1063,15 @@ class Controller:
     def on_detect(self, st: DetectionState, *, my_ip: str) -> Optional[Action]:
         now = time.time()
 
-        # 一時停止が自然に切れたら一度だけ通知する
-        if self._detect_pause_until and now >= self._detect_pause_until:
+        # 一時停止が自然に切れたら一度だけ通知する (無期限停止は除く)
+        if (
+            self._detect_pause_until
+            and not self.is_pause_indefinite()
+            and now >= self._detect_pause_until
+        ):
             self._detect_pause_until = 0.0
-            self.log_sink("info", "Auto detect pause expired")
+            self._host_unreachable_notified = False
+            self.log_sink("info", "Auto posting pause expired")
             self.notify_sink(t("notify.pause_resumed"))
             self.pause_ui_sink()
 
@@ -955,6 +1083,7 @@ class Controller:
             self._addr_copied = False
             self._local_net_active = False
             self._reset_session_score()
+            self._update_tray_ui_state_idle()
             if self.has_active_post() and not self._close_pending:
                 self._close_pending = True
                 return Action("close", {"reason": "process_dead"})
@@ -992,6 +1121,13 @@ class Controller:
             st,
             is_recruiting=is_recruiting,
             is_battle=is_battle,
+        )
+        self._update_tray_ui_state(
+            is_recruiting=is_recruiting,
+            is_battle=is_battle,
+            st=st,
+            my_ip=my_ip,
+            match_status=match_status,
         )
 
         # -----------------
@@ -1177,6 +1313,23 @@ class Controller:
                 self._last_sent_payload = payload
                 self.update_my_post(**payload)
                 return Action("update", payload)
+
+        # -----------------
+        # 投稿停止中: サーバー create はしないが、到達性はローカルで確認する
+        # -----------------
+        if (
+            paused
+            and recruiting_stable
+            and my_ip
+            and st.port
+            and (now - self._last_host_self_check_ts) >= HOST_SELF_CHECK_INTERVAL_SEC
+        ):
+            addr = self._current_addr(my_ip, st.port)
+            if addr:
+                self._last_host_self_check_ts = now
+                asyncio.get_running_loop().create_task(
+                    self._self_check_host_when_paused(addr, st.autopunch)
+                )
 
         # -----------------
         # 2) battle -> update (ホスト側のみ)

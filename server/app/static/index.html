@@ -720,7 +720,7 @@
           <th data-i18n="lobby.colMatch">Match</th>
           <th data-i18n="lobby.colUser">User</th>
           <th data-i18n="lobby.colRank">Rank</th>
-          <th data-i18n="lobby.colCap">Cap</th>
+          <th data-i18n="lobby.colRequire">Require</th>
           <th data-i18n="lobby.colStream">Stream</th>
           <th data-i18n="lobby.colComment">Comment</th>
           <th data-i18n="lobby.colPing">Ping</th>
@@ -743,7 +743,7 @@
         <th data-i18n="lobby.colMatch">Match</th>
         <th data-i18n="lobby.colUser">User</th>
         <th data-i18n="lobby.colRank">Rank</th>
-        <th data-i18n="lobby.colCap">Cap</th>
+        <th data-i18n="lobby.colRequire">Require</th>
         <th data-i18n="lobby.colStream">Stream</th>
         <th data-i18n="lobby.colComment">Comment</th>
         <th data-i18n="lobby.colPing">Ping</th>
@@ -1362,10 +1362,10 @@ function buildRow(p) {
   tr.appendChild(userCell);
   tr.appendChild(td(rankLabel(p)));
 
-  const cap = document.createElement("td");
-  if (p.giuroll) cap.appendChild(badge(t("common.badgeGiu")));
-  if (p.autopunch && !p.direct_reachable) cap.appendChild(badge(t("common.badgeAp")));
-  tr.appendChild(cap);
+  const requireCell = document.createElement("td");
+  if (p.giuroll) requireCell.appendChild(badge(t("common.badgeGiu")));
+  if (p.autopunch && !p.direct_reachable) requireCell.appendChild(badge(t("common.badgeAp")));
+  tr.appendChild(requireCell);
 
   const stream = document.createElement("td");
   if ((p.stream_url || "").trim()) {

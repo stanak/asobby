@@ -11,13 +11,12 @@ from time import sleep
 from PIL import Image
 from pystray import Menu, MenuItem
 
-from controller import Controller
+from controller import Controller, PAUSE_UNTIL_RESUME
 from icon_art import render_icon
 from tray_icon import TrayIcon
 from i18n import (
     SUPPORTED_LANGS,
     get_lang,
-    post_type_label,
     post_type_options,
     set_lang,
     t,
@@ -26,7 +25,6 @@ from services import (
     Post,
     edit_post_settings,
     edit_session_score_notify_settings,
-    NET_BATTLE,
     __version__,
 )
 from stats_window import open_stats_window
@@ -118,6 +116,9 @@ class TrayApp:
     def emit_pause_state_changed(self) -> None:
         self._on_tk(self._schedule_pause_ui_tick)
 
+    def emit_detect_ui_changed(self) -> None:
+        self._on_tk(self._refresh_icon)
+
     def emit_btn_labels(self, d: dict) -> None:
         if self.icon:
             self.icon.update_menu()
@@ -150,9 +151,6 @@ class TrayApp:
     # -----------------
     # icon state
     # -----------------
-    def _post_type_label(self) -> str:
-        return post_type_label(self.post.post_type)
-
     def _icon_for(self, key: str, *, badge: bool) -> Image.Image:
         cache_key = (key, badge)
         if cache_key not in self._icon_cache:
@@ -167,36 +165,12 @@ class TrayApp:
         return self._icon_cache[cache_key]
 
     def _status_text(self) -> str:
-        if self.controller.detect_error == "access_denied":
-            return t("tray.detect_denied")
-        if self.controller.is_detect_paused():
-            remaining = self.controller.detect_pause_remaining_label()
-            return t("tray.detect_paused", remaining=remaining)
-        if not self.post.id:
-            base = t("tray.idle")
-        else:
-            mode = self._post_type_label()
-            if self.post.net_status == NET_BATTLE:
-                base = t(
-                    "tray.battle",
-                    mode=mode,
-                    detail=self.post.match_status or self.post.addr,
-                )
-            else:
-                base = t("tray.recruiting", mode=mode, addr=self.post.addr)
-        if self.controller.lobby_has_other_posts():
-            return base + f" · {t('tray.lobby_recruitment')}"
-        return base
+        return self.controller.tray_status_text()
 
     def _refresh_icon(self) -> None:
         if not self.icon:
             return
-        if not self.post.id:
-            key = "idle"
-        elif self.post.net_status == NET_BATTLE:
-            key = "battle"
-        else:
-            key = "recruit"
+        key = self.controller.tray_icon_key()
         badge = self.controller.lobby_has_other_posts()
         self.icon.icon = self._icon_for(key, badge=badge)
         self.icon.title = f"asobby v{__version__} - {self._status_text()}"
@@ -501,8 +475,8 @@ class TrayApp:
             yield MenuItem(t("tray.add_stream_hint"), None, enabled=False)
 
     def _pause_menu_items(self):
-        """ホスト自動検知の一時停止サブメニュー。"""
-        def make_pause(seconds: int):
+        """ホスト自動投稿の一時停止サブメニュー。"""
+        def make_pause(seconds: float):
             def act(icon, item):
                 self.controller.pause_auto_detect(seconds)
             return act
@@ -525,6 +499,7 @@ class TrayApp:
         yield MenuItem(t("tray.pause_30m"), make_pause(30 * 60))
         yield MenuItem(t("tray.pause_1h"), make_pause(60 * 60))
         yield MenuItem(t("tray.pause_3h"), make_pause(3 * 60 * 60))
+        yield MenuItem(t("tray.pause_until_resume"), make_pause(PAUSE_UNTIL_RESUME))
 
     def _pause_menu_label(self) -> str:
         if self.controller.is_detect_paused():

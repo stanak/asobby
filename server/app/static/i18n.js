@@ -102,7 +102,7 @@
     "lobby.colMatch": "Match",
     "lobby.colUser": "User",
     "lobby.colRank": "Rank",
-    "lobby.colCap": "Cap",
+    "lobby.colRequire": "Require",
     "lobby.colStream": "Stream",
     "lobby.colComment": "Comment",
     "lobby.colPing": "Ping",
@@ -412,9 +412,9 @@
     "guide.menu.stream.name": "配信URL切替",
     "guide.menu.stream.desc":
       "YouTube / Twitch / ニコニコの配信 URL を候補から選び、ロビーに表示します。",
-    "guide.menu.pause.name": "ホスト自動検知を一時停止",
+    "guide.menu.pause.name": "ホスト自動投稿を一時停止",
     "guide.menu.pause.desc":
-      "天則を起動していても自動投稿しない時間帯を設けます（30 分 / 1 時間 / 3 時間、または今すぐ再開）。",
+      "asobby.com への自動投稿だけを止めます。天則の検知・到達性チェックは継続します（30 分 / 1 時間 / 3 時間 / 許可するまで、または今すぐ再開）。",
     "guide.menu.copyAddr.name": "ホスト時に IP:Port をコピー",
     "guide.menu.copyAddr.desc":
       "ON にすると、募集開始時に接続アドレスをクリップボードへコピーします。",
@@ -530,7 +530,7 @@
     "lobby.colMatch": "Match",
     "lobby.colUser": "User",
     "lobby.colRank": "Rank",
-    "lobby.colCap": "Cap",
+    "lobby.colRequire": "Require",
     "lobby.colStream": "Stream",
     "lobby.colComment": "Comment",
     "lobby.colPing": "Ping",
@@ -840,9 +840,9 @@
     "guide.menu.stream.name": "Stream URL preset",
     "guide.menu.stream.desc":
       "Pick a YouTube / Twitch / Niconico URL from presets to show on the lobby.",
-    "guide.menu.pause.name": "Pause auto host detection",
+    "guide.menu.pause.name": "Pause auto posting",
     "guide.menu.pause.desc":
-      "Stop auto-posting even while Hisoutensoku is running (30 min / 1 h / 3 h, or resume now).",
+      "Stops posting to asobby.com only. Detection and reachability checks keep running (30 min / 1 h / 3 h / until you resume, or resume now).",
     "guide.menu.copyAddr.name": "Copy IP:Port when hosting",
     "guide.menu.copyAddr.desc":
       "When enabled, copies your host address to the clipboard when recruiting starts.",

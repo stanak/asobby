@@ -31,17 +31,17 @@ def reset_release_cache(monkeypatch):
 
 def test_update_info_for_current():
     latest = {
-        "tag": "v0.5.0",
-        "version": "0.5.0",
+        "tag": "v0.5.1",
+        "version": "0.5.1",
         "html_url": "https://example.com",
     }
-    fresh = client_release.update_info_for_current(latest, "0.5.0")
+    fresh = client_release.update_info_for_current(latest, "0.5.1")
     assert fresh["update_available"] is False
     old = client_release.update_info_for_current(latest, "0.4.30")
     assert old["update_available"] is True
     assert old["outdated"] is True
     assert old["current"] == "0.4.30"
-    assert old["latest"] == "0.5.0"
+    assert old["latest"] == "0.5.1"
 
 
 def test_parse_version():
