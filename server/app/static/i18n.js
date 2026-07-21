@@ -446,6 +446,30 @@
     "guide.menu.quit.name": "終了",
     "guide.menu.quit.desc":
       "クライアントを終了します。募集中の投稿は閉じられます。",
+    "guide.sectionWinNotify": "Windows の通知設定",
+    "guide.winNotifyIntro":
+      "asobby クライアントは、募集失敗・高 Ping 警告・勝敗数・リクエストなどを Windows のトースト通知で知らせます。ゲーム中（フルスクリーン）でも見逃しにくくするため、Windows 側の設定を整えることをおすすめします。",
+    "guide.winNotifyDuration":
+      "【約 7 秒で自動的に消えます】通知バナーは画面右下に短時間表示されたあと引っ込みます。内容は Win + N の通知センターから後から確認できます。",
+    "guide.winNotifyPriorityLead":
+      "とくに非想天則をフルスクリーンで遊ぶときは、「優先通知」に asobby を登録しておくことをおすすめします。おやすみモード中でも重要な通知が届きやすくなります。",
+    "guide.winNotifyWin11Title": "Windows 11 — 優先通知を設定する",
+    "guide.winNotifyWin11Step1":
+      "設定 → システム → 通知 → 「優先通知を設定する」を開きます。",
+    "guide.winNotifyWin11Step2":
+      "「アプリ」で アプリの追加 を押し、一覧から asobby を選びます（初回通知後に一覧へ出る場合があります）。",
+    "guide.winNotifyWin11Step3":
+      "同じ画面で asobby の通知がオンになっていることを確認します。",
+    "guide.winNotifyScreenshotAlt":
+      "Windows 11 の優先通知を設定する画面。アプリの追加ボタンから asobby を登録する。",
+    "guide.winNotifyScreenshotCaption":
+      "Windows 11 — システム → 通知 → 優先通知を設定する",
+    "guide.winNotifyImportant":
+      "ホスト接続の失敗（ポート未開放など）だけ、asobby 側で「重要な通知」扱いと短い通知音が使われます。それ以外の通知は通常表示です。",
+    "guide.winNotifyWin10":
+      "Windows 10 の場合は、設定 → システム → 通知 → 集中モード で、ゲーム中・全画面アプリ中に自動でオンになるルールをオフにし、asobby の通知を許可してください。",
+    "guide.winNotifyTray":
+      "トレイメニューの 通知音 で、ホスト接続失敗時のチャイムの ON/OFF を切り替えられます（デフォルト ON）。",
     "guide.sectionNotify": "主な通知",
     "guide.notifyPostFailed":
       "募集失敗 — サーバーから接続確認が取れません。ポート転送・Autopunch・ファイアウォールを確認してください。",
@@ -875,6 +899,30 @@
     "guide.menu.quit.name": "Quit",
     "guide.menu.quit.desc":
       "Exits the client and closes any active post.",
+    "guide.sectionWinNotify": "Windows notification settings",
+    "guide.winNotifyIntro":
+      "The asobby client uses Windows toast notifications for post failures, high ping warnings, win-loss counts, requests, and more. We recommend adjusting Windows settings so alerts are easier to notice while gaming (including fullscreen).",
+    "guide.winNotifyDuration":
+      "[Dismisses in about 7 seconds] Toast banners appear briefly at the bottom-right, then slide away. You can review them later in the notification center (Win + N).",
+    "guide.winNotifyPriorityLead":
+      "If you play Hisoutensoku in fullscreen, we strongly recommend adding asobby to priority notifications so important alerts are more likely during Focus assist / Do not disturb.",
+    "guide.winNotifyWin11Title": "Windows 11 — Set priority notifications",
+    "guide.winNotifyWin11Step1":
+      "Open Settings → System → Notifications → Set priority notifications.",
+    "guide.winNotifyWin11Step2":
+      "Under Apps, click Add apps and choose asobby from the list (it may appear after the first notification).",
+    "guide.winNotifyWin11Step3":
+      "Confirm notifications for asobby are enabled on the same page.",
+    "guide.winNotifyScreenshotAlt":
+      "Windows 11 priority notifications settings. Use Add apps to register asobby.",
+    "guide.winNotifyScreenshotCaption":
+      "Windows 11 — System → Notifications → Set priority notifications",
+    "guide.winNotifyImportant":
+      "Only host connection failures (e.g. port not open) use Important priority and a short chime on the asobby side. Other notifications use the default style.",
+    "guide.winNotifyWin10":
+      "On Windows 10, open Settings → System → Notifications → Focus assist and turn off rules that auto-enable during games or fullscreen apps, and allow notifications from asobby.",
+    "guide.winNotifyTray":
+      "Use the tray menu item Notification sound to toggle the chime on host connection failures (on by default).",
     "guide.sectionNotify": "Common notifications",
     "guide.notifyPostFailed":
       "Post failed — the server could not verify your host. Check port forwarding, Autopunch, and firewall.",
@@ -924,6 +972,10 @@
     for (const el of document.querySelectorAll("[data-i18n-title]")) {
       const key = el.getAttribute("data-i18n-title");
       if (key) el.title = t(key);
+    }
+    for (const el of document.querySelectorAll("[data-i18n-alt]")) {
+      const key = el.getAttribute("data-i18n-alt");
+      if (key) el.alt = t(key);
     }
     const titleEl = document.querySelector("title[data-i18n]");
     if (titleEl) {

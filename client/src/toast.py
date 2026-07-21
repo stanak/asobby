@@ -93,7 +93,7 @@ def show_request_toast(
             if arg in ("accept", "decline"):
                 on_reply(arg)
 
-        toast = Toast([text], duration=ToastDuration.Long)
+        toast = Toast([text], duration=ToastDuration.Short)
         toast.AddAction(ToastButton(t("toast.accept"), "accept"))
         toast.AddAction(ToastButton(t("toast.decline"), "decline"))
         toast.on_activated = activated
@@ -126,11 +126,11 @@ def show_info_toast(
         if important:
             toast = Toast(
                 [title, text],
-                duration=ToastDuration.Long,
+                duration=ToastDuration.Short,
                 scenario=ToastScenario.Important,
             )
         else:
-            toast = Toast([title, text], duration=ToastDuration.Long)
+            toast = Toast([title, text], duration=ToastDuration.Short)
 
         def on_failed(args) -> None:
             if log:

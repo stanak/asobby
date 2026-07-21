@@ -178,6 +178,28 @@
     color: var(--accent);
     white-space: nowrap;
   }
+  .guide-figure {
+    margin: 16px 0 0;
+    padding: 0;
+  }
+  .guide-figure img {
+    display: block;
+    width: 100%;
+    max-width: 720px;
+    height: auto;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .guide-figure figcaption {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .steps {
+    margin: 0 0 12px;
+    padding-left: 1.35em;
+  }
+  .steps li { margin-bottom: 8px; }
 </style>
 </head>
 <body>
@@ -395,6 +417,26 @@
       <h3 data-i18n="guide.menu.quit.name">終了</h3>
       <p data-i18n="guide.menu.quit.desc">クライアントを終了します。募集中の投稿は閉じられます。</p>
     </div>
+  </section>
+
+  <section class="panel">
+    <h2 data-i18n="guide.sectionWinNotify">Windows の通知設定</h2>
+    <p data-i18n="guide.winNotifyIntro">asobby クライアントは、募集失敗・高 Ping 警告・勝敗数・リクエストなどを Windows のトースト通知で知らせます。ゲーム中（フルスクリーン）でも見逃しにくくするため、Windows 側の設定を整えることをおすすめします。</p>
+    <p class="note"><span data-i18n="guide.winNotifyDuration"></span></p>
+    <p data-i18n="guide.winNotifyPriorityLead"></p>
+    <h3 data-i18n="guide.winNotifyWin11Title">Windows 11 — 優先通知を設定する</h3>
+    <ol class="steps">
+      <li data-i18n="guide.winNotifyWin11Step1">設定 → システム → 通知 → 優先通知を設定する を開きます。</li>
+      <li data-i18n="guide.winNotifyWin11Step2">「アプリ」で アプリの追加 を押し、一覧から asobby を選びます（初回通知後に一覧へ出る場合があります）。</li>
+      <li data-i18n="guide.winNotifyWin11Step3">同じ画面で asobby の通知がオンになっていることを確認します。</li>
+    </ol>
+    <figure class="guide-figure">
+      <img src="/static/guide-win11-priority-notifications.png" width="720" height="405" alt="" data-i18n-alt="guide.winNotifyScreenshotAlt">
+      <figcaption data-i18n="guide.winNotifyScreenshotCaption">Windows 11 — システム → 通知 → 優先通知を設定する</figcaption>
+    </figure>
+    <p class="note" data-i18n="guide.winNotifyImportant">ホスト接続の失敗（ポート未開放など）だけ、asobby 側で「重要な通知」扱いと短い通知音が使われます。それ以外の通知は通常表示です。</p>
+    <p data-i18n="guide.winNotifyWin10">Windows 10 の場合は、設定 → システム → 通知 → 集中モード で、ゲーム中・全画面アプリ中に自動でオンになるルールをオフにし、asobby の通知を許可してください。</p>
+    <p data-i18n="guide.winNotifyTray"></p>
   </section>
 
   <section class="panel">
