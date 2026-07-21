@@ -80,3 +80,19 @@ def show_request_toast(
         if log:
             log(f"ボタン付きトーストの表示に失敗: {e!r}")
         return False
+
+
+def show_info_toast(text: str, log: Optional[Callable[[str], None]] = None) -> bool:
+    """短い Windows トーストを表示する (勝敗数通知など)。"""
+    if not INTERACTIVE_AVAILABLE:
+        return False
+    try:
+        toast = Toast([text], duration=ToastDuration.Short)
+        _get_toaster().show_toast(toast)
+        _live_toasts.append(toast)
+        del _live_toasts[:-_LIVE_TOASTS_MAX]
+        return True
+    except Exception as e:
+        if log:
+            log(f"トーストの表示に失敗: {e!r}")
+        return False

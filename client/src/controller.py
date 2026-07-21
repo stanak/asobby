@@ -80,9 +80,20 @@ def _ko_decided(st: DetectionState) -> bool:
     )
 
 
+def _ko_fingerprint(st: DetectionState) -> str:
+    """同一 KO を二重処理しないための指紋 (連戦時は勝数が変わるので別試合になる)。"""
+    if not _ko_decided(st):
+        return ""
+    return (
+        f"{st.lwin}:{st.rwin}:"
+        f"{st.lchar_id}:{st.rchar_id}:"
+        f"{st.lprof}:{st.rprof}"
+    )
+
+
 def _ko_detect_visible(*, is_battle: bool, mode: str) -> bool:
-    """KO 確定は対戦シーンの末尾、または直後のキャラセレでしか読めない。"""
-    return is_battle or mode == "charsel"
+    """KO 確定は対戦末尾、ロード、キャラセレで読める。"""
+    return is_battle or mode in ("charsel", "loading")
 
 
 @dataclass
@@ -137,7 +148,7 @@ class Controller:
         self._create_pending = False
         self._close_pending = False
         self._result_reported = False
-        self._local_match_recorded = False
+        self._last_ko_fingerprint = ""
         self._pending_local_match: Optional[dict] = None
 
         self.owner_token: str = ""
@@ -158,7 +169,7 @@ class Controller:
         auth = self.config_mgr.get_section("auth")
         self.api.session_token = str(auth.get("session_token", ""))
         self.discord_user: str = str(auth.get("username", "")) if self.api.session_token else ""
-        self._lobby_has_other_posts = False
+        self._lobby_badges = {"ranked": False, "casual": False}
         self._login_in_progress = False
         self._notified_login_required = False
         self._auto_login_attempted = False
@@ -207,6 +218,11 @@ class Controller:
         self._last_exe_logged: str = ""
         self._last_modules_logged: str = ""
         self._last_dump_log_ts: float = 0.0
+
+        try:
+            self._sync_tools_from_detection(read_detection_state())
+        except Exception:
+            pass
 
     # -----------------
     # basic helpers
@@ -269,9 +285,10 @@ class Controller:
         return self._local_net_active
 
     def session_score_notify_enabled(self) -> bool:
-        return bool(
-            self.config_mgr.get_value("options", "session_score_notify_enabled", False)
+        raw = self.config_mgr.get_value(
+            "options", "session_score_notify_enabled", False
         )
+        return raw is True
 
     def set_session_score_notify_enabled(self, enabled: bool) -> None:
         value = bool(enabled)
@@ -301,6 +318,8 @@ class Controller:
     def set_session_score_notify_mode(self, mode: str) -> None:
         value = mode if mode in ("all", "rules") else "rules"
         self.config_mgr.set_value("options", "session_score_notify_mode", value)
+        if value == "all":
+            self.config_mgr.set_value("options", "session_score_notify_enabled", True)
         self.log_sink(
             "info",
             t(
@@ -424,7 +443,8 @@ class Controller:
         ):
             return
 
-        self.notify_sink(t("notify.session_score", score=score))
+        text = t("notify.session_score", score=score)
+        self.notify_sink(text)
         self.log_sink("info", t("log.session_score", score=score))
 
     def comment_presets(self) -> list[str]:
@@ -475,7 +495,7 @@ class Controller:
         self._create_pending = False
         self._close_pending = False
         self._result_reported = False
-        self._local_match_recorded = False
+        self._last_ko_fingerprint = ""
         self._pending_local_match = None
         self._notified_casual_fallback = False
         self.pending_requests.clear()
@@ -493,28 +513,33 @@ class Controller:
     def has_active_post(self) -> bool:
         return bool(self.my_post.id and self.owner_token)
 
-    def lobby_has_other_posts(self) -> bool:
-        return self._lobby_has_other_posts
+    def lobby_badges(self) -> dict[str, bool]:
+        return dict(self._lobby_badges)
 
-    def _is_other_lobby_post(self, post: dict) -> bool:
-        if self.my_post.id and post.get("id") == self.my_post.id:
-            return False
-        if self.discord_user and post.get("owner_name") == self.discord_user:
-            return False
-        return True
+    def lobby_has_other_posts(self) -> bool:
+        return self._lobby_badges["ranked"] or self._lobby_badges["casual"]
 
     async def _refresh_lobby_badge(self) -> None:
+        empty = {"ranked": False, "casual": False}
         if not self.is_logged_in():
-            new_val = False
+            new_badges = empty
         else:
             try:
-                posts = await self.api.list_posts()
+                me = await self.api.auth_me()
+                raw = me.get("favicon_badges") or empty
+                new_badges = {
+                    "ranked": bool(raw.get("ranked")),
+                    "casual": bool(raw.get("casual")),
+                }
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 401:
+                    self._clear_expired_session()
+                return
             except httpx.HTTPError:
                 return
-            new_val = any(self._is_other_lobby_post(p) for p in posts)
-        if new_val == self._lobby_has_other_posts:
+        if new_badges == self._lobby_badges:
             return
-        self._lobby_has_other_posts = new_val
+        self._lobby_badges = new_badges
         self.lobby_activity_sink()
 
     async def lobby_poll_loop(self) -> None:
@@ -584,7 +609,7 @@ class Controller:
             extras.append(
                 t("tray.post_paused", remaining=self.detect_pause_remaining_label())
             )
-        if self._lobby_has_other_posts:
+        if self.lobby_has_other_posts():
             extras.append(t("tray.lobby_recruitment"))
         if extras:
             return base + " · " + " · ".join(extras)
@@ -911,13 +936,13 @@ class Controller:
                 st: DetectionState = read_detection_state()
                 self._track_detect_error(st.detect_error)
                 self._log_detect_snapshot(st)
-                # 天則を検出したら soku path を自動設定する (未設定時のみ)
-                if st.alive and st.exe_path and not self.tool_mgr.path("soku"):
-                    self.tool_mgr.set_path("soku", st.exe_path)
+                if (
+                    st.alive
+                    and st.exe_path
+                    and not self.tool_mgr.path("soku")
+                ):
                     self.log_sink("info", f"Soku path auto-set: {st.exe_path}")
-                self.update_btn_labels("soku", st.alive)
-                self.update_btn_labels("autopunch", st.autopunch)
-                self.update_btn_labels("giuroll", st.giuroll)
+                self._sync_tools_from_detection(st)
                 act = self.on_detect(st, my_ip=my_ip)
                 if act:
                     await self._action_q.put(act)
@@ -1106,7 +1131,7 @@ class Controller:
         in_net_flow = (
             is_recruiting
             or is_battle
-            or st.mode == "charsel"
+            or st.mode in ("charsel", "loading")
             or st.net_side is not None
         )
         self._local_net_active = in_net_flow
@@ -1144,13 +1169,14 @@ class Controller:
         # -----------------
         # 0) KO 確定 -> ローカル戦績 (ホスト/クライアント、ログイン不要)
         # -----------------
+        ko_fp = _ko_fingerprint(st)
         if (
             st.net_side in ("host", "client")
-            and not self._local_match_recorded
-            and _ko_decided(st)
+            and ko_fp
+            and ko_fp != self._last_ko_fingerprint
             and _ko_detect_visible(is_battle=is_battle, mode=st.mode)
         ):
-            self._local_match_recorded = True
+            self._last_ko_fingerprint = ko_fp
             my_side = "host" if st.net_side == "host" else "client"
             winner = "host" if st.lwin == 2 else "guest"
             ranked = 0
@@ -1214,7 +1240,7 @@ class Controller:
         # is_battle だけで _result_reported をリセットすると二重登録になる。
         if st.btl_mode != 5:
             self._result_reported = False
-            self._local_match_recorded = False
+            self._last_ko_fingerprint = ""
 
         # -----------------
         # リプレイ収集 (ホスト/クライアント両方)
@@ -1907,7 +1933,7 @@ class Controller:
         self.api.session_token = ""
         self.discord_user = ""
         self.config_mgr.set_values("auth", session_token="", username="")
-        self._lobby_has_other_posts = False
+        self._lobby_badges = {"ranked": False, "casual": False}
         self.lobby_activity_sink()
         # 明示的なログアウト後はブラウザ連携の自動ログインを走らせない
         self._auto_login_attempted = True
@@ -1917,7 +1943,7 @@ class Controller:
         self.api.session_token = ""
         self.discord_user = ""
         self.config_mgr.set_values("auth", session_token="", username="")
-        self._lobby_has_other_posts = False
+        self._lobby_badges = {"ranked": False, "casual": False}
         self.lobby_activity_sink()
         # 期限切れは自動再ログインの対象にする
         self._auto_login_attempted = False
@@ -1948,12 +1974,20 @@ class Controller:
 
     def update_btn_labels(self, tool_name: str, is_active: bool) -> None:
         self.tool_mgr.set_active(tool_name, is_active)
+        self.tool_mgr.sync_loaded_from_detection(tool_name, is_active)
         label = self.tool_mgr.button_label(tool_name)
         # 50ms ポーリングから毎回呼ばれるため、変化した時だけトレイに通知する
         if self._tool_labels.get(tool_name) == label:
             return
         self._tool_labels = {**self._tool_labels, tool_name: label}
         self.btn_labels_sink(self._tool_labels)
+
+    def _sync_tools_from_detection(self, st: DetectionState) -> None:
+        if st.alive and st.exe_path and not self.tool_mgr.path("soku"):
+            self.tool_mgr.set_path("soku", st.exe_path)
+        self.update_btn_labels("soku", st.alive)
+        self.update_btn_labels("autopunch", st.autopunch)
+        self.update_btn_labels("giuroll", st.giuroll)
 
     def lobby_url(self) -> str:
         base = self.config_mgr.get_api_base().rstrip("/") + "/"

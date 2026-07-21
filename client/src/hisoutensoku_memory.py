@@ -54,6 +54,8 @@ SCENE_BATTLEWATCH = 15
 
 NET_BATTLE_SCENES = {SCENE_BATTLESV, SCENE_BATTLECL, SCENE_BATTLEWATCH}
 NET_CHARSEL_SCENES = {SCENE_SELECTSV, SCENE_SELECTCL}
+NET_LOADING_SCENES = {SCENE_LOADINGSV, SCENE_LOADINGCL, SCENE_LOADINGWATCH}
+NET_RESULT_SCENES = NET_BATTLE_SCENES | NET_CHARSEL_SCENES | NET_LOADING_SCENES
 NET_SIDE_HOST = {SCENE_SELECTSV, SCENE_LOADINGSV, SCENE_BATTLESV}
 NET_SIDE_CLIENT = {SCENE_SELECTCL, SCENE_LOADINGCL, SCENE_BATTLECL}
 NET_SIDE_WATCH = {SCENE_LOADINGWATCH, SCENE_BATTLEWATCH}
@@ -550,6 +552,9 @@ def _decide_mode(
     if scene_id in NET_CHARSEL_SCENES:
         return "charsel"
 
+    if scene_id in NET_LOADING_SCENES:
+        return "loading"
+
     if server08 is None or server09 is None:
         return "idle"
 
@@ -802,8 +807,8 @@ def read_detection_state() -> DetectionState:
         rcid = _read_u32le(h, RCHARID)
 
         btl_mode = lwin = rwin = None
-        # KO 確定 (btl_mode==5) は対戦→キャラセレ遷移の短い間だけ観測できる。
-        if scene_id in NET_BATTLE_SCENES or scene_id in NET_CHARSEL_SCENES:
+        # KO 確定 (btl_mode==5) は対戦→ロード→キャラセレ遷移の短い間だけ観測できる。
+        if scene_id in NET_RESULT_SCENES:
             btl_mode, lwin, rwin = _read_battle_result(h, giu)
 
         raw = (

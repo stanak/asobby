@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-Mode = Literal["idle", "host_wait", "charsel", "battle", "other"]
+Mode = Literal["idle", "host_wait", "charsel", "loading", "battle", "other"]
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,7 @@ class DetectionState:
     # ネット対戦の立場 ("host" / "client" / "watch" / None)
     net_side: Optional[str] = None
 
-    # 対戦勝敗 (NET_BATTLE_SCENES 時のみ読む。KO 確定は btl_mode==5)
+    # 対戦勝敗 (対戦/キャラセレ/ロード中で読む。KO 確定は btl_mode==5)
     btl_mode: Optional[int] = None
     lwin: Optional[int] = None
     rwin: Optional[int] = None

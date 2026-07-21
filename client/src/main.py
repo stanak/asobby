@@ -11,6 +11,7 @@ from time import sleep
 from PIL import Image
 from pystray import Menu, MenuItem
 
+import toast
 from controller import Controller, PAUSE_UNTIL_RESUME
 from icon_art import render_icon
 from tray_icon import TrayIcon
@@ -40,9 +41,17 @@ COLOR_BATTLE = (219, 109, 40)
 
 
 def make_icon_image(
-    color: tuple[int, int, int], *, badge: bool = False
+    color: tuple[int, int, int],
+    *,
+    ranked_badge: bool = False,
+    casual_badge: bool = False,
 ) -> Image.Image:
-    return render_icon(64, accent=color, frame=color, badge=badge)
+    return render_icon(
+        64,
+        accent=color,
+        frame=color,
+        badges={"ranked": ranked_badge, "casual": casual_badge},
+    )
 
 
 class TrayApp:
@@ -63,7 +72,7 @@ class TrayApp:
         self.loop = asyncio.new_event_loop()
         self.controller = Controller(self)
 
-        self._icon_cache: dict[tuple[str, bool], Image.Image] = {}
+        self._icon_cache: dict[tuple[str, bool, bool], Image.Image] = {}
         self._pause_tick_after_id: str | None = None
 
     # -----------------
@@ -74,8 +83,13 @@ class TrayApp:
 
     def emit_notify(self, text: str) -> None:
         def show() -> None:
-            self._notify(text)
-            if self.icon:
+            shown = toast.show_info_toast(
+                text,
+                log=lambda m: self._append_log("warn", m),
+            )
+            if not shown:
+                self._notify(text)
+            elif self.icon:
                 self.icon.update_menu()
 
         if self.tk_root is not None:
@@ -151,8 +165,10 @@ class TrayApp:
     # -----------------
     # icon state
     # -----------------
-    def _icon_for(self, key: str, *, badge: bool) -> Image.Image:
-        cache_key = (key, badge)
+    def _icon_for(
+        self, key: str, *, ranked_badge: bool, casual_badge: bool
+    ) -> Image.Image:
+        cache_key = (key, ranked_badge, casual_badge)
         if cache_key not in self._icon_cache:
             colors = {
                 "idle": COLOR_IDLE,
@@ -160,7 +176,9 @@ class TrayApp:
                 "battle": COLOR_BATTLE,
             }
             self._icon_cache[cache_key] = make_icon_image(
-                colors[key], badge=badge
+                colors[key],
+                ranked_badge=ranked_badge,
+                casual_badge=casual_badge,
             )
         return self._icon_cache[cache_key]
 
@@ -171,8 +189,12 @@ class TrayApp:
         if not self.icon:
             return
         key = self.controller.tray_icon_key()
-        badge = self.controller.lobby_has_other_posts()
-        self.icon.icon = self._icon_for(key, badge=badge)
+        badges = self.controller.lobby_badges()
+        self.icon.icon = self._icon_for(
+            key,
+            ranked_badge=badges["ranked"],
+            casual_badge=badges["casual"],
+        )
         self.icon.title = f"asobby v{__version__} - {self._status_text()}"
         self.icon.update_menu()
 
@@ -689,7 +711,7 @@ class TrayApp:
 
         self.icon = TrayIcon(
             "asobby",
-            icon=self._icon_for("idle", badge=False),
+            icon=self._icon_for("idle", ranked_badge=False, casual_badge=False),
             title=f"asobby v{__version__} - {self._status_text()}",
             menu=self._build_menu(),
         )

@@ -127,6 +127,16 @@ class ToolManager:
     def set_active(self, tool_name: str, is_active: bool) -> None:
         self._tools[tool_name].is_active = is_active
 
+    def sync_loaded_from_detection(self, tool_name: str, is_active: bool) -> None:
+        """天則プロセス内の DLL 検知結果に合わせて giuroll/autopunch の状態を同期する。"""
+        if tool_name not in ("giuroll", "autopunch"):
+            return
+        entry = self._tools[tool_name]
+        if is_active and entry.path:
+            entry.state = ToolState.LOADED
+        elif not is_active and entry.state == ToolState.LOADED:
+            entry.state = ToolState.READY
+
     def set_path(self, tool_name: str, path: str) -> None:
         entry = self._tools[tool_name]
         entry.path = path.strip()

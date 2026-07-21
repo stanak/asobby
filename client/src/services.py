@@ -359,7 +359,13 @@ def edit_session_score_notify_settings(parent, current: dict, on_ok) -> None:
     add_btn.pack(side="left")
 
     load_rules()
-    mode_var.trace_add("write", sync_rules_state)
+
+    def on_mode_change(*_args) -> None:
+        sync_rules_state()
+        if mode_by_label.get(mode_var.get(), "") == "all":
+            enabled_var.set(True)
+
+    mode_var.trace_add("write", on_mode_change)
     sync_rules_state()
 
     hint = ttk.Label(
@@ -394,7 +400,9 @@ def edit_session_score_notify_settings(parent, current: dict, on_ok) -> None:
         mode = selected_mode()
         rules = collect_rules()
         enabled = bool(enabled_var.get())
-        if enabled and mode == "rules" and not rules:
+        if mode == "all":
+            enabled = True
+        elif enabled and mode == "rules" and not rules:
             mode = "all"
         result = {
             "session_score_notify_enabled": enabled,

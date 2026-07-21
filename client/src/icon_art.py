@@ -10,7 +10,8 @@ BG = (23, 28, 36)
 FRAME_DEFAULT = (54, 69, 89)
 ACCENT_DEFAULT = (106, 176, 243)
 CORE = (230, 237, 245)
-BADGE = (90, 158, 255)
+BADGE_RANKED = (90, 158, 255)
+BADGE_CASUAL = (87, 192, 125)
 
 HEX_POINTS = (
     (16.0, 3.5),
@@ -83,7 +84,7 @@ def draw_badge_dot(
     size: int,
     x: float,
     y: float,
-    color: tuple[int, int, int] = BADGE,
+    color: tuple[int, int, int] = BADGE_RANKED,
 ) -> None:
     cx, cy = _scale_point(x, y, size)
     outer = _scale(6.75, size)
@@ -108,13 +109,16 @@ def render_icon(
     *,
     accent: tuple[int, int, int] = ACCENT_DEFAULT,
     frame: tuple[int, int, int] | None = None,
-    badge: bool = False,
+    badges: dict[str, bool] | None = None,
 ) -> Image.Image:
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     draw_asobby_mark(draw, size, accent=accent, frame=frame)
-    if badge:
-        draw_badge_dot(draw, size, 25.5, 6.5)
+    next_badges = badges or {}
+    if next_badges.get("casual"):
+        draw_badge_dot(draw, size, 6.5, 6.5, BADGE_CASUAL)
+    if next_badges.get("ranked"):
+        draw_badge_dot(draw, size, 25.5, 6.5, BADGE_RANKED)
     return img
 
 
