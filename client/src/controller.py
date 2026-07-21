@@ -706,7 +706,7 @@ class Controller:
                     "Host not reachable while posting paused. "
                     "Please open the port or start autopunch.",
                 )
-                self.notify_sink(t("notify.post_failed"))
+                self.notify_sink(t("notify.post_failed"), play_sound=True)
         else:
             self._host_unreachable_notified = False
 
@@ -1834,7 +1834,7 @@ class Controller:
                 self.notify_sink(t("notify.session_expired"))
             elif code == 409:
                 self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
-                self.notify_sink(t("notify.post_failed"))
+                self.notify_sink(t("notify.post_failed"), play_sound=True)
             elif code == 429:
                 self.log_sink("warn", "Rate limited by server. Retrying soon.")
             else:
@@ -1851,7 +1851,7 @@ class Controller:
             # アドレス変更時の到達性検証に失敗。ローカルを破棄して
             # 次の周期の create（クールダウン付き）からやり直す。
             self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
-            self.notify_sink(t("notify.post_failed"))
+            self.notify_sink(t("notify.post_failed"), play_sound=True)
             self.clear_my_post()
             self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
         else:

@@ -86,13 +86,15 @@ class TrayApp:
             return
         notify_sound.play(log=lambda m: self._append_log("warn", m))
 
-    def emit_notify(self, text: str) -> None:
+    def emit_notify(self, text: str, *, play_sound: bool = False) -> None:
         shown = toast.show_info_toast(
             text,
             title="asobby",
+            important=play_sound,
             log=lambda m: self._append_log("warn", m),
         )
-        self._play_notify_sound()
+        if play_sound:
+            self._play_notify_sound()
         if not shown:
             self._append_log("warn", "勝敗数通知: トースト非表示のためトレイ通知にフォールバック")
             self._notify(text)
@@ -120,7 +122,6 @@ class TrayApp:
             callback,
             log=lambda m: self._append_log("warn", m),
         )
-        self._play_notify_sound()
         if not shown:
             self._notify(text + t("toast.request_fallback"))
         if self.icon:

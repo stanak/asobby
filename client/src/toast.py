@@ -12,7 +12,6 @@ try:
         ToastButton,
         ToastDuration,
     )
-    from windows_toasts.toast_audio import AudioSource, ToastAudio
     from windows_toasts.wrappers import ToastScenario
 
     INTERACTIVE_AVAILABLE = True
@@ -112,9 +111,10 @@ def show_info_toast(
     text: str,
     *,
     title: str = "asobby",
+    important: bool = False,
     log: Optional[Callable[[str], None]] = None,
 ) -> bool:
-    """Windows トーストを表示する (勝敗数通知など)。"""
+    """Windows トーストを表示する。"""
     if not INTERACTIVE_AVAILABLE:
         if log:
             log(
@@ -123,12 +123,14 @@ def show_info_toast(
             )
         return False
     try:
-        toast = Toast(
-            [title, text],
-            duration=ToastDuration.Long,
-            scenario=ToastScenario.Important,
-            audio=ToastAudio(sound=AudioSource.Reminder),
-        )
+        if important:
+            toast = Toast(
+                [title, text],
+                duration=ToastDuration.Long,
+                scenario=ToastScenario.Important,
+            )
+        else:
+            toast = Toast([title, text], duration=ToastDuration.Long)
 
         def on_failed(args) -> None:
             if log:
