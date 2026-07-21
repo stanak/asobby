@@ -2290,7 +2290,7 @@ def _login_result_page(
     params_json = json.dumps(message_params or {}, ensure_ascii=False)
     return HTMLResponse(f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>asobby</title>
-<script src="/static/i18n.js"></script></head>
+<script src="/static/i18n.js?v=0.5.1.1"></script></head>
 <body style="background:#14171c;color:#d8dee9;font-family:sans-serif;
 display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <div style="text-align:center">
