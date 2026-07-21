@@ -224,7 +224,7 @@ fly certs show asobby.com   # 表示される A/AAAA レコードを DNS に登�
 
 ## デプロイ (fly.io)
 
-設定は `app/fly.toml`。東京リージョン（nrt）・**dedicated-cpu-1x / 1GB**・マシン1台構成。
+設定は `app/fly.toml`。東京リージョン（nrt）・**performance-1x（専用 CPU）/ 2GB**・マシン1台構成。
 
 ```sh
 cd app
