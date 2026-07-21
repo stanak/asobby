@@ -50,7 +50,7 @@ def _char_label(cid: int | None) -> str:
 
 def _result_symbol(row: dict) -> str:
     if LocalStore.is_draw(row):
-        return "△"
+        return "?"
     return "○" if LocalStore.is_my_win(row) else "×"
 
 
@@ -156,7 +156,7 @@ def apply_filter_state(
 
 
 def compute_summary(rows: list[dict], recent_sizes: tuple[int, ...] = (30, 50, 100)) -> MatchSummary:
-    """勝敗サマリと直近 N 戦の勝率を計算する。勝率分母は勝+負（引分除外）。"""
+    """勝敗サマリと直近 N 戦の勝率を計算する。勝率分母は勝+負。"""
     wins, losses, draws = _count_results(rows)
     sorted_rows = sorted(rows, key=lambda r: r["played_at"], reverse=True)
     recent_rates: dict[int, float] = {}
@@ -185,7 +185,6 @@ def format_summary_text(summary: MatchSummary) -> str:
         t(
             "stats.summary_rate",
             rate=summary.win_rate,
-            draws=summary.draws,
         ),
     ]
     recent_parts = [

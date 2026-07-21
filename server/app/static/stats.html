@@ -252,7 +252,7 @@
   td.wr-low { color: var(--wr-low); font-weight: 600; }
   td.result-win { color: var(--ok); font-weight: 600; }
   td.result-loss { color: var(--err); font-weight: 600; }
-  td.result-draw { color: var(--muted); }
+  td.result-unknown { color: var(--muted); }
   #gate {
     text-align: center;
     padding: 80px 20px;
@@ -718,7 +718,7 @@ function formatJst(unixSec) {
 }
 
 function resultSymbol(m) {
-  if (m.winner === "draw") return { text: t("common.resultDraw"), cls: "result-draw" };
+  if (m.winner === "draw") return { text: "?", cls: "result-unknown" };
   return matchWon(m)
     ? { text: t("common.resultWin"), cls: "result-win" }
     : { text: t("common.resultLoss"), cls: "result-loss" };
@@ -892,7 +892,6 @@ function renderSummary() {
     wins: bucket.wins,
     losses: bucket.losses,
     rate: rateText,
-    draws: bucket.draws,
   });
   el.appendChild(main);
 
@@ -1099,7 +1098,6 @@ function renderRanked() {
   recordStrong.textContent = t("stats.rankedTotalRecord", {
     wins: rt.wins,
     losses: rt.losses,
-    draws: rt.draws,
   });
   rTotal.appendChild(recordStrong);
   rTotal.appendChild(document.createTextNode(" " + t("stats.winRateLabel") + " "));
