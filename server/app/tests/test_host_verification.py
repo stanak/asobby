@@ -116,3 +116,58 @@ def test_should_not_reverify_during_battle():
         net_status=main.NET_BATTLE,
         now=999.0,
     )
+
+
+def test_should_not_reverify_during_connection():
+    rec = main.PostRecord(
+        post=main.Post(addr="203.0.113.1:10800"),
+        owner_token="t",
+        creator_ip="1.2.3.4",
+        last_hostcheck_at=0.0,
+    )
+    assert not main.should_reverify_host_on_update(
+        rec,
+        addr="203.0.113.1:10800",
+        net_status=main.NET_CHECKING,
+        now=999.0,
+    )
+
+
+def test_should_not_reverify_when_guest_connected():
+    rec = main.PostRecord(
+        post=main.Post(addr="203.0.113.1:10800", guest_connected=True),
+        owner_token="t",
+        creator_ip="1.2.3.4",
+        last_hostcheck_at=0.0,
+    )
+    assert not main.should_reverify_host_on_update(
+        rec,
+        addr="203.0.113.1:10800",
+        net_status=main.NET_ALIVE,
+        now=999.0,
+    )
+
+
+def test_probe_target_records_skips_connection_in_progress():
+    quiet = main.PostRecord(
+        post=main.Post(id="quiet", addr="203.0.113.1:10800"),
+        owner_token="t",
+        creator_ip="1.2.3.4",
+    )
+    busy = main.PostRecord(
+        post=main.Post(
+            id="busy",
+            addr="203.0.113.2:10800",
+            net_status=main.NET_CHECKING,
+        ),
+        owner_token="t2",
+        creator_ip="1.2.3.5",
+    )
+    main.RECORDS.clear()
+    main.RECORDS["quiet"] = quiet
+    main.RECORDS["busy"] = busy
+    try:
+        targets = main.probe_target_records()
+        assert [rec.post.id for rec in targets] == ["quiet"]
+    finally:
+        main.RECORDS.clear()

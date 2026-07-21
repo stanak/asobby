@@ -113,6 +113,8 @@ def refresh_ranked_active(rec: PostRecord) -> None:
         rec.post, rec.guest_user_id, rec.guest_rank
     )
 
+NET_CHECKING = 2  # hisoutensoku net_status: 接続処理中 (キャラセレ/ロード)
+NET_ALIVE = 3  # hisoutensoku net_status: ホスト待ち
 NET_BATTLE = 4  # hisoutensoku net_status: 対戦中
 CREATE_MIN_INTERVAL_SEC = 2.0
 MAX_ACTIVE_POSTS_PER_IP = 2
@@ -2561,8 +2563,12 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
         net_status=body.net_status,
         now=now,
     ):
+        addr_changed = body.addr != rec.post.addr
         p.direct_reachable = await verify_hostable_or_raise(
-            body.addr, autopunch=body.autopunch
+            body.addr,
+            autopunch=body.autopunch,
+            ap_check=addr_changed,
+            consecutive=addr_changed,
         )
         rec.last_hostcheck_at = now
 
@@ -3202,12 +3208,27 @@ def parse_probe_addr(post: Post) -> Optional[tuple[str, int]]:
     return host, port
 
 
+def host_connection_in_progress(
+    rec: PostRecord,
+    *,
+    net_status: int | None = None,
+) -> bool:
+    """ゲスト接続〜対戦中は UDP プローブを避ける。"""
+    post = rec.post
+    ns = getattr(post, "net_status", NET_ALIVE) if net_status is None else net_status
+    if ns in (NET_CHECKING, NET_BATTLE):
+        return True
+    return bool(getattr(post, "guest_connected", False) or getattr(rec, "guest_ip", ""))
+
+
 def probe_target_records() -> list[PostRecord]:
     out: list[PostRecord] = []
     for rec in RECORDS.values():
         if RECORDS.get(rec.post.id) is not rec:
             continue
         if parse_probe_addr(rec.post) is None:
+            continue
+        if host_connection_in_progress(rec):
             continue
         out.append(rec)
     out.sort(key=lambda rec: rec.post.id)
@@ -3253,7 +3274,12 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
     matched = parse_matched_client(reply)
 
     if matched is None:
-        if len(reply) >= 1 and reply[0] == 0x07 and rec.guest_ip:
+        if (
+            len(reply) >= 1
+            and reply[0] == 0x07
+            and rec.guest_ip
+            and rec.post.net_status not in (NET_CHECKING, NET_BATTLE)
+        ):
             rec.guest_ip = ""
             rec.guest_user_id = ""
             rec.guest_rank = ""
@@ -3389,6 +3415,29 @@ def check_hostable_consecutive(
     return False
 
 
+def check_hostable_once(
+    host: str,
+    port: int,
+    *,
+    should_match: bool = False,
+    profile_name: str = "asobby",
+    timeout_sec: float = 0.2,
+) -> bool:
+    """単発 soku echo で到達性を確認する (heartbeat 再検証向け)。"""
+    packet = soku_echo_packet(
+        should_match=should_match,
+        profile_name=profile_name,
+    )
+    with _probe_lock:
+        reply = probe_host_once(
+            host,
+            port,
+            packet,
+            timeout_sec=timeout_sec,
+        )
+    return reply is not None and is_valid_reply(reply)
+
+
 def check_hostable_autopunch(host: str, port: int) -> bool:
     """AutoPunch リレー経由でホスト登録と soku echo を検証する。"""
     with _probe_lock:
@@ -3520,23 +3569,30 @@ def should_reverify_host_on_update(
     """募集 heartbeat 更新時に到達性を再検証すべきか。"""
     if not HOSTCHECK_ENABLED:
         return False
-    if net_status == NET_BATTLE:
+    if host_connection_in_progress(rec, net_status=net_status):
         return False
     if addr != rec.post.addr:
         return True
     return now - rec.last_hostcheck_at >= interval_sec
 
 
-async def verify_hostable_or_raise(addr: str, *, autopunch: bool = False) -> bool:
+async def verify_hostable_or_raise(
+    addr: str,
+    *,
+    autopunch: bool = False,
+    ap_check: bool = True,
+    consecutive: bool = True,
+) -> bool:
     """到達性を検証する。戻り値は直接 UDP プローブで確認できたか (AP バッジ用)。"""
     host, port = parse_ipv4_addr_or_raise(addr)
 
     if not HOSTCHECK_ENABLED:
         return True
 
-    direct = await asyncio.to_thread(check_hostable_consecutive, host, port)
+    probe = check_hostable_consecutive if consecutive else check_hostable_once
+    direct = await asyncio.to_thread(probe, host, port)
 
-    if autopunch:
+    if autopunch and ap_check:
         ap_ok = await asyncio.to_thread(check_hostable_autopunch, host, port)
         if not ap_ok:
             raise HTTPException(

@@ -17,7 +17,7 @@ from api_client import ApiClient
 from detect_api import DetectionState
 from hisoutensoku_memory import read_detection_state
 from local_store import LocalStore
-from services import Post, NET_ALIVE, NET_BATTLE, __version__, format_system_rank
+from services import Post, NET_ALIVE, NET_BATTLE, NET_CHECKING, __version__, format_system_rank
 from i18n import bind_locale, get_lang, post_type_label, t
 from config_manager import ConfigManager
 from tool_manager import ToolManager
@@ -696,24 +696,6 @@ class Controller:
         else:
             self._host_unreachable_notified = False
 
-    async def _self_check_host_when_posting(self, addr: str, autopunch: bool) -> None:
-        if not self.has_active_post() or self.is_detect_paused():
-            return
-        ok = await self._probe_host_reachable(addr, autopunch)
-        if not self.has_active_post() or self.is_detect_paused():
-            return
-        if ok:
-            self._host_unreachable_notified = False
-            return
-        self.log_sink(
-            "error",
-            "Host not reachable. Closing lobby post.",
-        )
-        self.notify_sink(t("notify.post_failed"))
-        if not self._close_pending:
-            self._close_pending = True
-            await self._action_q.put(Action("close", {"reason": "host_unreachable"}))
-
     def _track_detect_error(self, err: str) -> None:
         """検知異常の遷移をログ・通知し、トレイ表示を更新する。"""
         if err == self.detect_error:
@@ -811,6 +793,14 @@ class Controller:
 
         # 募集中/キャラセレ等ではプロフィール名だけ
         return lp
+
+    @staticmethod
+    def _host_net_status(st: DetectionState, *, is_battle: bool) -> int:
+        if is_battle and st.net_side == "host":
+            return NET_BATTLE
+        if st.net_side == "host" and st.mode in ("charsel", "loading"):
+            return NET_CHECKING
+        return NET_ALIVE
 
     def _current_addr(self, my_ip: str, port: Optional[int]) -> str:
         if port is None:
@@ -1411,24 +1401,6 @@ class Controller:
                 )
 
         # -----------------
-        # 投稿中: 到達性が失われたら募集を閉じる (サーバー側の定期再検証と併用)
-        # -----------------
-        if (
-            not paused
-            and recruiting_stable
-            and self.has_active_post()
-            and my_ip
-            and st.port
-            and (now - self._last_host_self_check_ts) >= HOST_SELF_CHECK_INTERVAL_SEC
-        ):
-            addr = self._current_addr(my_ip, st.port)
-            if addr:
-                self._last_host_self_check_ts = now
-                asyncio.get_running_loop().create_task(
-                    self._self_check_host_when_posting(addr, st.autopunch)
-                )
-
-        # -----------------
         # 2) battle -> update (ホスト側のみ)
         # -----------------
         if (
@@ -1443,7 +1415,7 @@ class Controller:
                 giuroll=st.giuroll,
                 autopunch=st.autopunch,
                 match_status=match_status,
-                net_status=NET_BATTLE,
+                net_status=self._host_net_status(st, is_battle=True),
             )
 
             if payload != self._last_sent_payload:
@@ -1456,11 +1428,7 @@ class Controller:
         # -----------------
         if not paused and self.has_active_post() and (now - self._last_heartbeat_ts) >= HEARTBEAT_SEC:
             self._last_heartbeat_ts = now
-            net_status = (
-                NET_BATTLE
-                if is_battle and st.net_side == "host"
-                else NET_ALIVE
-            )
+            net_status = self._host_net_status(st, is_battle=is_battle)
             payload = self._build_payload(
                 addr=self.my_post.addr or "",
                 giuroll=self.my_post.giuroll,
