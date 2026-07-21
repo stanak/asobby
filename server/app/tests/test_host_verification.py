@@ -7,7 +7,7 @@ import main
 
 
 @pytest.mark.asyncio
-async def test_verify_direct_first_when_autopunch(monkeypatch):
+async def test_verify_autopunch_requires_ap_even_when_direct(monkeypatch):
     calls: list[str] = []
 
     def fake_direct(host: str, port: int, **kwargs):
@@ -24,7 +24,18 @@ async def test_verify_direct_first_when_autopunch(monkeypatch):
 
     direct = await main.verify_hostable_or_raise("203.0.113.1:10800", autopunch=True)
     assert direct is True
-    assert calls == ["direct"]
+    assert calls == ["direct", "autopunch"]
+
+
+@pytest.mark.asyncio
+async def test_verify_autopunch_rejects_when_ap_unreachable(monkeypatch):
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    monkeypatch.setattr(main, "check_hostable_consecutive", lambda *a, **k: True)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: False)
+
+    with pytest.raises(main.HTTPException) as exc:
+        await main.verify_hostable_or_raise("203.0.113.1:10800", autopunch=True)
+    assert exc.value.status_code == 409
 
 
 @pytest.mark.asyncio

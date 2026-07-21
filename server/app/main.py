@@ -3497,15 +3497,13 @@ def parse_ipv4_addr_or_raise(addr: str) -> tuple[str, int]:
 
 
 async def verify_hostable_or_raise(addr: str, *, autopunch: bool = False) -> bool:
-    """到達性を検証する。戻り値は直接 UDP プローブで確認できたか。"""
+    """到達性を検証する。戻り値は直接 UDP プローブで確認できたか (AP バッジ用)。"""
     host, port = parse_ipv4_addr_or_raise(addr)
 
     if not HOSTCHECK_ENABLED:
         return True
 
     direct = await asyncio.to_thread(check_hostable_consecutive, host, port)
-    if direct:
-        return True
 
     if autopunch:
         ap_ok = await asyncio.to_thread(check_hostable_autopunch, host, port)
@@ -3516,14 +3514,16 @@ async def verify_hostable_or_raise(addr: str, *, autopunch: bool = False) -> boo
                     "message": "autopunch host not reachable (is autopunch running?)",
                 },
             )
-        return False
+        return direct
 
-    raise HTTPException(
-        status_code=409,
-        detail={
-            "message": "host not reachable",
-        },
-    )
+    if not direct:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "host not reachable",
+            },
+        )
+    return True
 
 
 def is_allowed_stream_url(url: str) -> bool:
