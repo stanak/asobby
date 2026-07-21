@@ -82,20 +82,17 @@ class TrayApp:
         self._append_log(level, text)
 
     def emit_notify(self, text: str) -> None:
-        def show() -> None:
-            shown = toast.show_info_toast(
-                text,
-                log=lambda m: self._append_log("warn", m),
-            )
-            if not shown:
-                self._notify(text)
-            elif self.icon:
+        shown = toast.show_info_toast(
+            text,
+            log=lambda m: self._append_log("warn", m),
+        )
+        if not shown:
+            self._notify(text)
+        if self.icon:
+            try:
                 self.icon.update_menu()
-
-        if self.tk_root is not None:
-            self.tk_root.after(0, show)
-        else:
-            show()
+            except Exception:
+                pass
 
     def emit_request(self, req, text: str) -> None:
         def callback(reply: str) -> None:

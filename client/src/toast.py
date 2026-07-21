@@ -87,7 +87,7 @@ def show_info_toast(text: str, log: Optional[Callable[[str], None]] = None) -> b
     if not INTERACTIVE_AVAILABLE:
         return False
     try:
-        toast = Toast([text], duration=ToastDuration.Short)
+        toast = Toast([text], duration=ToastDuration.Long)
         _get_toaster().show_toast(toast)
         _live_toasts.append(toast)
         del _live_toasts[:-_LIVE_TOASTS_MAX]
