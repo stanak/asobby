@@ -1148,6 +1148,8 @@ class Controller:
         elif is_battle:
             self._round_saw_battle = True
 
+        round_saw_battle = self._round_saw_battle
+
         if self._stable_for("session_score_idle", 5.0, seen=not in_net_flow):
             self._reset_session_score()
 
@@ -1189,7 +1191,7 @@ class Controller:
             and _ko_recordable(
                 is_battle=is_battle,
                 mode=st.mode,
-                round_saw_battle=self._round_saw_battle,
+                round_saw_battle=round_saw_battle,
             )
         ):
             self._last_ko_fingerprint = ko_fp
@@ -1226,7 +1228,7 @@ class Controller:
             and _ko_recordable(
                 is_battle=is_battle,
                 mode=st.mode,
-                round_saw_battle=self._round_saw_battle,
+                round_saw_battle=round_saw_battle,
             )
         ):
             self._result_reported = True
@@ -1248,7 +1250,7 @@ class Controller:
             and _ko_recordable(
                 is_battle=is_battle,
                 mode=st.mode,
-                round_saw_battle=self._round_saw_battle,
+                round_saw_battle=round_saw_battle,
             )
         ):
             self._result_reported = True
@@ -1266,8 +1268,6 @@ class Controller:
         if st.btl_mode != 5:
             self._result_reported = False
             self._last_ko_fingerprint = ""
-            if not is_battle:
-                self._round_saw_battle = False
 
         # -----------------
         # リプレイ収集 (ホスト/クライアント両方)
@@ -1285,7 +1285,7 @@ class Controller:
             and _ko_recordable(
                 is_battle=is_battle,
                 mode=st.mode,
-                round_saw_battle=self._round_saw_battle,
+                round_saw_battle=round_saw_battle,
             )
         ):
             self._replay_pending = True
