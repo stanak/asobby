@@ -45,37 +45,37 @@
     ctx.fill();
 
     ctx.strokeStyle = rgb(FRAME);
-    ctx.lineWidth = 1.25;
+    ctx.lineWidth = 1.4;
     ctx.lineJoin = "round";
     ctx.beginPath();
-    ctx.moveTo(16, 5);
-    ctx.lineTo(25.5, 10.5);
-    ctx.lineTo(25.5, 21.5);
-    ctx.lineTo(16, 27);
-    ctx.lineTo(6.5, 21.5);
-    ctx.lineTo(6.5, 10.5);
+    ctx.moveTo(16, 3.5);
+    ctx.lineTo(26.5, 10);
+    ctx.lineTo(26.5, 22);
+    ctx.lineTo(16, 28.5);
+    ctx.lineTo(5.5, 22);
+    ctx.lineTo(5.5, 10);
     ctx.closePath();
     ctx.stroke();
 
     ctx.fillStyle = rgb(ACCENT);
     ctx.beginPath();
-    ctx.moveTo(10, 16);
-    ctx.lineTo(14, 12.75);
-    ctx.lineTo(14, 19.25);
+    ctx.moveTo(8.5, 16);
+    ctx.lineTo(13, 12.2);
+    ctx.lineTo(13, 19.8);
     ctx.closePath();
     ctx.fill();
 
     ctx.beginPath();
-    ctx.moveTo(22, 16);
-    ctx.lineTo(18, 12.75);
-    ctx.lineTo(18, 19.25);
+    ctx.moveTo(23.5, 16);
+    ctx.lineTo(19, 12.2);
+    ctx.lineTo(19, 19.8);
     ctx.closePath();
     ctx.fill();
 
     ctx.save();
     ctx.translate(16, 16);
     ctx.rotate(Math.PI / 4);
-    roundRect(ctx, -1.8, -1.8, 3.6, 3.6, 0.45);
+    roundRect(ctx, -2.35, -2.35, 4.7, 4.7, 0.55);
     ctx.fillStyle = rgb(CORE);
     ctx.fill();
     ctx.restore();

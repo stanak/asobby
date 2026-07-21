@@ -8,10 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from time import sleep
 
-from PIL import Image, ImageDraw
+from PIL import Image
 from pystray import Menu, MenuItem
 
 from controller import Controller
+from icon_art import render_icon
 from tray_icon import TrayIcon
 from i18n import (
     SUPPORTED_LANGS,
@@ -34,24 +35,16 @@ import toast
 LOG_PATH = Path("asobby.log")
 LOG_MAX_BYTES = 256 * 1024
 
-# トレイアイコンの状態色
-COLOR_IDLE = (128, 128, 128)     # 待機中
-COLOR_RECRUIT = (46, 160, 67)    # 募集中
-COLOR_BATTLE = (219, 109, 40)    # 対戦中
+# トレイアイコンの状態色 (幾何学マークのアクセント)
+COLOR_IDLE = (128, 128, 128)
+COLOR_RECRUIT = (46, 160, 67)
+COLOR_BATTLE = (219, 109, 40)
 
 
 def make_icon_image(
     color: tuple[int, int, int], *, badge: bool = False
 ) -> Image.Image:
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.ellipse((4, 4, 60, 60), fill=color + (255,))
-    d.ellipse((20, 20, 44, 44), fill=(255, 255, 255, 230))
-    if badge:
-        # 他人の募集あり: 右上に青点 (状態色と独立して見える)
-        d.ellipse((42, 2, 58, 18), fill=(255, 255, 255, 255))
-        d.ellipse((44, 4, 56, 16), fill=(90, 158, 255, 255))
-    return img
+    return render_icon(64, accent=color, frame=color, badge=badge)
 
 
 class TrayApp:
@@ -622,6 +615,7 @@ class TrayApp:
     def _build_menu(self) -> Menu:
         return Menu(
             MenuItem(lambda item: self._status_text(), None, enabled=False),
+            MenuItem(lambda item: t("tray.version", version=__version__), None, enabled=False),
             Menu.SEPARATOR,
             MenuItem(t("tray.open_lobby"), lambda: self._open_lobby()),
             MenuItem(t("tray.settings"), lambda: self._open_settings()),
