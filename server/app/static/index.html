@@ -1364,7 +1364,7 @@ function buildRow(p) {
 
   const cap = document.createElement("td");
   if (p.giuroll) cap.appendChild(badge(t("common.badgeGiu")));
-  if (p.autopunch) cap.appendChild(badge(t("common.badgeAp")));
+  if (p.autopunch && !p.direct_reachable) cap.appendChild(badge(t("common.badgeAp")));
   tr.appendChild(cap);
 
   const stream = document.createElement("td");

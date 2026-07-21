@@ -245,6 +245,7 @@ class Post:
     stream_url: str = ""
     giuroll: bool = False
     autopunch: bool = False
+    direct_reachable: bool = False  # 直接 UDP プローブで到達確認できたか (AP 表示用)
     match_status: str = ""
     net_status: int = 0
     owner_name: str = ""  # Discord ログイン時の表示名（未ログインなら空）
@@ -2492,7 +2493,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
     if active >= MAX_ACTIVE_POSTS_PER_IP:
         raise HTTPException(status_code=429, detail="too many active posts")
 
-    await verify_hostable_or_raise(body.addr, autopunch=body.autopunch)
+    direct_reachable = await verify_hostable_or_raise(body.addr, autopunch=body.autopunch)
 
     LAST_CREATE_AT[ip] = now
 
@@ -2507,6 +2508,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         stream_url=body.stream_url,
         giuroll=body.giuroll,
         autopunch=body.autopunch,
+        direct_reachable=direct_reachable,
         match_status=body.match_status,
         net_status=body.net_status,
         challenge_upper=body.challenge_upper,
@@ -2547,7 +2549,9 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
 
     # 再ホスト等でアドレスが変わった場合のみ到達性を再確認する
     if body.addr != p.addr:
-        await verify_hostable_or_raise(body.addr, autopunch=body.autopunch)
+        p.direct_reachable = await verify_hostable_or_raise(
+            body.addr, autopunch=body.autopunch
+        )
 
     p.post_type = body.post_type
     p.challenge_upper = body.challenge_upper
@@ -3493,34 +3497,33 @@ def parse_ipv4_addr_or_raise(addr: str) -> tuple[str, int]:
 
 
 async def verify_hostable_or_raise(addr: str, *, autopunch: bool = False) -> bool:
+    """到達性を検証する。戻り値は直接 UDP プローブで確認できたか。"""
     host, port = parse_ipv4_addr_or_raise(addr)
 
     if not HOSTCHECK_ENABLED:
         return True
 
+    direct = await asyncio.to_thread(check_hostable_consecutive, host, port)
+    if direct:
+        return True
+
     if autopunch:
-        result = await asyncio.to_thread(check_hostable_autopunch, host, port)
-        if not result:
+        ap_ok = await asyncio.to_thread(check_hostable_autopunch, host, port)
+        if not ap_ok:
             raise HTTPException(
                 status_code=409,
                 detail={
                     "message": "autopunch host not reachable (is autopunch running?)",
                 },
             )
-    else:
-        result = await asyncio.to_thread(
-            check_hostable_consecutive,
-            host,
-            port,
-        )
-        if not result:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "message": "host not reachable",
-                },
-            )
-    return True
+        return False
+
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "message": "host not reachable",
+        },
+    )
 
 
 def is_allowed_stream_url(url: str) -> bool:
