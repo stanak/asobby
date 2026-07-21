@@ -224,7 +224,7 @@ fly certs show asobby.com   # 表示される A/AAAA レコードを DNS に登�
 
 ## デプロイ (fly.io)
 
-設定は `app/fly.toml`。東京リージョン（nrt）・マシン1台構成。
+設定は `app/fly.toml`。東京リージョン（nrt）・**dedicated-cpu-1x / 1GB**・マシン1台構成。
 
 ```sh
 cd app
@@ -234,6 +234,7 @@ fly deploy --ha=false                  # デプロイ（マシン1台）
 ```
 
 更新は `fly deploy` だけでよい。ログは `fly logs`。
+VM サイズ変更は `fly.toml` の `[[vm]] size` を編集して再デプロイする。
 
 注意:
 
@@ -255,6 +256,22 @@ fly.io は任意ポートへの外向き UDP を遮断するため、そのま�
 この経路は**専用 IPv4（$2/月）が必要**。`fly ips allocate-v4` で割り当てる。
 費用をかけたくない場合は、代わりに `[env]` に `ASOBBY_HOSTCHECK = 'off'` を
 設定すれば検証なしで動作する（ポート未開放の募集も掲載される）。
+
+#### ゲスト検出プローブの間隔
+
+fly.io では送信元 UDP ポートを 1 つ固定するため、**同時並列プローブはできない**
+（ソケット競合と返信の取り違え防止）。代わりにサーバーは **ラウンドロビン** で
+1 件ずつ分散プローブし、全募集を約 10 秒で 1 周する。
+
+| 環境変数 | 既定 | 説明 |
+| --- | --- | --- |
+| `ASOBBY_GUEST_PROBE_ROUND_SEC` | `10` | 全募集を 1 周する目標秒数 |
+| `ASOBBY_GUEST_PROBE_MIN_TICK_SEC` | `0.4` | tick 間隔の下限（秒） |
+| `ASOBBY_GUEST_PROBE_TIMEOUT_SEC` | `0.35` | 定期プローブ 1 回の UDP タイムアウト |
+
+募集が N 件のとき tick 間隔は `max(MIN_TICK, ROUND/N)` になる。
+例: 20 件 → 0.5 秒ごとに 1 件、10 秒で全件 1 周。
+将来、fly で複数 UDP ポートを公開できれば並列化も可能。
 
 ## 起動 (Podman)
 

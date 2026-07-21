@@ -61,7 +61,10 @@ POST_TTL_SEC = 20
 # 対戦中 (ゲスト接続済み) はデプロイ中のハートビート途切れでも復元できるよう長めに保持
 POST_BATTLE_TTL_SEC = 600
 CLEANUP_INTERVAL_SEC = 5
-GUEST_PROBE_INTERVAL_SEC = 10
+# 全募集を 1 周プローブする目標時間 (件数に応じて tick 間隔を自動調整)
+GUEST_PROBE_ROUND_SEC = float(os.environ.get("ASOBBY_GUEST_PROBE_ROUND_SEC", "10"))
+GUEST_PROBE_MIN_TICK_SEC = float(os.environ.get("ASOBBY_GUEST_PROBE_MIN_TICK_SEC", "0.4"))
+GUEST_PROBE_TIMEOUT_SEC = float(os.environ.get("ASOBBY_GUEST_PROBE_TIMEOUT_SEC", "0.35"))
 SSE_PING_INTERVAL_SEC = 15
 
 VISITOR_COOKIE = "asobby_visitor"
@@ -869,33 +872,44 @@ async def cleanup_loop() -> None:
 
 
 async def guest_probe_loop() -> None:
-    """各募集ホストへ soku echo を送り、対戦中ゲスト IP を定期的に取得する。"""
+    """各募集ホストへ soku echo を送り、対戦中ゲスト IP を定期的に取得する。
+
+    送信元 UDP ポート固定のためプローブ本体は直列だが、全件を一括で回すのではなく
+    ラウンドロビンで分散し、募集作成時の到達性検証とのロック競合を減らす。
+    """
     if not HOSTCHECK_ENABLED:
         return
 
+    cursor = 0
     while True:
+        tick_sleep = GUEST_PROBE_ROUND_SEC
         try:
-            for rec in list(RECORDS.values()):
-                post = rec.post
-                if RECORDS.get(post.id) is not rec:
-                    continue
-                try:
-                    host, port_s = post.addr.rsplit(":", 1)
-                    port = int(port_s)
-                    if not (0 < port < 65536):
-                        continue
-                    socket.inet_aton(host)
-                except (ValueError, OSError):
-                    continue
+            records = probe_target_records()
+            n = len(records)
+            if n == 0:
+                await asyncio.sleep(GUEST_PROBE_ROUND_SEC)
+                continue
 
-                reply = await asyncio.to_thread(
-                    probe_post_status, host, port, post.autopunch
-                )
-                await apply_guest_probe(rec, reply)
+            tick_sleep = guest_probe_tick_sleep_sec(n)
+            rec = records[cursor % n]
+            cursor = (cursor + 1) % n
+            post = rec.post
+            host, port = parse_probe_addr(post)
+            if host is None:
+                await asyncio.sleep(tick_sleep)
+                continue
+
+            reply = await asyncio.to_thread(
+                probe_post_status,
+                host,
+                port,
+                post.autopunch,
+            )
+            await apply_guest_probe(rec, reply)
         except Exception as e:
             print(f"guest_probe_loop error: {e}")
 
-        await asyncio.sleep(GUEST_PROBE_INTERVAL_SEC)
+        await asyncio.sleep(tick_sleep)
 
 
 def run_migrations() -> None:
@@ -3159,7 +3173,43 @@ def _autopunch_nat_port(host: str, port: int) -> Optional[int]:
         sock.close()
 
 
-def probe_post_status(host: str, port: int, autopunch: bool) -> Optional[bytes]:
+def parse_probe_addr(post: Post) -> Optional[tuple[str, int]]:
+    try:
+        host, port_s = post.addr.rsplit(":", 1)
+        port = int(port_s)
+        if not (0 < port < 65536):
+            return None
+        socket.inet_aton(host)
+    except (ValueError, OSError):
+        return None
+    return host, port
+
+
+def probe_target_records() -> list[PostRecord]:
+    out: list[PostRecord] = []
+    for rec in RECORDS.values():
+        if RECORDS.get(rec.post.id) is not rec:
+            continue
+        if parse_probe_addr(rec.post) is None:
+            continue
+        out.append(rec)
+    out.sort(key=lambda rec: rec.post.id)
+    return out
+
+
+def guest_probe_tick_sleep_sec(post_count: int) -> float:
+    if post_count <= 0:
+        return GUEST_PROBE_ROUND_SEC
+    return max(GUEST_PROBE_MIN_TICK_SEC, GUEST_PROBE_ROUND_SEC / post_count)
+
+
+def probe_post_status(
+    host: str,
+    port: int,
+    autopunch: bool,
+    *,
+    timeout_sec: float = GUEST_PROBE_TIMEOUT_SEC,
+) -> Optional[bytes]:
     """soku echo でホスト状態を 1 回プローブする（スレッド内で呼ぶ）。"""
     with _probe_lock:
         probe_port = port
@@ -3173,7 +3223,7 @@ def probe_post_status(host: str, port: int, autopunch: bool) -> Optional[bytes]:
             host,
             probe_port,
             soku_echo_packet(),
-            timeout_sec=0.5,
+            timeout_sec=timeout_sec,
         )
 
 
