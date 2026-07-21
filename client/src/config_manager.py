@@ -38,6 +38,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "session_score_notify_enabled": False,
         "session_score_notify_mode": "all",
         "session_score_notify_rules": [],
+        "notify_sound_enabled": True,
     },
 }
 

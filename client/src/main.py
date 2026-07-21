@@ -11,6 +11,7 @@ from time import sleep
 from PIL import Image
 from pystray import Menu, MenuItem
 
+import notify_sound
 import toast
 from controller import Controller, PAUSE_UNTIL_RESUME
 from icon_art import render_icon
@@ -80,12 +81,18 @@ class TrayApp:
     def emit_log(self, level: str, text: str) -> None:
         self._append_log(level, text)
 
+    def _play_notify_sound(self) -> None:
+        if not self.controller.notify_sound_enabled():
+            return
+        notify_sound.play(log=lambda m: self._append_log("warn", m))
+
     def emit_notify(self, text: str) -> None:
         shown = toast.show_info_toast(
             text,
             title="asobby",
             log=lambda m: self._append_log("warn", m),
         )
+        self._play_notify_sound()
         if not shown:
             self._append_log("warn", "勝敗数通知: トースト非表示のためトレイ通知にフォールバック")
             self._notify(text)
@@ -113,6 +120,7 @@ class TrayApp:
             callback,
             log=lambda m: self._append_log("warn", m),
         )
+        self._play_notify_sound()
         if not shown:
             self._notify(text + t("toast.request_fallback"))
         if self.icon:
@@ -541,6 +549,13 @@ class TrayApp:
         if self.icon:
             self.icon.update_menu()
 
+    def _toggle_notify_sound(self) -> None:
+        self.controller.set_notify_sound_enabled(
+            not self.controller.notify_sound_enabled()
+        )
+        if self.icon:
+            self.icon.update_menu()
+
     def _toggle_ping_warn(self) -> None:
         self.controller.set_ping_warn_enabled(
             not self.controller.ping_warn_enabled()
@@ -638,6 +653,11 @@ class TrayApp:
                 t("tray.ping_warn"),
                 lambda: self._toggle_ping_warn(),
                 checked=lambda item: self.controller.ping_warn_enabled(),
+            ),
+            MenuItem(
+                t("tray.notify_sound"),
+                lambda: self._toggle_notify_sound(),
+                checked=lambda item: self.controller.notify_sound_enabled(),
             ),
             MenuItem(
                 t("tray.session_score_notify"),

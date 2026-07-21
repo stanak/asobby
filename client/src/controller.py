@@ -250,6 +250,20 @@ class Controller:
             t("log.challenge_upper", state=t("common.on" if enabled else "common.off")),
         )
 
+    def notify_sound_enabled(self) -> bool:
+        return bool(self.config_mgr.get_value("options", "notify_sound_enabled", True))
+
+    def set_notify_sound_enabled(self, enabled: bool) -> None:
+        value = bool(enabled)
+        self.config_mgr.set_value("options", "notify_sound_enabled", value)
+        self.log_sink(
+            "info",
+            t(
+                "log.notify_sound_enabled",
+                state=t("common.on" if value else "common.off"),
+            ),
+        )
+
     def ping_warn_enabled(self) -> bool:
         return bool(self.config_mgr.get_value("options", "ping_warn_enabled", True))
 
