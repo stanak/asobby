@@ -63,3 +63,56 @@ async def test_verify_non_autopunch_unreachable(monkeypatch):
     with pytest.raises(main.HTTPException) as exc:
         await main.verify_hostable_or_raise("203.0.113.1:10800", autopunch=False)
     assert exc.value.status_code == 409
+
+
+def test_should_reverify_on_addr_change():
+    rec = main.PostRecord(
+        post=main.Post(addr="203.0.113.1:10800"),
+        owner_token="t",
+        creator_ip="1.2.3.4",
+        last_hostcheck_at=100.0,
+    )
+    assert main.should_reverify_host_on_update(
+        rec,
+        addr="203.0.113.1:10801",
+        net_status=0,
+        now=110.0,
+    )
+
+
+def test_should_reverify_on_recruit_heartbeat_interval():
+    rec = main.PostRecord(
+        post=main.Post(addr="203.0.113.1:10800"),
+        owner_token="t",
+        creator_ip="1.2.3.4",
+        last_hostcheck_at=100.0,
+    )
+    assert main.should_reverify_host_on_update(
+        rec,
+        addr="203.0.113.1:10800",
+        net_status=0,
+        now=121.0,
+        interval_sec=20.0,
+    )
+    assert not main.should_reverify_host_on_update(
+        rec,
+        addr="203.0.113.1:10800",
+        net_status=0,
+        now=115.0,
+        interval_sec=20.0,
+    )
+
+
+def test_should_not_reverify_during_battle():
+    rec = main.PostRecord(
+        post=main.Post(addr="203.0.113.1:10800"),
+        owner_token="t",
+        creator_ip="1.2.3.4",
+        last_hostcheck_at=0.0,
+    )
+    assert not main.should_reverify_host_on_update(
+        rec,
+        addr="203.0.113.1:10800",
+        net_status=main.NET_BATTLE,
+        now=999.0,
+    )

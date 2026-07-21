@@ -182,6 +182,9 @@ _FILENAME_UNSAFE_RE = re.compile(r"[\x00-\x1f\\/:\"*?<>|]")
 # ホスト到達性検証 (UDP プローブ) の有効/無効。
 # 外向き UDP が一切通らない環境では off にする。
 HOSTCHECK_ENABLED = os.environ.get("ASOBBY_HOSTCHECK", "on").lower() not in ("off", "0", "false")
+HOSTCHECK_UPDATE_INTERVAL_SEC = float(
+    os.environ.get("ASOBBY_HOSTCHECK_UPDATE_INTERVAL_SEC", "20")
+)
 
 # fly.io では任意ポートへの外向き UDP が遮断されるが、UDP サービスとして
 # 公開したポート (fly-global-services にバインド) を送信元にすれば
@@ -278,6 +281,7 @@ class PostRecord:
     pending_ping_warnings: list[dict] = field(default_factory=list)
     # giuroll_request / casual_invite の送信ログ (返信 API 用。配送キューとは別)
     sent_log: dict[str, dict] = field(default_factory=dict)
+    last_hostcheck_at: float = 0.0
 
 
 POST_REDIS_TTL_SEC = POST_TTL_SEC + 30
@@ -310,6 +314,7 @@ def post_record_to_dict(rec: PostRecord) -> dict[str, Any]:
         "pending_messages": list(rec.pending_messages),
         "pending_ping_warnings": list(rec.pending_ping_warnings),
         "sent_log": dict(rec.sent_log),
+        "last_hostcheck_at": rec.last_hostcheck_at,
     }
 
 
@@ -327,6 +332,7 @@ def post_record_from_dict(data: dict[str, Any]) -> PostRecord:
         pending_messages=list(data.get("pending_messages") or []),
         pending_ping_warnings=list(data.get("pending_ping_warnings") or []),
         sent_log=dict(data.get("sent_log") or {}),
+        last_hostcheck_at=float(data.get("last_hostcheck_at", 0) or 0),
     )
 
 
@@ -2526,6 +2532,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         owner_token=secrets.token_urlsafe(24),
         creator_ip=ip,
         owner_user_id=owner_user_id,
+        last_hostcheck_at=now,
     )
     RECORDS[post.id] = rec
 
@@ -2546,12 +2553,18 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
 
     rec = get_record_or_raise(body.id, body.owner_token)
     p = rec.post
+    now = now_ts()
 
-    # 再ホスト等でアドレスが変わった場合のみ到達性を再確認する
-    if body.addr != p.addr:
+    if should_reverify_host_on_update(
+        rec,
+        addr=body.addr,
+        net_status=body.net_status,
+        now=now,
+    ):
         p.direct_reachable = await verify_hostable_or_raise(
             body.addr, autopunch=body.autopunch
         )
+        rec.last_hostcheck_at = now
 
     p.post_type = body.post_type
     p.challenge_upper = body.challenge_upper
@@ -2565,7 +2578,7 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     p.autopunch = body.autopunch
     p.match_status = body.match_status
     p.net_status = body.net_status
-    p.updated_at = now_ts()
+    p.updated_at = now
     geoip.apply_country_from_addr(p, addr=p.addr)
     if rec.guest_user_id:
         refresh_ranked_active(rec)
@@ -3494,6 +3507,24 @@ def parse_ipv4_addr_or_raise(addr: str) -> tuple[str, int]:
             detail="addr must be IPv4:port (IPv6 is not supported by the game)",
         )
     return host, port
+
+
+def should_reverify_host_on_update(
+    rec: PostRecord,
+    *,
+    addr: str,
+    net_status: int,
+    now: float,
+    interval_sec: float = HOSTCHECK_UPDATE_INTERVAL_SEC,
+) -> bool:
+    """募集 heartbeat 更新時に到達性を再検証すべきか。"""
+    if not HOSTCHECK_ENABLED:
+        return False
+    if net_status == NET_BATTLE:
+        return False
+    if addr != rec.post.addr:
+        return True
+    return now - rec.last_hostcheck_at >= interval_sec
 
 
 async def verify_hostable_or_raise(addr: str, *, autopunch: bool = False) -> bool:

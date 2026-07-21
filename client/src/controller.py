@@ -667,20 +667,24 @@ class Controller:
         if changed:
             self.detect_ui_sink()
 
-    async def _self_check_host_when_paused(self, addr: str, autopunch: bool) -> None:
-        if not self.is_detect_paused():
-            return
+    async def _probe_host_reachable(self, addr: str, autopunch: bool) -> bool:
         try:
             host, port_s = addr.rsplit(":", 1)
             port = int(port_s)
         except ValueError:
-            return
+            return False
         rtt = await asyncio.to_thread(
             probe_rtt_ms, host, port, autopunch=autopunch
         )
+        return rtt is not None
+
+    async def _self_check_host_when_paused(self, addr: str, autopunch: bool) -> None:
         if not self.is_detect_paused():
             return
-        if rtt is None:
+        ok = await self._probe_host_reachable(addr, autopunch)
+        if not self.is_detect_paused():
+            return
+        if not ok:
             if not self._host_unreachable_notified:
                 self._host_unreachable_notified = True
                 self.log_sink(
@@ -691,6 +695,24 @@ class Controller:
                 self.notify_sink(t("notify.post_failed"))
         else:
             self._host_unreachable_notified = False
+
+    async def _self_check_host_when_posting(self, addr: str, autopunch: bool) -> None:
+        if not self.has_active_post() or self.is_detect_paused():
+            return
+        ok = await self._probe_host_reachable(addr, autopunch)
+        if not self.has_active_post() or self.is_detect_paused():
+            return
+        if ok:
+            self._host_unreachable_notified = False
+            return
+        self.log_sink(
+            "error",
+            "Host not reachable. Closing lobby post.",
+        )
+        self.notify_sink(t("notify.post_failed"))
+        if not self._close_pending:
+            self._close_pending = True
+            await self._action_q.put(Action("close", {"reason": "host_unreachable"}))
 
     def _track_detect_error(self, err: str) -> None:
         """検知異常の遷移をログ・通知し、トレイ表示を更新する。"""
@@ -1386,6 +1408,24 @@ class Controller:
                 self._last_host_self_check_ts = now
                 asyncio.get_running_loop().create_task(
                     self._self_check_host_when_paused(addr, st.autopunch)
+                )
+
+        # -----------------
+        # 投稿中: 到達性が失われたら募集を閉じる (サーバー側の定期再検証と併用)
+        # -----------------
+        if (
+            not paused
+            and recruiting_stable
+            and self.has_active_post()
+            and my_ip
+            and st.port
+            and (now - self._last_host_self_check_ts) >= HOST_SELF_CHECK_INTERVAL_SEC
+        ):
+            addr = self._current_addr(my_ip, st.port)
+            if addr:
+                self._last_host_self_check_ts = now
+                asyncio.get_running_loop().create_task(
+                    self._self_check_host_when_posting(addr, st.autopunch)
                 )
 
         # -----------------
