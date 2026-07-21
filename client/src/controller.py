@@ -91,9 +91,15 @@ def _ko_fingerprint(st: DetectionState) -> str:
     )
 
 
-def _ko_detect_visible(*, is_battle: bool, mode: str) -> bool:
-    """KO 確定は対戦末尾、ロード、キャラセレで読める。"""
-    return is_battle or mode in ("charsel", "loading")
+def _ko_recordable(*, is_battle: bool, mode: str, round_saw_battle: bool) -> bool:
+    """KO 確定の読み取りを許可するシーン。
+
+    キャラセレ/ロードは同一ラウンドで対戦を観測した後だけ許可する。
+    前ラウンドの btl_mode==5 が残っていると未対戦のキャラセレで誤記録するため。
+    """
+    if is_battle:
+        return True
+    return mode in ("loading", "charsel") and round_saw_battle
 
 
 @dataclass
@@ -149,6 +155,7 @@ class Controller:
         self._close_pending = False
         self._result_reported = False
         self._last_ko_fingerprint = ""
+        self._round_saw_battle = False
         self._pending_local_match: Optional[dict] = None
 
         self.owner_token: str = ""
@@ -186,7 +193,7 @@ class Controller:
 
         self.pending_requests: list[PendingRequest] = []
 
-        # ホスト自動投稿の一時停止。0 なら停止していない (検知自体は止めない)
+        # ロビー自動投稿の一時停止。0 なら停止していない (検知自体は止めない)
         self._detect_pause_until: float = 0.0
         self._last_host_self_check_ts: float = 0.0
         self._host_unreachable_notified: bool = False
@@ -551,7 +558,7 @@ class Controller:
                 pass
 
     # -----------------
-    # ホスト自動投稿の一時停止
+    # ロビー自動投稿の一時停止
     # -----------------
     def _pause_duration_label(self, seconds: float) -> str:
         if seconds == PAUSE_UNTIL_RESUME:
@@ -1136,6 +1143,11 @@ class Controller:
         )
         self._local_net_active = in_net_flow
 
+        if not in_net_flow:
+            self._round_saw_battle = False
+        elif is_battle:
+            self._round_saw_battle = True
+
         if self._stable_for("session_score_idle", 5.0, seen=not in_net_flow):
             self._reset_session_score()
 
@@ -1174,9 +1186,14 @@ class Controller:
             st.net_side in ("host", "client")
             and ko_fp
             and ko_fp != self._last_ko_fingerprint
-            and _ko_detect_visible(is_battle=is_battle, mode=st.mode)
+            and _ko_recordable(
+                is_battle=is_battle,
+                mode=st.mode,
+                round_saw_battle=self._round_saw_battle,
+            )
         ):
             self._last_ko_fingerprint = ko_fp
+            self._round_saw_battle = False
             my_side = "host" if st.net_side == "host" else "client"
             winner = "host" if st.lwin == 2 else "guest"
             ranked = 0
@@ -1206,7 +1223,11 @@ class Controller:
             and self.has_active_post()
             and not self._result_reported
             and _ko_decided(st)
-            and _ko_detect_visible(is_battle=is_battle, mode=st.mode)
+            and _ko_recordable(
+                is_battle=is_battle,
+                mode=st.mode,
+                round_saw_battle=self._round_saw_battle,
+            )
         ):
             self._result_reported = True
             winner = "host" if st.lwin == 2 else "guest"
@@ -1224,7 +1245,11 @@ class Controller:
             and not self._result_reported
             and self.is_logged_in()
             and _ko_decided(st)
-            and _ko_detect_visible(is_battle=is_battle, mode=st.mode)
+            and _ko_recordable(
+                is_battle=is_battle,
+                mode=st.mode,
+                round_saw_battle=self._round_saw_battle,
+            )
         ):
             self._result_reported = True
             winner = "host" if st.lwin == 2 else "guest"
@@ -1241,6 +1266,8 @@ class Controller:
         if st.btl_mode != 5:
             self._result_reported = False
             self._last_ko_fingerprint = ""
+            if not is_battle:
+                self._round_saw_battle = False
 
         # -----------------
         # リプレイ収集 (ホスト/クライアント両方)
@@ -1255,7 +1282,11 @@ class Controller:
         if (
             is_net_battle
             and _ko_decided(st)
-            and _ko_detect_visible(is_battle=is_battle, mode=st.mode)
+            and _ko_recordable(
+                is_battle=is_battle,
+                mode=st.mode,
+                round_saw_battle=self._round_saw_battle,
+            )
         ):
             self._replay_pending = True
             self._replay_match_meta = {

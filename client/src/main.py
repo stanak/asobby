@@ -497,7 +497,7 @@ class TrayApp:
             yield MenuItem(t("tray.add_stream_hint"), None, enabled=False)
 
     def _pause_menu_items(self):
-        """ホスト自動投稿の一時停止サブメニュー。"""
+        """ロビー自動投稿の一時停止サブメニュー。"""
         def make_pause(seconds: float):
             def act(icon, item):
                 self.controller.pause_auto_detect(seconds)

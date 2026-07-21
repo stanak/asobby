@@ -413,7 +413,7 @@
     "guide.menu.stream.name": "配信URL切替",
     "guide.menu.stream.desc":
       "YouTube / Twitch / ニコニコの配信 URL を候補から選び、ロビーに表示します。",
-    "guide.menu.pause.name": "ホスト自動投稿を一時停止",
+    "guide.menu.pause.name": "ロビー自動投稿を一時停止",
     "guide.menu.pause.desc":
       "asobby.com への自動投稿だけを止めます。天則の検知・到達性チェックは継続します（30 分 / 1 時間 / 3 時間 / 許可するまで、または今すぐ再開）。",
     "guide.menu.copyAddr.name": "ホスト時に IP:Port をコピー",

@@ -28,7 +28,7 @@ JA: dict[str, str] = {
     "tray.session_score_settings": "勝敗数通知の設定...",
     "tray.comment": "コメント切替",
     "tray.stream": "配信URL切替",
-    "tray.pause": "ホスト自動投稿を一時停止",
+    "tray.pause": "ロビー自動投稿を一時停止",
     "tray.pause_active": "ホスト自動投稿 (停止中 残り {remaining})",
     "tray.pause_running": "停止中 (残り {remaining})",
     "tray.pause_resume": "今すぐ再開する",
