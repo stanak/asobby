@@ -29,7 +29,6 @@ from services import (
     __version__,
 )
 from stats_window import open_stats_window
-import toast
 
 LOG_PATH = Path("asobby.log")
 LOG_MAX_BYTES = 256 * 1024
@@ -84,9 +83,11 @@ class TrayApp:
     def emit_notify(self, text: str) -> None:
         shown = toast.show_info_toast(
             text,
+            title="asobby",
             log=lambda m: self._append_log("warn", m),
         )
         if not shown:
+            self._append_log("warn", "勝敗数通知: トースト非表示のためトレイ通知にフォールバック")
             self._notify(text)
         if self.icon:
             try:

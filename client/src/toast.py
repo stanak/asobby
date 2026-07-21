@@ -12,6 +12,8 @@ try:
         ToastButton,
         ToastDuration,
     )
+    from windows_toasts.toast_audio import AudioSource, ToastAudio
+    from windows_toasts.wrappers import ToastScenario
 
     INTERACTIVE_AVAILABLE = True
     IMPORT_ERROR: Optional[str] = None
@@ -34,11 +36,35 @@ def _ensure_aumid() -> Optional[str]:
     ボタン操作でコールバックが発火しない (windows-toasts の既知の制約)。
     """
     try:
+        import os
         import winreg
+        from pathlib import Path
+
+        icon_uri: Optional[str] = None
+        icon_dir = Path(os.environ.get("LOCALAPPDATA", "")) / "asobby"
+        icon_path = icon_dir / "toast.ico"
+        if not icon_path.exists():
+            try:
+                from icon_art import render_icon
+
+                icon_dir.mkdir(parents=True, exist_ok=True)
+                ico_images = [render_icon(s) for s in (16, 32)]
+                ico_images[0].save(
+                    icon_path,
+                    format="ICO",
+                    sizes=[(img.width, img.height) for img in ico_images],
+                    append_images=ico_images[1:],
+                )
+            except Exception:
+                pass
+        if icon_path.exists():
+            icon_uri = str(icon_path.resolve())
 
         key_path = f"SOFTWARE\\Classes\\AppUserModelId\\{APP_AUMID}"
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path) as key:
             winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "asobby")
+            if icon_uri:
+                winreg.SetValueEx(key, "IconUri", 0, winreg.REG_SZ, icon_uri)
         return APP_AUMID
     except Exception:
         return None
@@ -82,12 +108,33 @@ def show_request_toast(
         return False
 
 
-def show_info_toast(text: str, log: Optional[Callable[[str], None]] = None) -> bool:
-    """短い Windows トーストを表示する (勝敗数通知など)。"""
+def show_info_toast(
+    text: str,
+    *,
+    title: str = "asobby",
+    log: Optional[Callable[[str], None]] = None,
+) -> bool:
+    """Windows トーストを表示する (勝敗数通知など)。"""
     if not INTERACTIVE_AVAILABLE:
+        if log:
+            log(
+                "windows-toasts が利用できないためトーストを表示できません: "
+                f"{IMPORT_ERROR}"
+            )
         return False
     try:
-        toast = Toast([text], duration=ToastDuration.Long)
+        toast = Toast(
+            [title, text],
+            duration=ToastDuration.Long,
+            scenario=ToastScenario.Important,
+            audio=ToastAudio(sound=AudioSource.Reminder),
+        )
+
+        def on_failed(args) -> None:
+            if log:
+                log(f"トースト表示失敗 (OS): {args!r}")
+
+        toast.on_failed = on_failed
         _get_toaster().show_toast(toast)
         _live_toasts.append(toast)
         del _live_toasts[:-_LIVE_TOASTS_MAX]
