@@ -214,7 +214,7 @@ class ApiClient:
             r.raise_for_status()
             data = r.json()
             if data.get("ok") and data.get("tag"):
-                url = str(data.get("download_url") or data.get("html_url") or "")
+                url = str(data.get("html_url") or data.get("download_url") or "")
                 return str(data["tag"]), url
         except Exception as e:
             self._last_update_check_error = e

@@ -983,7 +983,7 @@ async def client_update_headers(request: Request, call_next):
         latest = await client_release.get_latest_release()
     if latest and client_release.is_older(client_ver, latest["version"]):
         response.headers["X-Asobby-Client-Update"] = latest["tag"]
-        download = latest.get("download_url") or latest.get("html_url") or ""
+        download = latest.get("html_url") or latest.get("download_url") or ""
         if download:
             response.headers["X-Asobby-Client-Download"] = download
     return response

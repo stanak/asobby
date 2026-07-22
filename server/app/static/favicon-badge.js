@@ -1,7 +1,9 @@
 (function () {
   "use strict";
 
-  const SIZE = 32;
+  const SIZE = 64;
+  const DESIGN = 32;
+  const SCALE = SIZE / DESIGN;
   const BG = [23, 28, 36];
   const FRAME = [54, 69, 89];
   const ACCENT = [106, 176, 243];
@@ -40,7 +42,10 @@
   }
 
   function drawMark(ctx) {
-    roundRect(ctx, 0, 0, SIZE, SIZE, 7);
+    ctx.save();
+    ctx.scale(SCALE, SCALE);
+
+    roundRect(ctx, 0, 0, DESIGN, DESIGN, 7);
     ctx.fillStyle = rgb(BG);
     ctx.fill();
 
@@ -72,32 +77,34 @@
     ctx.closePath();
     ctx.fill();
 
-    ctx.save();
     ctx.translate(16, 16);
     ctx.rotate(Math.PI / 4);
     roundRect(ctx, -2.35, -2.35, 4.7, 4.7, 0.55);
     ctx.fillStyle = rgb(CORE);
     ctx.fill();
+
     ctx.restore();
   }
 
   function drawBadgeDot(ctx, x, y, color) {
-    const outerR = 6.75;
-    const innerR = 5.25;
+    const outerR = 6.75 * SCALE;
+    const innerR = 5.25 * SCALE;
+    const cx = x * SCALE;
+    const cy = y * SCALE;
 
     ctx.fillStyle = rgb([0, 0, 0], 170);
     ctx.beginPath();
-    ctx.arc(x + 0.6, y + 0.8, outerR + 0.35, 0, Math.PI * 2);
+    ctx.arc(cx + 0.6 * SCALE, cy + 0.8 * SCALE, outerR + 0.35 * SCALE, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = rgb([255, 255, 255]);
     ctx.beginPath();
-    ctx.arc(x, y, outerR, 0, Math.PI * 2);
+    ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = rgb(color);
     ctx.beginPath();
-    ctx.arc(x, y, innerR, 0, Math.PI * 2);
+    ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -127,6 +134,7 @@
     badges = normalized;
     const link = ensureLink();
     link.type = "image/png";
+    link.sizes = "64x64";
     link.href = drawFavicon(normalized);
   }
 

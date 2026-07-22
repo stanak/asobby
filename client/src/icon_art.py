@@ -125,8 +125,9 @@ def render_icon(
 def write_static_assets(out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     render_icon(32).save(out_dir / "favicon-32.png")
-    render_icon(180).save(out_dir / "apple-touch-icon.png")
-    ico_images = [render_icon(s) for s in (16, 32, 48)]
+    render_icon(64).save(out_dir / "favicon-64.png")
+    render_icon(192).save(out_dir / "apple-touch-icon.png")
+    ico_images = [render_icon(s) for s in (32, 48, 64)]
     ico_images[0].save(
         out_dir / "favicon.ico",
         format="ICO",

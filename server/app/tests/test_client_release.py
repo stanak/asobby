@@ -62,7 +62,8 @@ async def test_client_latest_from_env(monkeypatch):
     assert body["version"] == "0.9.0"
     assert body["update_available"] is False
     assert body["outdated"] is False
-    assert "download_url" in body
+    assert body["download_url"] == body["html_url"]
+    assert "/download/" not in body["download_url"]
 
 
 @pytest.mark.asyncio

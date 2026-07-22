@@ -47,7 +47,7 @@ def _ensure_aumid() -> Optional[str]:
                 from icon_art import render_icon
 
                 icon_dir.mkdir(parents=True, exist_ok=True)
-                ico_images = [render_icon(s) for s in (16, 32)]
+                ico_images = [render_icon(s) for s in (32, 48, 64)]
                 ico_images[0].save(
                     icon_path,
                     format="ICO",

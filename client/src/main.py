@@ -47,7 +47,7 @@ def make_icon_image(
     casual_badge: bool = False,
 ) -> Image.Image:
     return render_icon(
-        64,
+        96,
         accent=color,
         frame=color,
         badges={"ranked": ranked_badge, "casual": casual_badge},

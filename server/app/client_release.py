@@ -57,11 +57,12 @@ def _release_from_env() -> Optional[dict[str, Any]]:
     tag = raw if raw.startswith("v") else f"v{raw}"
     version = tag.lstrip("vV")
     base = "https://github.com/stanak/asobby/releases"
+    html_url = f"{base}/tag/{tag}"
     return {
         "tag": tag,
         "version": version,
-        "html_url": f"{base}/tag/{tag}",
-        "download_url": f"{base}/download/{tag}/asobby-{tag}-windows.exe",
+        "html_url": html_url,
+        "download_url": html_url,
         "published_at": "",
     }
 
@@ -106,19 +107,13 @@ async def get_latest_release(*, force: bool = False) -> Optional[dict[str, Any]]
     if not tag:
         return _cache
 
-    assets = data.get("assets") or []
-    download_url = ""
-    if assets:
-        download_url = str(assets[0].get("browser_download_url") or "")
     html_url = str(data.get("html_url") or "")
-    if not download_url:
-        download_url = html_url
 
     info = {
         "tag": tag,
         "version": tag.lstrip("vV"),
         "html_url": html_url,
-        "download_url": download_url,
+        "download_url": html_url,
         "published_at": str(data.get("published_at") or ""),
     }
     _cache = info
