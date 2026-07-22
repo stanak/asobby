@@ -98,6 +98,7 @@ LCHAROFS = 0x0C
 RCHAROFS = 0x10
 BTLMODEOFS = 0x88
 WINCNTOFS = 0x573
+CHARIDXOFS = 0x34C
 
 # ========================
 # Character enum (SWRSSCHAR from SWRSAddrDef.h)
@@ -513,25 +514,29 @@ def _resolve_battle_mgr(h: wt.HANDLE, giuroll: bool) -> Optional[int]:
 
 def _read_battle_result(
     h: wt.HANDLE, giuroll: bool
-) -> tuple[Optional[int], Optional[int], Optional[int]]:
-    """(btl_mode, lwin, rwin) を返す。読めない場合は各要素 None。"""
+) -> tuple[Optional[int], Optional[int], Optional[int], Optional[int], Optional[int]]:
+    """(btl_mode, lwin, rwin, battle_lchar_id, battle_rchar_id) を返す。"""
     btl = _resolve_battle_mgr(h, giuroll)
     if not btl:
-        return (None, None, None)
+        return (None, None, None, None, None)
 
     btl_mode = _read_u32le(h, btl + BTLMODEOFS)
 
     lchar = _read_u32le(h, btl + LCHAROFS)
     lwin: Optional[int] = None
+    lcid: Optional[int] = None
     if lchar and is_readable_ptr(h, lchar):
         lwin = _read_u8(h, lchar + WINCNTOFS)
+        lcid = _read_u8(h, lchar + CHARIDXOFS)
 
     rchar = _read_u32le(h, btl + RCHAROFS)
     rwin: Optional[int] = None
+    rcid: Optional[int] = None
     if rchar and is_readable_ptr(h, rchar):
         rwin = _read_u8(h, rchar + WINCNTOFS)
+        rcid = _read_u8(h, rchar + CHARIDXOFS)
 
-    return (btl_mode, lwin, rwin)
+    return (btl_mode, lwin, rwin, lcid, rcid)
 
 
 def _decide_mode(
@@ -806,10 +811,10 @@ def read_detection_state() -> DetectionState:
         lcid = _read_u32le(h, LCHARID)
         rcid = _read_u32le(h, RCHARID)
 
-        btl_mode = lwin = rwin = None
+        btl_mode = lwin = rwin = battle_lcid = battle_rcid = None
         # KO 確定 (btl_mode==5) は対戦→ロード→キャラセレ遷移の短い間だけ観測できる。
         if scene_id in NET_RESULT_SCENES:
-            btl_mode, lwin, rwin = _read_battle_result(h, giu)
+            btl_mode, lwin, rwin, battle_lcid, battle_rcid = _read_battle_result(h, giu)
 
         raw = (
             f"scene={scene_id} comm={comm_mode} pnet={'y' if pnet else 'n'} "
@@ -847,6 +852,8 @@ def read_detection_state() -> DetectionState:
             btl_mode=btl_mode,
             lwin=lwin,
             rwin=rwin,
+            battle_lchar_id=battle_lcid,
+            battle_rchar_id=battle_rcid,
             exe_path=exe_path,
             raw=raw,
             modules=modules,

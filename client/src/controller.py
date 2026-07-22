@@ -20,7 +20,7 @@ from local_store import LocalStore
 from services import Post, NET_ALIVE, NET_BATTLE, NET_CHECKING, __version__, format_system_rank
 from i18n import bind_locale, get_lang, post_type_label, t
 from config_manager import ConfigManager
-from tool_manager import ToolManager
+from tool_manager import ToolManager, ToolState
 from host_probe import probe_rtt_ms
 from local_api import start_local_api_server, set_ping_probe_guard, LOCAL_API_PORT
 
@@ -69,6 +69,21 @@ def _parse_version(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in v.lstrip("v").split(".") if x.isdigit())
 
 
+def _valid_char_id(cid: Optional[int]) -> bool:
+    return cid is not None and 0 <= cid <= 19
+
+
+def _match_char_ids(st: DetectionState) -> tuple[Optional[int], Optional[int]]:
+    """記録用キャラ ID。対戦中オブジェクトを優先し、キャラセレカーソルは使わない。"""
+    if _valid_char_id(st.battle_lchar_id) and _valid_char_id(st.battle_rchar_id):
+        return st.battle_lchar_id, st.battle_rchar_id
+    if st.mode == "battle":
+        lh = st.lchar_id if _valid_char_id(st.lchar_id) else None
+        rh = st.rchar_id if _valid_char_id(st.rchar_id) else None
+        return lh, rh
+    return None, None
+
+
 def _ko_decided(st: DetectionState) -> bool:
     return (
         st.btl_mode == 5
@@ -80,26 +95,28 @@ def _ko_decided(st: DetectionState) -> bool:
     )
 
 
-def _ko_fingerprint(st: DetectionState) -> str:
+def _ko_fingerprint(st: DetectionState, *, host_char: int, guest_char: int) -> str:
     """同一 KO を二重処理しないための指紋 (連戦時は勝数が変わるので別試合になる)。"""
     if not _ko_decided(st):
         return ""
     return (
         f"{st.lwin}:{st.rwin}:"
-        f"{st.lchar_id}:{st.rchar_id}:"
+        f"{host_char}:{guest_char}:"
         f"{st.lprof}:{st.rprof}"
     )
 
 
-def _ko_recordable(*, is_battle: bool, mode: str, round_saw_battle: bool) -> bool:
+def _ko_recordable(*, is_battle: bool, mode: str, round_battle_engaged: bool) -> bool:
     """KO 確定の読み取りを許可するシーン。
 
+    実際に対戦シーンへ入ったラウンドだけ許可する。
     キャラセレ/ロードは同一ラウンドで対戦を観測した後だけ許可する。
-    前ラウンドの btl_mode==5 が残っていると未対戦のキャラセレで誤記録するため。
     """
+    if not round_battle_engaged:
+        return False
     if is_battle:
         return True
-    return mode in ("loading", "charsel") and round_saw_battle
+    return mode in ("loading", "charsel")
 
 
 @dataclass
@@ -155,7 +172,8 @@ class Controller:
         self._close_pending = False
         self._result_reported = False
         self._last_ko_fingerprint = ""
-        self._round_saw_battle = False
+        self._round_battle_engaged = False
+        self._round_char_ids: tuple[Optional[int], Optional[int]] = (None, None)
         self._pending_local_match: Optional[dict] = None
 
         self.owner_token: str = ""
@@ -816,6 +834,14 @@ class Controller:
             return NET_CHECKING
         return NET_ALIVE
 
+    def _host_uses_autopunch(self, st: DetectionState) -> bool:
+        """AutoPunch 利用ホストか。DLL 検知に加え、起動済み exe も拾う。"""
+        if st.autopunch:
+            return True
+        if self.tool_mgr.state("autopunch") == ToolState.LOADED:
+            return True
+        return bool(self.my_post.autopunch)
+
     def _current_addr(self, my_ip: str, port: Optional[int]) -> str:
         if port is None:
             return self.my_post.addr or ""
@@ -1170,11 +1196,16 @@ class Controller:
         self._local_net_active = in_net_flow
 
         if not in_net_flow:
-            self._round_saw_battle = False
+            self._round_battle_engaged = False
+            self._round_char_ids = (None, None)
         elif is_battle:
-            self._round_saw_battle = True
+            if self._stable_for("round_battle_engaged", 0.15, seen=True):
+                self._round_battle_engaged = True
+            live_lchar, live_rchar = _match_char_ids(st)
+            if live_lchar is not None and live_rchar is not None:
+                self._round_char_ids = (live_lchar, live_rchar)
 
-        round_saw_battle = self._round_saw_battle
+        round_battle_engaged = self._round_battle_engaged
 
         if self._stable_for("session_score_idle", 5.0, seen=not in_net_flow):
             self._reset_session_score()
@@ -1209,7 +1240,16 @@ class Controller:
         # -----------------
         # 0) KO 確定 -> ローカル戦績 (ホスト/クライアント、ログイン不要)
         # -----------------
-        ko_fp = _ko_fingerprint(st)
+        host_char, guest_char = _match_char_ids(st)
+        if host_char is None:
+            host_char = self._round_char_ids[0]
+        if guest_char is None:
+            guest_char = self._round_char_ids[1]
+        ko_fp = (
+            _ko_fingerprint(st, host_char=host_char, guest_char=guest_char)
+            if host_char is not None and guest_char is not None
+            else ""
+        )
         if (
             st.net_side in ("host", "client")
             and ko_fp
@@ -1217,11 +1257,12 @@ class Controller:
             and _ko_recordable(
                 is_battle=is_battle,
                 mode=st.mode,
-                round_saw_battle=round_saw_battle,
+                round_battle_engaged=round_battle_engaged,
             )
         ):
             self._last_ko_fingerprint = ko_fp
-            self._round_saw_battle = False
+            self._round_battle_engaged = False
+            self._round_char_ids = (None, None)
             my_side = "host" if st.net_side == "host" else "client"
             winner = "host" if st.lwin == 2 else "guest"
             ranked = 0
@@ -1234,8 +1275,8 @@ class Controller:
             payload = {
                 "my_side": my_side,
                 "winner": winner,
-                "host_char": st.lchar_id,
-                "guest_char": st.rchar_id,
+                "host_char": host_char,
+                "guest_char": guest_char,
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
                 "ranked": ranked,
@@ -1251,18 +1292,20 @@ class Controller:
             and self.has_active_post()
             and not self._result_reported
             and _ko_decided(st)
+            and host_char is not None
+            and guest_char is not None
             and _ko_recordable(
                 is_battle=is_battle,
                 mode=st.mode,
-                round_saw_battle=round_saw_battle,
+                round_battle_engaged=round_battle_engaged,
             )
         ):
             self._result_reported = True
             winner = "host" if st.lwin == 2 else "guest"
             return Action("result", {
                 "winner": winner,
-                "host_char": st.lchar_id,
-                "guest_char": st.rchar_id,
+                "host_char": host_char,
+                "guest_char": guest_char,
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
             })
@@ -1273,18 +1316,20 @@ class Controller:
             and not self._result_reported
             and self.is_logged_in()
             and _ko_decided(st)
+            and host_char is not None
+            and guest_char is not None
             and _ko_recordable(
                 is_battle=is_battle,
                 mode=st.mode,
-                round_saw_battle=round_saw_battle,
+                round_battle_engaged=round_battle_engaged,
             )
         ):
             self._result_reported = True
             winner = "host" if st.lwin == 2 else "guest"
             return Action("guest_result", {
                 "winner": winner,
-                "host_char": st.lchar_id,
-                "guest_char": st.rchar_id,
+                "host_char": host_char,
+                "guest_char": guest_char,
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
             })
@@ -1311,7 +1356,7 @@ class Controller:
             and _ko_recordable(
                 is_battle=is_battle,
                 mode=st.mode,
-                round_saw_battle=round_saw_battle,
+                round_battle_engaged=round_battle_engaged,
             )
         ):
             self._replay_pending = True
@@ -1360,7 +1405,7 @@ class Controller:
             payload = self._build_payload(
                 addr=self._current_addr(my_ip, st.port),
                 giuroll=st.giuroll,
-                autopunch=st.autopunch,
+                autopunch=self._host_uses_autopunch(st),
                 match_status=match_status,
                 net_status=NET_ALIVE,
             )
@@ -1411,7 +1456,7 @@ class Controller:
             if addr:
                 self._last_host_self_check_ts = now
                 asyncio.get_running_loop().create_task(
-                    self._self_check_host_when_paused(addr, st.autopunch)
+                    self._self_check_host_when_paused(addr, self._host_uses_autopunch(st))
                 )
 
         # -----------------
@@ -1427,7 +1472,7 @@ class Controller:
             payload = self._build_payload(
                 addr=self.my_post.addr or "",
                 giuroll=st.giuroll,
-                autopunch=st.autopunch,
+                autopunch=self._host_uses_autopunch(st),
                 match_status=match_status,
                 net_status=self._host_net_status(st, is_battle=True),
             )
@@ -1445,8 +1490,8 @@ class Controller:
             net_status = self._host_net_status(st, is_battle=is_battle)
             payload = self._build_payload(
                 addr=self.my_post.addr or "",
-                giuroll=self.my_post.giuroll,
-                autopunch=self.my_post.autopunch,
+                giuroll=st.giuroll,
+                autopunch=self._host_uses_autopunch(st),
                 match_status=self.my_post.match_status or "",
                 net_status=net_status,
             )

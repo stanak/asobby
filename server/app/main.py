@@ -2501,7 +2501,9 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
     if active >= MAX_ACTIVE_POSTS_PER_IP:
         raise HTTPException(status_code=429, detail="too many active posts")
 
-    direct_reachable = await verify_hostable_or_raise(body.addr, autopunch=body.autopunch)
+    direct_reachable, autopunch_effective = await verify_hostable_or_raise(
+        body.addr, autopunch=body.autopunch
+    )
 
     LAST_CREATE_AT[ip] = now
 
@@ -2515,7 +2517,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         comment=body.comment,
         stream_url=body.stream_url,
         giuroll=body.giuroll,
-        autopunch=body.autopunch,
+        autopunch=autopunch_effective,
         direct_reachable=direct_reachable,
         match_status=body.match_status,
         net_status=body.net_status,
@@ -2557,19 +2559,22 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     p = rec.post
     now = now_ts()
 
-    if should_reverify_host_on_update(
+    reverify = should_reverify_host_on_update(
         rec,
         addr=body.addr,
         net_status=body.net_status,
         now=now,
-    ):
+    )
+    if reverify:
         addr_changed = body.addr != rec.post.addr
-        p.direct_reachable = await verify_hostable_or_raise(
+        direct_reachable, autopunch_effective = await verify_hostable_or_raise(
             body.addr,
             autopunch=body.autopunch,
             ap_check=addr_changed,
             consecutive=addr_changed,
         )
+        p.direct_reachable = direct_reachable
+        p.autopunch = autopunch_effective
         rec.last_hostcheck_at = now
 
     p.post_type = body.post_type
@@ -2581,7 +2586,8 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     p.comment = body.comment
     p.stream_url = body.stream_url
     p.giuroll = body.giuroll
-    p.autopunch = body.autopunch
+    if not reverify:
+        p.autopunch = bool(body.autopunch or p.autopunch)
     p.match_status = body.match_status
     p.net_status = body.net_status
     p.updated_at = now
@@ -3582,12 +3588,17 @@ async def verify_hostable_or_raise(
     autopunch: bool = False,
     ap_check: bool = True,
     consecutive: bool = True,
-) -> bool:
-    """到達性を検証する。戻り値は直接 UDP プローブで確認できたか (AP バッジ用)。"""
+) -> tuple[bool, bool]:
+    """到達性を検証する。
+
+    戻り値は (direct_reachable, autopunch)。
+    直接 UDP で届かず AutoPunch リレー経由のみ到達できるホストは
+    autopunch=True, direct_reachable=False になる。
+    """
     host, port = parse_ipv4_addr_or_raise(addr)
 
     if not HOSTCHECK_ENABLED:
-        return True
+        return True, bool(autopunch)
 
     probe = check_hostable_consecutive if consecutive else check_hostable_once
     direct = await asyncio.to_thread(probe, host, port)
@@ -3601,16 +3612,21 @@ async def verify_hostable_or_raise(
                     "message": "autopunch host not reachable (is autopunch running?)",
                 },
             )
-        return direct
+        return direct, True
 
-    if not direct:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": "host not reachable",
-            },
-        )
-    return True
+    if direct:
+        return True, bool(autopunch)
+
+    ap_ok = await asyncio.to_thread(check_hostable_autopunch, host, port)
+    if ap_ok:
+        return False, True
+
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "message": "host not reachable",
+        },
+    )
 
 
 def is_allowed_stream_url(url: str) -> bool:

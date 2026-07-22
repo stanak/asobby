@@ -22,8 +22,11 @@ async def test_verify_autopunch_requires_ap_even_when_direct(monkeypatch):
     monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
     monkeypatch.setattr(main, "check_hostable_autopunch", fake_ap)
 
-    direct = await main.verify_hostable_or_raise("203.0.113.1:10800", autopunch=True)
+    direct, autopunch = await main.verify_hostable_or_raise(
+        "203.0.113.1:10800", autopunch=True
+    )
     assert direct is True
+    assert autopunch is True
     assert calls == ["direct", "autopunch"]
 
 
@@ -50,15 +53,31 @@ async def test_verify_autopunch_only_marks_not_direct(monkeypatch):
     monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
     monkeypatch.setattr(main, "check_hostable_autopunch", fake_ap)
 
-    direct = await main.verify_hostable_or_raise("203.0.113.1:10800", autopunch=True)
+    direct, autopunch = await main.verify_hostable_or_raise(
+        "203.0.113.1:10800", autopunch=True
+    )
     assert direct is False
+    assert autopunch is True
+
+
+@pytest.mark.asyncio
+async def test_verify_detects_ap_only_when_client_flag_false(monkeypatch):
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    monkeypatch.setattr(main, "check_hostable_consecutive", lambda *a, **k: False)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: True)
+
+    direct, autopunch = await main.verify_hostable_or_raise(
+        "203.0.113.1:10800", autopunch=False
+    )
+    assert direct is False
+    assert autopunch is True
 
 
 @pytest.mark.asyncio
 async def test_verify_non_autopunch_unreachable(monkeypatch):
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "check_hostable_consecutive", lambda *a, **k: False)
-    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: True)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: False)
 
     with pytest.raises(main.HTTPException) as exc:
         await main.verify_hostable_or_raise("203.0.113.1:10800", autopunch=False)

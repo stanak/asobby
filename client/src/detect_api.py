@@ -34,6 +34,10 @@ class DetectionState:
     lwin: Optional[int] = None
     rwin: Optional[int] = None
 
+    # PBATTLEMGR 上の確定キャラ ID (キャラセレカーソルではない)
+    battle_lchar_id: Optional[int] = None
+    battle_rchar_id: Optional[int] = None
+
     # th123.exe のフルパス (リプレイ保存先の解決用)
     exe_path: str = ""
 
