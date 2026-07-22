@@ -24,6 +24,7 @@ server/.env
 dist
 build
 *.exe
+client/version_info.txt
 
 # logs
 *.log
