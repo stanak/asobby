@@ -1,0 +1,3 @@
+[submodule "vendor/th123data"]
+	path = vendor/th123data
+	url = git@github.com:stanak/th123data.git

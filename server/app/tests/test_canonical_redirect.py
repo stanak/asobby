@@ -50,3 +50,19 @@ async def test_local_test_host_not_redirected():
     async with app_client() as client:
         res = await client.get("/myip", follow_redirects=False)
     assert res.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_data_redirects_to_trailing_slash():
+    async with app_client() as client:
+        res = await client.get("/data", follow_redirects=False)
+    assert res.status_code == 301
+    assert res.headers["location"] == "/data/"
+
+
+@pytest.mark.asyncio
+async def test_data_serves_index():
+    async with app_client() as client:
+        res = await client.get("/data/")
+    assert res.status_code == 200
+    assert "text/html" in res.headers.get("content-type", "")

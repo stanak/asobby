@@ -32,6 +32,9 @@ client/version_info.txt
 # app
 *.json
 
+# th123data search UI (built from vendor/th123data)
+server/app/static/data/
+
 # docker data
 server/data/
 server/uploads/

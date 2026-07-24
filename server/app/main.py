@@ -230,6 +230,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 APP_DIR = Path(__file__).parent
 STATIC_DIR = APP_DIR / "static"
+DATA_DIR = STATIC_DIR / "data"
 
 
 # ----------------------------
@@ -3652,5 +3653,13 @@ def is_allowed_stream_url(url: str) -> bool:
 
     return host in ALLOWED_STREAM_DOMAINS
 
+
+if DATA_DIR.is_dir():
+
+    @app.get("/data", include_in_schema=False)
+    async def data_redirect() -> RedirectResponse:
+        return RedirectResponse("/data/", status_code=301)
+
+    app.mount("/data", StaticFiles(directory=DATA_DIR, html=True), name="data")
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
