@@ -1,8 +1,0 @@
-.git
-**/.venv
-**/.mypy_cache
-**/__pycache__
-server/app/static/data
-client/dist
-client/build
-**/node_modules
