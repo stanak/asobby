@@ -7,7 +7,7 @@ app = 'asobby'
 primary_region = 'nrt'
 
 [build]
-  dockerfile = 'server/app/Dockerfile'
+  dockerfile = 'Dockerfile'
   build-context = '../..'
 
 [env]
