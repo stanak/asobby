@@ -2599,12 +2599,12 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
         except HTTPException as exc:
             # heartbeat 再検証の一時的な失敗 (giuroll 等) で募集を落とさない
             if exc.status_code == 409 and not addr_changed:
-                direct_reachable = False
-                autopunch_effective = bool(body.autopunch or p.autopunch)
+                pass  # direct_reachable / autopunch は前回値を維持
             else:
                 raise
-        p.direct_reachable = direct_reachable
-        p.autopunch = autopunch_effective
+        else:
+            p.direct_reachable = direct_reachable
+            p.autopunch = autopunch_effective
         rec.last_hostcheck_at = now
 
     p.post_type = body.post_type
@@ -2616,8 +2616,6 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     p.comment = body.comment
     p.stream_url = body.stream_url
     p.giuroll = body.giuroll
-    if not reverify:
-        p.autopunch = bool(body.autopunch or p.autopunch)
     p.match_status = body.match_status
     p.net_status = body.net_status
     p.updated_at = now
@@ -3685,10 +3683,12 @@ async def verify_hostable_or_raise(
                     "message": "autopunch host not reachable (is autopunch running?)",
                 },
             )
-        return direct, True
+        if direct:
+            return True, False
+        return False, True
 
     if direct:
-        return True, bool(autopunch)
+        return True, False
 
     ap_ok = await asyncio.to_thread(check_hostable_autopunch, host, port)
     if ap_ok:

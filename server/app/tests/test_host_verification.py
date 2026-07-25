@@ -76,7 +76,7 @@ async def test_verify_autopunch_requires_ap_even_when_direct(monkeypatch):
         "203.0.113.1:10800", autopunch=True
     )
     assert direct is True
-    assert autopunch is True
+    assert autopunch is False
     assert calls == ["direct", "autopunch"]
 
 
@@ -322,7 +322,20 @@ async def test_update_soft_fails_reverify_when_addr_unchanged(monkeypatch):
         assert updated.status_code == 200
         data = updated.json()
         assert data["id"] == post["id"]
-        assert data["direct_reachable"] is False
+        assert data["direct_reachable"] is True
+        assert data["autopunch"] is False
 
         listed = await client.get("/posts", headers={"Authorization": f"Bearer {token}"})
         assert any(p["id"] == post["id"] for p in listed.json())
+
+
+def test_ap_badge_hidden_when_direct_even_if_autopunch_flag():
+    post = main.Post(autopunch=True, direct_reachable=True)
+    show_ap = post.autopunch and not post.direct_reachable
+    assert show_ap is False
+
+
+def test_ap_badge_shown_when_ap_only():
+    post = main.Post(autopunch=True, direct_reachable=False)
+    show_ap = post.autopunch and not post.direct_reachable
+    assert show_ap is True
