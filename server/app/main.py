@@ -1930,7 +1930,7 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
     existing_ids = await db.filter_existing_match_ids(
         [_sync_match_id(user_id, m.client_id) for m in body.matches]
     )
-    near_existing = await db.fetch_user_match_times_with_ids(user_id, exclude_source="sync")
+    near_existing = await db.fetch_user_match_times_with_ids(user_id)
 
     for item in body.matches:
         match_id = _sync_match_id(user_id, item.client_id)
@@ -2964,22 +2964,27 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
         near = await db.find_near_match_by_profiles(
             db.utcnow(), body.winner, body.host_profile, body.guest_profile
         )
-        if near is not None and near.source in ("sync", "guest"):
-            await db.promote_guest_match(
-                near.id,
-                host_user_id=rec.owner_user_id,
-                host_ip=host_ip,
-                winner=body.winner,
-                host_char=body.host_char,
-                guest_char=body.guest_char,
-                host_profile=body.host_profile,
-                guest_profile=body.guest_profile,
-                ranked=is_ranked,
-                match_rank=match_rank,
-            )
-            if rec.guest_user_id:
-                await db.claim_match_side(near.id, "guest", rec.guest_user_id)
-            promoted = True
+        if near is not None:
+            if near.source in ("sync", "guest"):
+                await db.promote_guest_match(
+                    near.id,
+                    host_user_id=rec.owner_user_id,
+                    host_ip=host_ip,
+                    winner=body.winner,
+                    host_char=body.host_char,
+                    guest_char=body.guest_char,
+                    host_profile=body.host_profile,
+                    guest_profile=body.guest_profile,
+                    ranked=is_ranked,
+                    match_rank=match_rank,
+                )
+                if rec.guest_user_id:
+                    await db.claim_match_side(near.id, "guest", rec.guest_user_id)
+                promoted = True
+            elif near.host_user_id == rec.owner_user_id:
+                if rec.guest_user_id:
+                    await db.claim_match_side(near.id, "guest", rec.guest_user_id)
+                promoted = True
 
     if not promoted:
         await db.insert_match_result(

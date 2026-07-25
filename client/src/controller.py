@@ -115,14 +115,14 @@ def _ko_decided(st: DetectionState) -> bool:
 
 
 def _ko_fingerprint(st: DetectionState, *, host_char: int, guest_char: int) -> str:
-    """同一 KO を二重処理しないための指紋 (連戦時は勝数が変わるので別試合になる)。"""
+    """同一 KO を二重処理しないための指紋 (連戦時は勝数が変わるので別試合になる)。
+
+    キャラ ID は読み取りタイミングで揺れるため指紋に含めない。
+    """
+    del host_char, guest_char
     if not _ko_decided(st):
         return ""
-    return (
-        f"{st.lwin}:{st.rwin}:"
-        f"{host_char}:{guest_char}:"
-        f"{st.lprof}:{st.rprof}"
-    )
+    return f"{st.lwin}:{st.rwin}:{st.lprof}:{st.rprof}"
 
 
 def _ko_recordable(*, is_battle: bool, mode: str, round_battle_engaged: bool) -> bool:
@@ -1435,12 +1435,6 @@ class Controller:
                 "guest_profile": (st.rprof or ""),
             })
 
-        # KO 確定 (btl_mode==5) がキャラセレでも残る間は再報告しない。
-        # is_battle だけで _result_reported をリセットすると二重登録になる。
-        if st.btl_mode != 5:
-            self._result_reported = False
-            self._last_ko_fingerprint = ""
-
         # -----------------
         # リプレイ収集 (ホスト/クライアント両方)
         # -----------------
@@ -1450,6 +1444,10 @@ class Controller:
             if self._stable_for("battle_enter", 0.5, seen=True):
                 self._battle_start_ts = now
                 self._replay_result_reported = False
+                # 新ラウンド開始時のみ KO 報告フラグをリセットする。
+                # btl_mode!=5 への一瞬の落ち込みでリセットすると二重登録になる。
+                self._result_reported = False
+                self._last_ko_fingerprint = ""
 
         if (
             is_net_battle
@@ -1787,13 +1785,22 @@ class Controller:
             match_id = await asyncio.to_thread(self.local_store.record_local, **payload)
             self.log_sink("info", f"Local match recorded: {match_id}")
             if self.is_logged_in():
-                if await self._sync_match_by_id(match_id):
-                    self._replay_result_reported = True
-                pulled = await self._pull_server_matches()
-                if pulled:
-                    self.log_sink("info", f"Stats pull: {pulled} new match(es)")
+                unpushed = await asyncio.to_thread(
+                    self.local_store.fetch_unpushed_by_id, match_id
+                )
+                if unpushed:
+                    asyncio.create_task(self._defer_sync_match(match_id))
         except Exception as e:
             self.log_sink("warn", f"Local match record failed: {e}")
+
+    async def _defer_sync_match(self, local_id: str) -> None:
+        """posts/result 等の API 報告より先に sync しないよう遅延送信する。"""
+        try:
+            await asyncio.sleep(STATS_SYNC_DEFER_SEC)
+            if await self._sync_match_by_id(local_id):
+                self._replay_result_reported = True
+        except Exception as e:
+            self.log_sink("warn", f"Deferred stats push failed: {e}")
 
     async def _sync_match_by_id(self, local_id: str) -> bool:
         """1 件のローカル戦績を直ちにサーバーへ送る。"""

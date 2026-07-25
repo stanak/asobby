@@ -93,9 +93,19 @@ class LocalStore:
         *,
         ranked: int = 0,
     ) -> str:
-        """ローカル対戦を記録する。戻り値は生成した id。"""
-        local_id = uuid.uuid4().hex
+        """ローカル対戦を記録する。戻り値は生成した id (重複時は既存 id)。"""
         played_at = time.time()
+        existing_id = self._find_recent_duplicate(
+            played_at=played_at,
+            my_side=my_side,
+            winner=winner,
+            host_profile=host_profile,
+            guest_profile=guest_profile,
+        )
+        if existing_id is not None:
+            return existing_id
+
+        local_id = uuid.uuid4().hex
         with self._connect() as conn:
             conn.execute(
                 """
@@ -118,6 +128,54 @@ class LocalStore:
                 ),
             )
         return local_id
+
+    def _find_recent_duplicate(
+        self,
+        *,
+        played_at: float,
+        my_side: str,
+        winner: str,
+        host_profile: str,
+        guest_profile: str,
+        window_sec: float = 90,
+    ) -> str | None:
+        host_profile = host_profile or ""
+        guest_profile = guest_profile or ""
+        with self._connect() as conn:
+            if host_profile and guest_profile:
+                cur = conn.execute(
+                    """
+                    SELECT id FROM matches
+                    WHERE ABS(played_at - ?) <= ?
+                      AND winner = ?
+                      AND host_profile = ?
+                      AND guest_profile = ?
+                    ORDER BY ABS(played_at - ?)
+                    LIMIT 1
+                    """,
+                    (
+                        played_at,
+                        window_sec,
+                        winner,
+                        host_profile,
+                        guest_profile,
+                        played_at,
+                    ),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    SELECT id FROM matches
+                    WHERE ABS(played_at - ?) <= ?
+                      AND winner = ?
+                      AND my_side = ?
+                    ORDER BY ABS(played_at - ?)
+                    LIMIT 1
+                    """,
+                    (played_at, window_sec, winner, my_side, played_at),
+                )
+            row = cur.fetchone()
+            return str(row["id"]) if row is not None else None
 
     def merge_server_rows(self, rows: list[dict]) -> int:
         """サーバー戦績を取り込む。戻り値は新規 insert 数。"""
@@ -169,17 +227,38 @@ class LocalStore:
                     )
                     continue
 
-                cur = conn.execute(
-                    """
-                    SELECT * FROM matches
-                    WHERE server_id IS NULL
-                      AND ABS(played_at - ?) <= 60
-                      AND winner = ?
-                    ORDER BY ABS(played_at - ?)
-                    LIMIT 1
-                    """,
-                    (played_at, winner, played_at),
-                )
+                if host_profile and guest_profile:
+                    cur = conn.execute(
+                        """
+                        SELECT * FROM matches
+                        WHERE server_id IS NULL
+                          AND ABS(played_at - ?) <= 60
+                          AND winner = ?
+                          AND host_profile = ?
+                          AND guest_profile = ?
+                        ORDER BY ABS(played_at - ?)
+                        LIMIT 1
+                        """,
+                        (
+                            played_at,
+                            winner,
+                            host_profile,
+                            guest_profile,
+                            played_at,
+                        ),
+                    )
+                else:
+                    cur = conn.execute(
+                        """
+                        SELECT * FROM matches
+                        WHERE server_id IS NULL
+                          AND ABS(played_at - ?) <= 60
+                          AND winner = ?
+                        ORDER BY ABS(played_at - ?)
+                        LIMIT 1
+                        """,
+                        (played_at, winner, played_at),
+                    )
                 local_match = cur.fetchone()
                 if local_match is not None:
                     conn.execute(
@@ -207,6 +286,34 @@ class LocalStore:
                         ),
                     )
                     continue
+
+                if host_profile and guest_profile:
+                    cur = conn.execute(
+                        """
+                        SELECT id FROM matches
+                        WHERE ABS(played_at - ?) <= 90
+                          AND winner = ?
+                          AND host_profile = ?
+                          AND guest_profile = ?
+                        LIMIT 1
+                        """,
+                        (played_at, winner, host_profile, guest_profile),
+                    )
+                    if cur.fetchone() is not None:
+                        continue
+                else:
+                    cur = conn.execute(
+                        """
+                        SELECT id FROM matches
+                        WHERE ABS(played_at - ?) <= 90
+                          AND winner = ?
+                          AND my_side = ?
+                        LIMIT 1
+                        """,
+                        (played_at, winner, my_side),
+                    )
+                    if cur.fetchone() is not None:
+                        continue
 
                 conn.execute(
                     """

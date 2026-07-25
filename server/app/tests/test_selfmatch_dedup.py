@@ -232,7 +232,19 @@ async def test_replay_upload_matches_by_battle_ts():
         rec = main.RECORDS[post["id"]]
         await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
         await report_host_result(client, post["id"], owner_token)
-        await report_host_result(client, post["id"], owner_token)
+        second = await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "winner": "guest",
+                "host_char": 1,
+                "guest_char": 6,
+                "host_profile": "hostprof2",
+                "guest_profile": "guestprof2",
+            },
+        )
+        assert second.json()["recorded"] is True
 
         matches = sorted(await all_matches(), key=lambda m: m.played_at)
         old_match, new_match = matches[0], matches[1]
@@ -319,3 +331,35 @@ async def test_host_result_promotes_guest_report_by_profiles():
         assert matches[0].source == "host"
         assert matches[0].host_user_id == "100"
         assert matches[0].guest_user_id == "200"
+
+
+@pytest.mark.asyncio
+async def test_host_result_dedups_repeat_report_by_profiles():
+    """同一対戦の /posts/result 再送で二重 insert しない。"""
+    async with app_client() as client:
+        await create_user("100", name="host", last_ip="1.2.3.4")
+        await create_user("200", name="guest", last_ip="5.6.7.8")
+
+        post, owner_token = await create_post(client, "100", "1.2.3.4")
+        rec = main.RECORDS[post["id"]]
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+
+        body = {
+            "id": post["id"],
+            "owner_token": owner_token,
+            "winner": "host",
+            "host_char": 0,
+            "guest_char": 5,
+            "host_profile": "hostprof",
+            "guest_profile": "guestprof",
+        }
+        first = await client.post("/posts/result", json=body)
+        assert first.json()["recorded"] is True
+
+        second = await client.post("/posts/result", json=body)
+        assert second.json()["recorded"] is True
+
+        matches = await all_matches()
+        assert len(matches) == 1
+        assert matches[0].source == "host"
+        assert matches[0].host_user_id == "100"

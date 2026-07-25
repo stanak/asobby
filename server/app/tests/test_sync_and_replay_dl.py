@@ -287,6 +287,26 @@ async def test_matches_sync_import_duplicate_invalid():
         assert r1["status"] == "duplicate"
         assert r1["server_id"] == sync_id("555", client_id)
 
+        alt = await client.post(
+            "/matches/sync",
+            json={
+                "matches": [{
+                    "client_id": "f" * 32,
+                    "played_at": played_at,
+                    "my_side": "host",
+                    "winner": "host",
+                    "my_char": 0,
+                    "opp_char": 5,
+                    "my_profile": "me",
+                    "opp_profile": "opp",
+                }],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        r_alt = alt.json()["results"][0]
+        assert r_alt["status"] == "duplicate"
+        assert r_alt["server_id"] == sync_id("555", client_id)
+
         invalid = await client.post(
             "/matches/sync",
             json={

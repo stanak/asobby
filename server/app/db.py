@@ -1120,20 +1120,22 @@ async def search_replay_matches(
 
 
 async def fetch_user_match_times_with_ids(
-    user_id: str, exclude_source: str = "sync"
+    user_id: str, *, exclude_source: Optional[str] = None
 ) -> list[tuple[float, str]]:
     """ユーザーの確定済み対戦 (played_at 昇順) を (unix_ts, match_id) で返す。"""
     async with session() as s:
-        res = await s.execute(
+        q = (
             select(Match.played_at, Match.id)
             .where(
                 ((Match.host_user_id == user_id) | (Match.guest_user_id == user_id))
                 & (Match.winner != "")
                 & Match.played_at.is_not(None)
-                & (Match.source != exclude_source)
             )
             .order_by(Match.played_at.asc())
         )
+        if exclude_source is not None:
+            q = q.where(Match.source != exclude_source)
+        res = await s.execute(q)
         out: list[tuple[float, str]] = []
         for played_at, match_id in res.all():
             if played_at is None:

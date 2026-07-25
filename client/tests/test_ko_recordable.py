@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from controller import (  # noqa: E402
+    _ko_fingerprint,
     _ko_recordable,
     _match_char_ids,
     _valid_char_id,
@@ -106,3 +107,10 @@ def test_valid_char_id():
     assert _valid_char_id(19)
     assert not _valid_char_id(20)
     assert not _valid_char_id(None)
+
+
+def test_ko_fingerprint_ignores_unstable_char_ids():
+    st = _state(lchar_id=0, rchar_id=8, battle_lchar_id=0, battle_rchar_id=8)
+    fp1 = _ko_fingerprint(st, host_char=0, guest_char=8)
+    fp2 = _ko_fingerprint(st, host_char=0, guest_char=0)
+    assert fp1 == fp2 == "2:0:host:guest"
