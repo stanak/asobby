@@ -2522,7 +2522,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=429, detail="too many active posts")
 
     direct_reachable, autopunch_effective = await verify_hostable_or_raise(
-        body.addr, autopunch=body.autopunch
+        body.addr, autopunch=body.autopunch, giuroll=body.giuroll
     )
 
     LAST_CREATE_AT[ip] = now
@@ -2587,12 +2587,22 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     )
     if reverify:
         addr_changed = body.addr != rec.post.addr
-        direct_reachable, autopunch_effective = await verify_hostable_or_raise(
-            body.addr,
-            autopunch=body.autopunch,
-            ap_check=addr_changed,
-            consecutive=addr_changed,
-        )
+        giuroll = bool(body.giuroll or p.giuroll)
+        try:
+            direct_reachable, autopunch_effective = await verify_hostable_or_raise(
+                body.addr,
+                autopunch=body.autopunch,
+                ap_check=addr_changed,
+                consecutive=True,
+                giuroll=giuroll,
+            )
+        except HTTPException as exc:
+            # heartbeat 再検証の一時的な失敗 (giuroll 等) で募集を落とさない
+            if exc.status_code == 409 and not addr_changed:
+                direct_reachable = False
+                autopunch_effective = bool(body.autopunch or p.autopunch)
+            else:
+                raise
         p.direct_reachable = direct_reachable
         p.autopunch = autopunch_effective
         rec.last_hostcheck_at = now
@@ -3614,12 +3624,30 @@ def should_reverify_host_on_update(
     return now - rec.last_hostcheck_at >= interval_sec
 
 
+def host_probe_kwargs(*, giuroll: bool = False) -> dict[str, float | int]:
+    """giuroll ホストは UDP echo が不安定になりやすいので probe を緩める。"""
+    if giuroll:
+        return {
+            "attempts": 8,
+            "interval_sec": 0.12,
+            "timeout_sec": 0.35,
+            "needed_consecutive": 1,
+        }
+    return {
+        "attempts": 5,
+        "interval_sec": 0.1,
+        "timeout_sec": 0.2,
+        "needed_consecutive": 2,
+    }
+
+
 async def verify_hostable_or_raise(
     addr: str,
     *,
     autopunch: bool = False,
     ap_check: bool = True,
     consecutive: bool = True,
+    giuroll: bool = False,
 ) -> tuple[bool, bool]:
     """到達性を検証する。
 
@@ -3632,8 +3660,21 @@ async def verify_hostable_or_raise(
     if not HOSTCHECK_ENABLED:
         return True, bool(autopunch)
 
-    probe = check_hostable_consecutive if consecutive else check_hostable_once
-    direct = await asyncio.to_thread(probe, host, port)
+    probe_kwargs = host_probe_kwargs(giuroll=giuroll)
+    if consecutive:
+        direct = await asyncio.to_thread(
+            check_hostable_consecutive,
+            host,
+            port,
+            **probe_kwargs,
+        )
+    else:
+        direct = await asyncio.to_thread(
+            check_hostable_once,
+            host,
+            port,
+            timeout_sec=float(probe_kwargs["timeout_sec"]),
+        )
 
     if autopunch and ap_check:
         ap_ok = await asyncio.to_thread(check_hostable_autopunch, host, port)

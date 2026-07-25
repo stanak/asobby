@@ -1,9 +1,59 @@
 """ホスト到達性検証と AP バッジ表示条件のテスト。"""
 from __future__ import annotations
 
-import pytest
+import os
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+import db
 import main
+
+os.environ.setdefault("ASOBBY_HOSTCHECK", "off")
+os.environ.setdefault(
+    "DATABASE_URL",
+    "sqlite+aiosqlite:////tmp/asobby_host_verification_test.db",
+)
+os.environ.setdefault("ASOBBY_DISCORD_CLIENT_ID", "t")
+os.environ.setdefault("ASOBBY_DISCORD_CLIENT_SECRET", "t")
+os.environ.setdefault("ASOBBY_SESSION_SECRET", "sec")
+
+
+def bearer_token(user_id: str, name: str = "test") -> str:
+    return main.make_session_token({"id": user_id, "name": name}, 1)
+
+
+async def create_user(user_id: str, *, name: str = "user") -> None:
+    async with db.session() as s:
+        user = await s.get(db.User, user_id)
+        if user is None:
+            user = db.User(id=user_id, name=name)
+            s.add(user)
+        else:
+            user.name = name
+        await s.commit()
+
+
+@pytest.fixture(autouse=True)
+def clean_state(tmp_path):
+    db_path = tmp_path / "asobby_host_verification_test.db"
+    url = f"sqlite+aiosqlite:///{db_path}"
+    os.environ["DATABASE_URL"] = url
+    main.DATABASE_URL = url
+    main.RECORDS.clear()
+    main.LAST_CREATE_AT.clear()
+    yield
+    main.RECORDS.clear()
+
+
+@asynccontextmanager
+async def app_client() -> AsyncIterator[AsyncClient]:
+    transport = ASGITransport(app=main.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with main.app.router.lifespan_context(main.app):
+            yield client
 
 
 @pytest.mark.asyncio
@@ -84,7 +134,8 @@ async def test_verify_non_autopunch_unreachable(monkeypatch):
     assert exc.value.status_code == 409
 
 
-def test_should_reverify_on_addr_change():
+def test_should_reverify_on_addr_change(monkeypatch):
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     rec = main.PostRecord(
         post=main.Post(addr="203.0.113.1:10800"),
         owner_token="t",
@@ -99,7 +150,8 @@ def test_should_reverify_on_addr_change():
     )
 
 
-def test_should_reverify_on_recruit_heartbeat_interval():
+def test_should_reverify_on_recruit_heartbeat_interval(monkeypatch):
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     rec = main.PostRecord(
         post=main.Post(addr="203.0.113.1:10800"),
         owner_token="t",
@@ -190,3 +242,87 @@ def test_probe_target_records_skips_connection_in_progress():
         assert [rec.post.id for rec in targets] == ["quiet"]
     finally:
         main.RECORDS.clear()
+
+
+def test_host_probe_kwargs_relaxed_for_giuroll():
+    relaxed = main.host_probe_kwargs(giuroll=True)
+    normal = main.host_probe_kwargs(giuroll=False)
+    assert relaxed["needed_consecutive"] < normal["needed_consecutive"]
+    assert relaxed["timeout_sec"] > normal["timeout_sec"]
+
+
+@pytest.mark.asyncio
+async def test_verify_giuroll_uses_relaxed_probe(monkeypatch):
+    seen: dict[str, object] = {}
+
+    def fake_consecutive(host: str, port: int, **kwargs):
+        seen.update(kwargs)
+        return True
+
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    monkeypatch.setattr(main, "check_hostable_consecutive", fake_consecutive)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: False)
+
+    await main.verify_hostable_or_raise(
+        "203.0.113.1:10800",
+        autopunch=False,
+        giuroll=True,
+    )
+    assert seen["needed_consecutive"] == 1
+    assert seen["timeout_sec"] == 0.35
+
+
+@pytest.mark.asyncio
+async def test_update_soft_fails_reverify_when_addr_unchanged(monkeypatch):
+    calls = 0
+
+    async def fail_after_create(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return True, False
+        raise main.HTTPException(status_code=409, detail={"message": "host not reachable"})
+
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    monkeypatch.setattr(main, "should_reverify_host_on_update", lambda *a, **k: True)
+    monkeypatch.setattr(main, "verify_hostable_or_raise", fail_after_create)
+
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        token = bearer_token("host1", "host")
+        create = await client.post(
+            "/posts",
+            json={"post_type": "casual", "addr": "203.0.113.1:10800", "giuroll": True},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create.status_code == 200
+        body = create.json()
+        post = body["post"]
+        owner_token = body["owner_token"]
+
+        updated = await client.post(
+            "/posts/update",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "post_type": "casual",
+                "addr": "203.0.113.1:10800",
+                "giuroll": True,
+                "autopunch": False,
+                "comment": "",
+                "stream_url": "",
+                "match_status": "",
+                "net_status": 3,
+                "challenge_upper": False,
+                "ping_warn_enabled": False,
+                "ping_warn_ms": 150,
+                "ping_warn_giuroll_ms": 100,
+            },
+        )
+        assert updated.status_code == 200
+        data = updated.json()
+        assert data["id"] == post["id"]
+        assert data["direct_reachable"] is False
+
+        listed = await client.get("/posts", headers={"Authorization": f"Bearer {token}"})
+        assert any(p["id"] == post["id"] for p in listed.json())

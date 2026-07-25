@@ -2006,6 +2006,14 @@ class Controller:
             self.log_sink("warn", "Post lost on server. Re-posting if still hosting.")
             self.clear_my_post()
         elif code == 409:
+            if act.type == "update":
+                new_addr = str((act.payload or {}).get("addr") or "")
+                if new_addr and new_addr == (self.my_post.addr or ""):
+                    self.log_sink(
+                        "warn",
+                        "Host reachability check failed temporarily; keeping post active.",
+                    )
+                    return
             # アドレス変更時の到達性検証に失敗。ローカルを破棄して
             # 次の周期の create（クールダウン付き）からやり直す。
             self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
