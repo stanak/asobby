@@ -1,6 +1,6 @@
 FROM node:22-slim AS framedata
 
-ARG TH123DATA_REF=55517bcac41e257bb073bd9f9e816c967d0f4fc8
+ARG TH123DATA_REF=9a4c97a0542decd23b9e041f9cd9d9d09220c69f
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git ca-certificates \
