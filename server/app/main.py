@@ -615,7 +615,11 @@ async def resolve_session(request: Request) -> Optional[dict[str, Any]]:
     user = await db.get_user_if_token_valid(sess["sub"], sess["ver"])
     if user is None:
         return None
-    await db.touch_user(user.id, client_ip(request))
+    await db.touch_user(
+        user.id,
+        client_ip(request),
+        client_version=client_version_from_request(request),
+    )
     rating = display_rating(user.ts_mu, user.ts_sigma) if user.rank == "ph" else None
     return {
         "id": user.id,
@@ -1003,6 +1007,10 @@ def client_ip(request: Request) -> str:
         return xri.strip()
 
     return request.client.host if request.client else ""
+
+
+def client_version_from_request(request: Request) -> str:
+    return (request.headers.get("X-Asobby-Client-Version") or "").strip()[:32]
 
 
 def sorted_public_posts() -> list[dict[str, Any]]:
@@ -2332,7 +2340,11 @@ async def auth_device_poll(body: DevicePollIn, request: Request) -> dict[str, An
             DEVICE_LOGINS.pop(web_code, None)  # ワンショット
             # ポーリング元 = クライアント本体なので、この IP を記録する
             if login.user:
-                await db.touch_user(login.user["id"], client_ip(request))
+                await db.touch_user(
+                    login.user["id"],
+                    client_ip(request),
+                    client_version=client_version_from_request(request),
+                )
             return {
                 "status": "ok",
                 "session_token": login.session_token,
@@ -2448,7 +2460,11 @@ async def auth_client_exchange(body: ClientExchangeIn, request: Request) -> dict
         raise HTTPException(status_code=404, detail="user not found")
 
     # 交換リクエストはクライアント本体 (IPv4 強制) から来るので IP を記録する
-    await db.touch_user(user_row.id, client_ip(request))
+    await db.touch_user(
+        user_row.id,
+        client_ip(request),
+        client_version=client_version_from_request(request),
+    )
     user = {"id": user_row.id, "name": user_row.name}
     return {
         "status": "ok",

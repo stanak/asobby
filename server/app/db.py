@@ -61,6 +61,8 @@ class User(Base):
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # 最後に確認した asobby クライアント版 (X-Asobby-Client-Version)
+    client_version: Mapped[str] = mapped_column(String(32), default="", nullable=False)
     settings: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 
 
@@ -322,9 +324,12 @@ async def get_user_if_token_valid(user_id: str, token_version: int) -> Optional[
         return user
 
 
-async def touch_user(user_id: str, ip: str) -> None:
-    """認証済みリクエスト時に last_seen と IP を最新化する。"""
+async def touch_user(
+    user_id: str, ip: str, *, client_version: str = ""
+) -> None:
+    """認証済みリクエスト時に last_seen / IP / クライアント版を最新化する。"""
     ip = _ipv4_or_empty(ip)
+    ver = (client_version or "").strip()[:32]
     async with session() as s:
         user = await s.get(User, user_id)
         if user is None:
@@ -332,6 +337,8 @@ async def touch_user(user_id: str, ip: str) -> None:
         user.last_seen_at = utcnow()
         if ip and user.last_ip != ip:
             user.last_ip = ip
+        if ver:
+            user.client_version = ver
         await s.commit()
 
 

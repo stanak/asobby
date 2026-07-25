@@ -158,6 +158,38 @@ async def test_auth_me_includes_settings_and_badges():
         assert body["favicon_badges"]["casual"] is False
 
 
+@pytest.mark.asyncio
+async def test_auth_me_records_client_version():
+    async with app_client() as client:
+        await create_user("u1", name="viewer", rank="normal")
+        token = bearer_token("u1", "viewer")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Asobby-Client-Version": "0.5.9",
+        }
+
+        res = await client.get("/auth/me", headers=headers)
+        assert res.status_code == 200
+
+        async with db.session() as s:
+            user = await s.get(db.User, "u1")
+            assert user is not None
+            assert user.client_version == "0.5.9"
+
+        res2 = await client.get(
+            "/auth/me",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Asobby-Client-Version": "0.6.0",
+            },
+        )
+        assert res2.status_code == 200
+        async with db.session() as s:
+            user = await s.get(db.User, "u1")
+            assert user is not None
+            assert user.client_version == "0.6.0"
+
+
 def test_classify_post_notify_rank_band_and_battle():
     prefs = db.normalize_favicon_notify(
         {"ranked_same_band_only": True, "exclude_in_battle": True}

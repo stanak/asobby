@@ -107,7 +107,7 @@ Discord ログイン済みの Web ロビー閲覧者が、募集中のホスト�
 
 ### テーブル概要
 
-- `users`: Discord ID 主キー、表示名、`token_version`（インクリメントで発行済みセッションを失効）、`last_ip`（ログイン時・認証リクエスト時に自動更新。echo パケットで得た対戦相手 IP との照合用のため **IPv4 のみ保存**。IPv6 からのリクエストでは既存値を保持）
+- `users`: Discord ID 主キー、表示名、`token_version`（インクリメントで発行済みセッションを失効）、`last_ip`（ログイン時・認証リクエスト時に自動更新。echo パケットで得た対戦相手 IP との照合用のため **IPv4 のみ保存**。IPv6 からのリクエストでは既存値を保持）、`client_version`（クライアントが `X-Asobby-Client-Version` ヘッダーで送った版。認証付きリクエストのたびに更新）
 - `matches`: ホスト/ゲストのユーザー ID・IP・勝敗。戦績機能用に schema のみ先行準備
 - `replays`: match に紐づくリプレイファイル（bytea、100KB 程度想定）
 
