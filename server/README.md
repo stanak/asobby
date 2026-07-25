@@ -89,11 +89,21 @@ Discord ログイン済みの Web ロビー閲覧者が、募集中のホスト�
 ## 永続化 (PostgreSQL)
 
 ユーザー・戦績 (matches)・リプレイ (replays) を PostgreSQL に永続化する。
-募集投稿は TTL 20 秒の揮発データなので従来どおりインメモリ。
 
 - スタック: SQLAlchemy 2.0 (async) + asyncpg + Alembic
 - スキーマは起動時に自動でマイグレーションされる（`alembic upgrade head` 相当）
 - `DATABASE_URL` 未設定なら DB 機能（Discord ログイン含む）だけ無効になり、投稿は通常動作
+
+### 募集・ロビーチャット (ローカルファイル)
+
+募集投稿とロビーチャットは、デプロイ・再起動後も復元できるようローカルファイルに保存する（既定）。
+外部 Redis (Upstash) は **不要**。
+
+- 保存先: 環境変数 `ASOBBY_STORE_DIR`（未設定時は fly.io 上 `/data/asobby`、ローカルは `server/data/asobby`）
+- fly.io では `[mounts]` で `/data` にボリュームをマウントする（初回: `fly volumes create asobby_store --region nrt --size 1`）
+- テスト用に永続化を切る: `ASOBBY_STORE=memory`
+- 任意で Upstash Redis を使う場合は `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` を設定（`pip install upstash-redis` が必要）
+- 閲覧人数 (presence) は Redis 未使用時インメモリ（単一プロセス向け）
 
 ### テーブル概要
 

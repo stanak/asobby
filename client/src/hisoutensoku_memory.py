@@ -98,7 +98,7 @@ LCHAROFS = 0x0C
 RCHAROFS = 0x10
 BTLMODEOFS = 0x88
 WINCNTOFS = 0x573
-CHARIDXOFS = 0x34C
+CHARIDXOFS = 0x350  # CF_PLAYER_INDEX (LabTool): キャラ enum (Reimu=0 …)
 
 # ========================
 # Character enum (SWRSSCHAR from SWRSAddrDef.h)

@@ -52,6 +52,39 @@ def test_ko_recordable_requires_engaged_battle():
     )
 
 
+def test_match_char_ids_prefers_globals_during_battle():
+    st = _state(
+        mode="battle",
+        lchar_id=0,
+        rchar_id=8,
+        battle_lchar_id=0,
+        battle_rchar_id=0,
+    )
+    assert _match_char_ids(st) == (0, 8)
+
+
+def test_match_char_ids_prefers_globals_during_loading():
+    st = _state(
+        mode="loading",
+        lchar_id=0,
+        rchar_id=8,
+        battle_lchar_id=3,
+        battle_rchar_id=3,
+    )
+    assert _match_char_ids(st) == (0, 8)
+
+
+def test_match_char_ids_uses_battle_objects_in_charsel():
+    st = _state(
+        mode="charsel",
+        lchar_id=7,
+        rchar_id=12,
+        battle_lchar_id=0,
+        battle_rchar_id=8,
+    )
+    assert _match_char_ids(st) == (0, 8)
+
+
 def test_match_char_ids_ignores_charsel_cursor_without_battle():
     st = _state(mode="charsel", battle_lchar_id=None, battle_rchar_id=None)
     assert _match_char_ids(st) == (None, None)

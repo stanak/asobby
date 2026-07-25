@@ -1,6 +1,6 @@
 FROM node:22-slim AS framedata
 
-ARG TH123DATA_REF=ff77b9ab9deeb8468bbbb4af55331237d881dc37
+ARG TH123DATA_REF=43029cacc0d332761d9537773499b074c11acc42
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git ca-certificates \
@@ -13,6 +13,8 @@ RUN git init \
   && git checkout FETCH_HEAD
 
 RUN cd search && npm ci
+ENV VITE_PARENT_URL=/
+ENV VITE_GA_MEASUREMENT_ID=G-RJSLH3FRBR
 RUN npm run build:search
 
 FROM python:3.12-slim

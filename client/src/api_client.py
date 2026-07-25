@@ -159,6 +159,15 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    async def patch_user_settings(self, patch: dict) -> dict:
+        r = await self.http.patch(
+            f"{self.base}/user/settings",
+            json=patch,
+            headers=self._request_headers(),
+        )
+        r.raise_for_status()
+        return r.json()
+
     async def auth_client_exchange(self, code: str) -> dict:
         """ハンドオフのワンタイムコードをセッショントークンに交換する。
         {"status": "ok", "session_token", "user"}"""

@@ -105,6 +105,7 @@ async def test_get_and_patch_user_settings():
         )
         assert res.status_code == 200
         assert res.json()["favicon_notify"]["max_ping_ms"] == 60
+        assert res.json()["replay_refusal_until"] == 0
 
         patch = await client.patch(
             "/user/settings",
@@ -123,6 +124,22 @@ async def test_get_and_patch_user_settings():
         assert body["casual_enabled"] is True
         assert body["max_ping_ms"] == 45
         assert body["require_ping"] is True
+
+        refusal = await client.patch(
+            "/user/settings",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"replay_refusal_until": -1},
+        )
+        assert refusal.status_code == 200
+        assert refusal.json()["replay_refusal_until"] == -1
+
+        clear = await client.patch(
+            "/user/settings",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"replay_refusal_until": 0},
+        )
+        assert clear.status_code == 200
+        assert clear.json()["replay_refusal_until"] == 0
 
 
 @pytest.mark.asyncio

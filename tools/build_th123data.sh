@@ -12,7 +12,9 @@ fi
 
 cd "$SUB"
 (cd search && npm ci)
-npm run build:search
+VITE_PARENT_URL="${VITE_PARENT_URL:-/}" \
+VITE_GA_MEASUREMENT_ID="${VITE_GA_MEASUREMENT_ID:-G-RJSLH3FRBR}" \
+  npm run build:search
 
 rm -rf "$OUT"
 mkdir -p "$OUT"

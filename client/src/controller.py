@@ -20,6 +20,13 @@ from local_store import LocalStore
 from services import Post, NET_ALIVE, NET_BATTLE, NET_CHECKING, __version__, format_system_rank
 from i18n import bind_locale, get_lang, post_type_label, t
 from config_manager import ConfigManager
+from replay_refusal import (
+    REPLAY_REFUSAL_INACTIVE,
+    REPLAY_REFUSAL_PERMANENT,
+    is_replay_refusal_active,
+    normalize_replay_refusal_until,
+    replay_refusal_until_from_duration,
+)
 from tool_manager import ToolManager, ToolState
 from host_probe import probe_rtt_ms
 from local_api import start_local_api_server, set_ping_probe_guard, LOCAL_API_PORT
@@ -74,13 +81,25 @@ def _valid_char_id(cid: Optional[int]) -> bool:
 
 
 def _match_char_ids(st: DetectionState) -> tuple[Optional[int], Optional[int]]:
-    """記録用キャラ ID。対戦中オブジェクトを優先し、キャラセレカーソルは使わない。"""
-    if _valid_char_id(st.battle_lchar_id) and _valid_char_id(st.battle_rchar_id):
-        return st.battle_lchar_id, st.battle_rchar_id
-    if st.mode == "battle":
-        lh = st.lchar_id if _valid_char_id(st.lchar_id) else None
-        rh = st.rchar_id if _valid_char_id(st.rchar_id) else None
-        return lh, rh
+    """記録用キャラ ID (左=host / 右=guest)。
+
+    対戦・ロード中は確定済みの LCHARID/RCHARID を優先する。
+    キャラセレ中は次ラウンドのカーソルが載るため battle オブジェクトのみ使う。
+    """
+    gl = st.lchar_id if _valid_char_id(st.lchar_id) else None
+    gr = st.rchar_id if _valid_char_id(st.rchar_id) else None
+    bl = st.battle_lchar_id if _valid_char_id(st.battle_lchar_id) else None
+    br = st.battle_rchar_id if _valid_char_id(st.battle_rchar_id) else None
+
+    if st.mode in ("battle", "loading"):
+        if gl is not None and gr is not None:
+            return gl, gr
+        if bl is not None and br is not None:
+            return bl, br
+        return None, None
+
+    if bl is not None and br is not None:
+        return bl, br
     return None, None
 
 
@@ -137,6 +156,7 @@ class Controller:
         self.btn_labels_sink = app.emit_btn_labels
         self.pause_ui_sink = app.emit_pause_state_changed
         self.detect_ui_sink = app.emit_detect_ui_changed
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         self.config_mgr = ConfigManager()
         bind_locale(
@@ -404,6 +424,77 @@ class Controller:
             t("log.session_score_notify_rules", count=len(normalized)),
         )
 
+    def replay_refusal_until(self) -> float:
+        raw = self.config_mgr.get_value("options", "replay_refusal_until", 0)
+        return normalize_replay_refusal_until(raw)
+
+    def is_replay_refusal_active(self) -> bool:
+        until = self.replay_refusal_until()
+        if not is_replay_refusal_active(until):
+            if until != REPLAY_REFUSAL_INACTIVE:
+                self.config_mgr.set_value(
+                    "options", "replay_refusal_until", REPLAY_REFUSAL_INACTIVE
+                )
+            return False
+        return True
+
+    def is_replay_refusal_permanent(self) -> bool:
+        return self.replay_refusal_until() == REPLAY_REFUSAL_PERMANENT
+
+    def replay_refusal_remaining_min(self) -> int:
+        until = self.replay_refusal_until()
+        if self.is_replay_refusal_permanent():
+            return 0
+        rest = until - time.time()
+        return max(0, int((rest + 59) // 60))
+
+    def replay_refusal_remaining_label(self) -> str:
+        if self.is_replay_refusal_permanent():
+            return t("pause.until_resume")
+        minutes = self.replay_refusal_remaining_min()
+        if minutes <= 0:
+            return t("pause.remaining_m", min=0)
+        if minutes >= 60:
+            hours = minutes // 60
+            rem_min = minutes % 60
+            if rem_min:
+                return t("pause.remaining_hm", hours=hours, min=rem_min)
+            return t("pause.remaining_h", hours=hours)
+        return t("pause.remaining_m", min=minutes)
+
+    def set_replay_refusal(self, seconds: float) -> None:
+        until = replay_refusal_until_from_duration(seconds)
+        self.config_mgr.set_value("options", "replay_refusal_until", until)
+        if seconds == REPLAY_REFUSAL_PERMANENT:
+            label = t("pause.until_resume")
+        else:
+            label = self._pause_duration_label(seconds)
+        self.log_sink("info", t("log.replay_refusal_enabled", label=label))
+        self.notify_sink(t("notify.replay_refusal", label=label))
+        self.pause_ui_sink()
+        if self.is_logged_in():
+            self._schedule_async(self._sync_replay_refusal_to_server())
+
+    def clear_replay_refusal(self) -> None:
+        if self.replay_refusal_until() == REPLAY_REFUSAL_INACTIVE:
+            return
+        self.config_mgr.set_value("options", "replay_refusal_until", REPLAY_REFUSAL_INACTIVE)
+        self.log_sink("info", t("log.replay_refusal_cleared"))
+        self.notify_sink(t("notify.replay_refusal_cleared"))
+        self.pause_ui_sink()
+        if self.is_logged_in():
+            self._schedule_async(self._sync_replay_refusal_to_server())
+
+    async def _sync_replay_refusal_to_server(self) -> None:
+        if not self.is_logged_in():
+            return
+        try:
+            await self.api.patch_user_settings(
+                {"replay_refusal_until": self.replay_refusal_until()}
+            )
+        except httpx.HTTPError as e:
+            self.log_sink("warn", t("log.replay_refusal_sync_failed", error=e))
+
     def _reset_session_score(self) -> None:
         if (
             not self._session_score_key
@@ -548,6 +639,15 @@ class Controller:
             autopunch=False,
         )
         self.update_my_post()
+
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+
+    def _schedule_async(self, coro) -> None:
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            return
+        asyncio.run_coroutine_threadsafe(coro, loop)
 
     def has_active_post(self) -> bool:
         return bool(self.my_post.id and self.owner_token)
@@ -945,6 +1045,7 @@ class Controller:
                 self.config_mgr.set_value("auth", "username", name)
             self.log_sink("info", f"Discord ログイン中: {self.discord_user}")
             await self._refresh_lobby_badge()
+            await self._sync_replay_refusal_to_server()
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
                 self._clear_expired_session()
@@ -1601,6 +1702,9 @@ class Controller:
         if not self.is_logged_in():
             self.log_sink("info", "Replay upload skipped: not logged in")
             return
+        if self.is_replay_refusal_active():
+            self.log_sink("info", "Replay upload skipped: replay saving refused")
+            return
         if not exe_path:
             self.log_sink("info", "Replay upload skipped: exe path unknown")
             return
@@ -1673,6 +1777,8 @@ class Controller:
         else:
             reason = resp.get("reason", "unknown")
             self.log_sink("info", f"Replay not stored: {reason}")
+            if reason == "refused":
+                self.log_sink("info", t("log.replay_refusal_blocked"))
             if reason == "duplicate":
                 self._uploaded_replay_keys.add(upload_key)
 
@@ -1995,6 +2101,7 @@ class Controller:
                 self.log_sink("info", f"Discord にログインしました: {self.discord_user}")
                 self.notify_sink(t("notify.discord_login_ok", name=self.discord_user))
                 await self._refresh_lobby_badge()
+                await self._sync_replay_refusal_to_server()
         except asyncio.TimeoutError:
             self.log_sink("warn", "Discord ログインがタイムアウトしました")
         except httpx.HTTPStatusError as e:

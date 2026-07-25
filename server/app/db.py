@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ipaddress
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -67,6 +68,9 @@ PH_CHAR_IDS: tuple[int, ...] = tuple(range(21))  # 0–19 + Random (20)
 DEFAULT_TS_MU = 25.0
 DEFAULT_TS_SIGMA = 8.333333333333334
 
+REPLAY_REFUSAL_INACTIVE = 0.0
+REPLAY_REFUSAL_PERMANENT = -1.0
+
 DEFAULT_FAVICON_NOTIFY: dict[str, Any] = {
     "ranked_enabled": True,
     "casual_enabled": True,
@@ -100,10 +104,39 @@ def normalize_favicon_notify(raw: Any) -> dict[str, Any]:
     return out
 
 
+def normalize_replay_refusal_until(raw: Any) -> float:
+    if raw is None:
+        return REPLAY_REFUSAL_INACTIVE
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return REPLAY_REFUSAL_INACTIVE
+    if value == REPLAY_REFUSAL_PERMANENT:
+        return REPLAY_REFUSAL_PERMANENT
+    if value <= 0:
+        return REPLAY_REFUSAL_INACTIVE
+    return value
+
+
+def is_replay_refusal_active(until: float, *, now: float | None = None) -> bool:
+    value = normalize_replay_refusal_until(until)
+    if value == REPLAY_REFUSAL_INACTIVE:
+        return False
+    if value == REPLAY_REFUSAL_PERMANENT:
+        return True
+    now = time.time() if now is None else now
+    return now < value
+
+
 def normalize_user_settings(raw: Any) -> dict[str, Any]:
     src = raw if isinstance(raw, dict) else {}
     favicon_raw = src.get("favicon_notify")
-    return {"favicon_notify": normalize_favicon_notify(favicon_raw)}
+    return {
+        "favicon_notify": normalize_favicon_notify(favicon_raw),
+        "replay_refusal_until": normalize_replay_refusal_until(
+            src.get("replay_refusal_until")
+        ),
+    }
 
 
 class UserCharRating(Base):
@@ -315,6 +348,39 @@ async def get_user_settings(user_id: str) -> dict[str, Any]:
         return normalize_user_settings(user.settings or {})
 
 
+async def match_replay_blocked(match: Match) -> bool:
+    """Either participant refusing replay upload blocks storage for both."""
+    async with session() as s:
+        checked: set[str] = set()
+        candidate_ids: list[str] = []
+        for uid in (match.host_user_id, match.guest_user_id):
+            if uid:
+                candidate_ids.append(uid)
+        for ip in (match.host_ip, match.guest_ip):
+            if not ip:
+                continue
+            res = await s.execute(
+                select(User)
+                .where(User.last_ip == ip)
+                .order_by(User.last_seen_at.desc())
+                .limit(1)
+            )
+            user = res.scalar_one_or_none()
+            if user is not None and user.id not in candidate_ids:
+                candidate_ids.append(user.id)
+        for uid in candidate_ids:
+            if uid in checked:
+                continue
+            checked.add(uid)
+            user = await s.get(User, uid)
+            if user is None:
+                continue
+            settings = normalize_user_settings(user.settings or {})
+            if is_replay_refusal_active(settings["replay_refusal_until"]):
+                return True
+    return False
+
+
 async def update_user_settings(user_id: str, patch: dict[str, Any]) -> dict[str, Any]:
     async with session() as s:
         user = await s.get(User, user_id)
@@ -328,6 +394,10 @@ async def update_user_settings(user_id: str, patch: dict[str, Any]) -> dict[str,
                 if key in favicon_patch:
                     merged[key] = favicon_patch[key]
             current["favicon_notify"] = normalize_favicon_notify(merged)
+        if "replay_refusal_until" in patch:
+            current["replay_refusal_until"] = normalize_replay_refusal_until(
+                patch["replay_refusal_until"]
+            )
         user.settings = current
         await s.commit()
         return current

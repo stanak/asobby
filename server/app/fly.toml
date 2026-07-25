@@ -16,6 +16,11 @@ primary_region = 'nrt'
   # (専用 IPv4 の割り当てが必要: fly ips allocate-v4)
   ASOBBY_PROBE_BIND_HOST = 'fly-global-services'
   ASOBBY_PROBE_BIND_PORT = '10800'
+  ASOBBY_STORE_DIR = '/data/asobby'
+
+[mounts]
+  source = 'asobby_store'
+  destination = '/data'
 
 # ホスト到達性プローブ用の UDP サービス (送信元ポートの NAT 経路を確保する)
 [[services]]

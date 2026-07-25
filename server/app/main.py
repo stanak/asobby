@@ -417,6 +417,7 @@ class FaviconNotifyIn(BaseModel):
 
 class UserSettingsPatchIn(BaseModel):
     favicon_notify: Optional[FaviconNotifyIn] = None
+    replay_refusal_until: Optional[float] = None
 
 
 class PostMessageIn(BaseModel):
@@ -2050,7 +2051,7 @@ def _set_visitor_cookie(response: Response, visitor_id: str) -> None:
 
 async def _presence_touch(visitor_id: str) -> int:
     now = time.time()
-    if post_redis.is_configured():
+    if post_redis.is_redis_configured():
         return await asyncio.to_thread(post_redis.presence_touch, visitor_id, now=now)
     with _PRESENCE_LOCK:
         PRESENCE_LOCAL[visitor_id] = now
@@ -2060,7 +2061,7 @@ async def _presence_touch(visitor_id: str) -> int:
 
 async def _presence_count() -> int:
     now = time.time()
-    if post_redis.is_configured():
+    if post_redis.is_redis_configured():
         return await asyncio.to_thread(post_redis.presence_count, now=now)
     with _PRESENCE_LOCK:
         _prune_presence_local(now)
@@ -2382,6 +2383,8 @@ async def patch_user_settings(
     patch: dict[str, Any] = {}
     if body.favicon_notify is not None:
         patch["favicon_notify"] = body.favicon_notify.model_dump(exclude_none=True)
+    if body.replay_refusal_until is not None:
+        patch["replay_refusal_until"] = body.replay_refusal_until
     try:
         return await db.update_user_settings(sess["id"], patch)
     except ValueError:
@@ -2821,6 +2824,10 @@ async def upload_replay(
     if len(data) > REPLAY_MAX_BYTES:
         raise HTTPException(status_code=413, detail="replay too large")
 
+    uploader_settings = await db.get_user_settings(sess["id"])
+    if db.is_replay_refusal_active(uploader_settings["replay_refusal_until"]):
+        return {"ok": True, "stored": False, "reason": "refused"}
+
     now = db.utcnow()
     around = now
     if battle_ts > 0:
@@ -2852,6 +2859,9 @@ async def upload_replay(
         if recent is not None and await db.replay_count_for_match(recent.id) > 0:
             return {"ok": True, "stored": False, "reason": "duplicate"}
         return {"ok": True, "stored": False, "reason": "no_match"}
+
+    if await db.match_replay_blocked(match):
+        return {"ok": True, "stored": False, "reason": "refused"}
 
     filename = build_replay_filename(match)
     stored = await db.insert_replay(match.id, filename, data)

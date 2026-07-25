@@ -14,6 +14,7 @@ from pystray import Menu, MenuItem
 import notify_sound
 import toast
 from controller import Controller, PAUSE_UNTIL_RESUME
+from replay_refusal import REPLAY_REFUSAL_PERMANENT
 from icon_art import render_icon
 from tray_icon import TrayIcon
 from i18n import (
@@ -217,7 +218,10 @@ class TrayApp:
     def _schedule_pause_ui_tick(self) -> None:
         """一時停止中はトレイ表示を定期的に更新して残り時間をカウントダウンする。"""
         self._cancel_pause_ui_tick()
-        if not self.controller.is_detect_paused():
+        if not (
+            self.controller.is_detect_paused()
+            or self.controller.is_replay_refusal_active()
+        ):
             self._refresh_icon()
             return
         self._refresh_icon()
@@ -536,6 +540,45 @@ class TrayApp:
             return t("tray.pause_active", remaining=remaining)
         return t("tray.pause")
 
+    def _replay_refusal_menu_items(self):
+        def make_refusal(seconds: float):
+            def act(icon, item):
+                self.controller.set_replay_refusal(seconds)
+                if self.icon:
+                    self.icon.update_menu()
+            return act
+
+        def resume(icon, item):
+            self.controller.clear_replay_refusal()
+            if self.icon:
+                self.icon.update_menu()
+
+        active = self.controller.is_replay_refusal_active()
+        if active:
+            yield MenuItem(
+                lambda item: t(
+                    "tray.replay_refusal_running",
+                    remaining=self.controller.replay_refusal_remaining_label(),
+                ),
+                None,
+                enabled=False,
+            )
+            yield MenuItem(t("tray.replay_refusal_resume"), resume)
+            yield Menu.SEPARATOR
+        yield MenuItem(t("tray.replay_refusal_30m"), make_refusal(30 * 60))
+        yield MenuItem(t("tray.replay_refusal_1h"), make_refusal(60 * 60))
+        yield MenuItem(t("tray.replay_refusal_3h"), make_refusal(3 * 60 * 60))
+        yield MenuItem(
+            t("tray.replay_refusal_until_resume"),
+            make_refusal(REPLAY_REFUSAL_PERMANENT),
+        )
+
+    def _replay_refusal_menu_label(self) -> str:
+        if self.controller.is_replay_refusal_active():
+            remaining = self.controller.replay_refusal_remaining_label()
+            return t("tray.replay_refusal_active", remaining=remaining)
+        return t("tray.replay_refusal")
+
     def _toggle_copy_addr(self) -> None:
         self.controller.set_copy_addr_enabled(
             not self.controller.copy_addr_enabled()
@@ -640,6 +683,10 @@ class TrayApp:
                 Menu(lambda: self._pause_menu_items()),
             ),
             MenuItem(
+                lambda item: self._replay_refusal_menu_label(),
+                Menu(lambda: self._replay_refusal_menu_items()),
+            ),
+            MenuItem(
                 t("tray.copy_addr"),
                 lambda: self._toggle_copy_addr(),
                 checked=lambda item: self.controller.copy_addr_enabled(),
@@ -709,6 +756,7 @@ class TrayApp:
         asyncio.set_event_loop(self.loop)
 
         async def startup() -> None:
+            self.controller.bind_loop(self.loop)
             await self.controller.sync_initial()
             asyncio.ensure_future(self.controller.update_check_loop())
             asyncio.ensure_future(self.controller.stats_sync_loop())
