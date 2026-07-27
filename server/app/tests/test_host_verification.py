@@ -57,7 +57,7 @@ async def app_client() -> AsyncIterator[AsyncClient]:
 
 
 @pytest.mark.asyncio
-async def test_verify_skips_ap_check_when_direct_strict(monkeypatch):
+async def test_verify_always_runs_ap_but_direct_strict_wins(monkeypatch):
     calls: list[str] = []
 
     def fake_direct(host: str, port: int, **kwargs):
@@ -77,7 +77,7 @@ async def test_verify_skips_ap_check_when_direct_strict(monkeypatch):
     )
     assert direct is True
     assert autopunch is False
-    assert calls == ["direct", "direct"]
+    assert calls == ["direct", "direct", "autopunch"]
 
 
 @pytest.mark.asyncio
@@ -95,6 +95,27 @@ async def test_verify_flaky_direct_with_autopunch_stays_ap_only(monkeypatch):
 
     direct, autopunch = await main.verify_hostable_or_raise(
         "203.0.113.1:10800", autopunch=True
+    )
+    assert direct is False
+    assert autopunch is True
+
+
+@pytest.mark.asyncio
+async def test_verify_flaky_direct_without_client_flag_stays_ap_only(monkeypatch):
+    """AP 必須だがクライアント未検出 (autopunch=False) でも AP 表示を維持。"""
+    call_n = 0
+
+    def fake_direct(host: str, port: int, **kwargs):
+        nonlocal call_n
+        call_n += 1
+        return call_n == 1
+
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: True)
+
+    direct, autopunch = await main.verify_hostable_or_raise(
+        "203.0.113.1:10800", autopunch=False
     )
     assert direct is False
     assert autopunch is True
@@ -297,10 +318,10 @@ def test_host_probe_kwargs_relaxed_for_giuroll():
 
 @pytest.mark.asyncio
 async def test_verify_giuroll_uses_relaxed_probe(monkeypatch):
-    seen: dict[str, object] = {}
+    seen: list[dict[str, object]] = []
 
     def fake_consecutive(host: str, port: int, **kwargs):
-        seen.update(kwargs)
+        seen.append(dict(kwargs))
         return True
 
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
@@ -312,8 +333,9 @@ async def test_verify_giuroll_uses_relaxed_probe(monkeypatch):
         autopunch=False,
         giuroll=True,
     )
-    assert seen["needed_consecutive"] == 1
-    assert seen["timeout_sec"] == 0.35
+    assert seen[0]["needed_consecutive"] == 1
+    assert seen[0]["timeout_sec"] == 0.35
+    assert seen[1]["needed_consecutive"] == 3
 
 
 @pytest.mark.asyncio
@@ -371,6 +393,64 @@ async def test_update_soft_fails_reverify_when_addr_unchanged(monkeypatch):
 
         listed = await client.get("/posts", headers={"Authorization": f"Bearer {token}"})
         assert any(p["id"] == post["id"] for p in listed.json())
+
+
+@pytest.mark.asyncio
+async def test_update_keeps_ap_only_when_reverify_flaky_direct(monkeypatch):
+    calls = 0
+
+    async def flaky_direct(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return False, True
+        return True, False
+
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    monkeypatch.setattr(main, "should_reverify_host_on_update", lambda *a, **k: True)
+    monkeypatch.setattr(main, "verify_hostable_or_raise", flaky_direct)
+
+    async with app_client() as client:
+        await create_user("host2", name="host")
+        token = bearer_token("host2", "host")
+        create = await client.post(
+            "/posts",
+            json={
+                "post_type": "casual",
+                "addr": "203.0.113.1:10800",
+                "autopunch": False,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create.status_code == 200
+        body = create.json()
+        post = body["post"]
+        owner_token = body["owner_token"]
+        assert post["direct_reachable"] is False
+        assert post["autopunch"] is True
+
+        updated = await client.post(
+            "/posts/update",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "post_type": "casual",
+                "addr": "203.0.113.1:10800",
+                "autopunch": False,
+                "comment": "",
+                "stream_url": "",
+                "match_status": "",
+                "net_status": 3,
+                "challenge_upper": False,
+                "ping_warn_enabled": False,
+                "ping_warn_ms": 150,
+                "ping_warn_giuroll_ms": 100,
+            },
+        )
+        assert updated.status_code == 200
+        data = updated.json()
+        assert data["direct_reachable"] is False
+        assert data["autopunch"] is True
 
 
 def test_probe_addr_for_hostcheck_replaces_placeholder():

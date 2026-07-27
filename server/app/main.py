@@ -2598,7 +2598,6 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
                 ap_check=addr_changed,
                 consecutive=True,
                 giuroll=giuroll,
-                confirm_direct=was_ap_only and not addr_changed,
             )
         except HTTPException as exc:
             # heartbeat 再検証の一時的な失敗 (giuroll 等) で募集を落とさない
@@ -2607,8 +2606,16 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
             else:
                 raise
         else:
-            p.direct_reachable = direct_reachable
-            p.autopunch = autopunch_effective
+            if (
+                was_ap_only
+                and not addr_changed
+                and direct_reachable
+                and not autopunch_effective
+            ):
+                pass  # AP 必須ホストを direct 誤判定へ降格させない
+            else:
+                p.direct_reachable = direct_reachable
+                p.autopunch = autopunch_effective
         rec.last_hostcheck_at = now
 
     p.post_type = body.post_type
@@ -3664,7 +3671,6 @@ async def verify_hostable_or_raise(
     ap_check: bool = True,
     consecutive: bool = True,
     giuroll: bool = False,
-    confirm_direct: bool = False,
 ) -> tuple[bool, bool]:
     """到達性を検証する。
 
@@ -3699,32 +3705,28 @@ async def verify_hostable_or_raise(
             timeout_sec=float(kwargs["timeout_sec"]),
         )
 
-    direct = await run_direct(probe_kwargs)
+    direct_lenient = await run_direct(probe_kwargs)
+    direct_strict = (
+        await run_direct(strict_kwargs) if direct_lenient else False
+    )
+    ap_ok = await asyncio.to_thread(check_hostable_autopunch, host, port)
 
-    if direct and (confirm_direct or autopunch):
-        strict_direct = await run_direct(strict_kwargs)
-        if not strict_direct:
-            direct = False
-        else:
-            return True, False
+    if direct_strict:
+        return True, False
 
-    if direct:
+    if ap_ok:
+        return False, True
+
+    if direct_lenient:
         return True, False
 
     if autopunch and ap_check:
-        ap_ok = await asyncio.to_thread(check_hostable_autopunch, host, port)
-        if not ap_ok:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "message": "autopunch host not reachable (is autopunch running?)",
-                },
-            )
-        return False, True
-
-    ap_ok = await asyncio.to_thread(check_hostable_autopunch, host, port)
-    if ap_ok:
-        return False, True
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "autopunch host not reachable (is autopunch running?)",
+            },
+        )
 
     raise HTTPException(
         status_code=409,
