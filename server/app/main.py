@@ -2589,6 +2589,7 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     if reverify:
         addr_changed = body.addr != rec.post.addr
         giuroll = bool(body.giuroll or p.giuroll)
+        was_ap_only = p.autopunch and not p.direct_reachable
         check_addr = probe_addr_for_hostcheck(body.addr, fallback_host=rec.creator_ip)
         try:
             direct_reachable, autopunch_effective = await verify_hostable_or_raise(
@@ -2597,6 +2598,7 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
                 ap_check=addr_changed,
                 consecutive=True,
                 giuroll=giuroll,
+                confirm_direct=was_ap_only and not addr_changed,
             )
         except HTTPException as exc:
             # heartbeat 再検証の一時的な失敗 (giuroll 等) で募集を落とさない
@@ -3662,6 +3664,7 @@ async def verify_hostable_or_raise(
     ap_check: bool = True,
     consecutive: bool = True,
     giuroll: bool = False,
+    confirm_direct: bool = False,
 ) -> tuple[bool, bool]:
     """到達性を検証する。
 
@@ -3675,20 +3678,35 @@ async def verify_hostable_or_raise(
         return True, bool(autopunch)
 
     probe_kwargs = host_probe_kwargs(giuroll=giuroll)
-    if consecutive:
-        direct = await asyncio.to_thread(
-            check_hostable_consecutive,
-            host,
-            port,
-            **probe_kwargs,
-        )
-    else:
-        direct = await asyncio.to_thread(
+    strict_kwargs = {
+        **probe_kwargs,
+        "needed_consecutive": 3,
+        "attempts": max(8, int(probe_kwargs["attempts"])),
+    }
+
+    async def run_direct(kwargs: dict[str, float | int]) -> bool:
+        if consecutive:
+            return await asyncio.to_thread(
+                check_hostable_consecutive,
+                host,
+                port,
+                **kwargs,
+            )
+        return await asyncio.to_thread(
             check_hostable_once,
             host,
             port,
-            timeout_sec=float(probe_kwargs["timeout_sec"]),
+            timeout_sec=float(kwargs["timeout_sec"]),
         )
+
+    direct = await run_direct(probe_kwargs)
+
+    if direct and (confirm_direct or autopunch):
+        strict_direct = await run_direct(strict_kwargs)
+        if not strict_direct:
+            direct = False
+        else:
+            return True, False
 
     if direct:
         return True, False

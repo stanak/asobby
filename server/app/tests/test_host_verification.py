@@ -57,7 +57,7 @@ async def app_client() -> AsyncIterator[AsyncClient]:
 
 
 @pytest.mark.asyncio
-async def test_verify_skips_ap_check_when_direct(monkeypatch):
+async def test_verify_skips_ap_check_when_direct_strict(monkeypatch):
     calls: list[str] = []
 
     def fake_direct(host: str, port: int, **kwargs):
@@ -77,7 +77,27 @@ async def test_verify_skips_ap_check_when_direct(monkeypatch):
     )
     assert direct is True
     assert autopunch is False
-    assert calls == ["direct"]
+    assert calls == ["direct", "direct"]
+
+
+@pytest.mark.asyncio
+async def test_verify_flaky_direct_with_autopunch_stays_ap_only(monkeypatch):
+    call_n = 0
+
+    def fake_direct(host: str, port: int, **kwargs):
+        nonlocal call_n
+        call_n += 1
+        return call_n == 1
+
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: True)
+
+    direct, autopunch = await main.verify_hostable_or_raise(
+        "203.0.113.1:10800", autopunch=True
+    )
+    assert direct is False
+    assert autopunch is True
 
 
 @pytest.mark.asyncio
