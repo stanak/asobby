@@ -57,12 +57,36 @@ async def app_client() -> AsyncIterator[AsyncClient]:
 
 
 @pytest.mark.asyncio
-async def test_verify_autopunch_requires_ap_even_when_direct(monkeypatch):
+async def test_verify_skips_ap_check_when_direct(monkeypatch):
     calls: list[str] = []
 
     def fake_direct(host: str, port: int, **kwargs):
         calls.append("direct")
         return True
+
+    def fake_ap(host: str, port: int):
+        calls.append("autopunch")
+        return False
+
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
+    monkeypatch.setattr(main, "check_hostable_autopunch", fake_ap)
+
+    direct, autopunch = await main.verify_hostable_or_raise(
+        "203.0.113.1:10800", autopunch=True
+    )
+    assert direct is True
+    assert autopunch is False
+    assert calls == ["direct"]
+
+
+@pytest.mark.asyncio
+async def test_verify_autopunch_requires_ap_when_direct_fails(monkeypatch):
+    calls: list[str] = []
+
+    def fake_direct(host: str, port: int, **kwargs):
+        calls.append("direct")
+        return False
 
     def fake_ap(host: str, port: int):
         calls.append("autopunch")
@@ -75,15 +99,15 @@ async def test_verify_autopunch_requires_ap_even_when_direct(monkeypatch):
     direct, autopunch = await main.verify_hostable_or_raise(
         "203.0.113.1:10800", autopunch=True
     )
-    assert direct is True
-    assert autopunch is False
+    assert direct is False
+    assert autopunch is True
     assert calls == ["direct", "autopunch"]
 
 
 @pytest.mark.asyncio
 async def test_verify_autopunch_rejects_when_ap_unreachable(monkeypatch):
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
-    monkeypatch.setattr(main, "check_hostable_consecutive", lambda *a, **k: True)
+    monkeypatch.setattr(main, "check_hostable_consecutive", lambda *a, **k: False)
     monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: False)
 
     with pytest.raises(main.HTTPException) as exc:
@@ -327,6 +351,17 @@ async def test_update_soft_fails_reverify_when_addr_unchanged(monkeypatch):
 
         listed = await client.get("/posts", headers={"Authorization": f"Bearer {token}"})
         assert any(p["id"] == post["id"] for p in listed.json())
+
+
+def test_probe_addr_for_hostcheck_replaces_placeholder():
+    assert main.probe_addr_for_hostcheck(
+        "0.0.0.0:10800",
+        fallback_host="203.0.113.50",
+    ) == "203.0.113.50:10800"
+    assert main.probe_addr_for_hostcheck(
+        "203.0.113.1:10800",
+        fallback_host="203.0.113.50",
+    ) == "203.0.113.1:10800"
 
 
 def test_ap_badge_hidden_when_direct_even_if_autopunch_flag():

@@ -2521,8 +2521,9 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
     if active >= MAX_ACTIVE_POSTS_PER_IP:
         raise HTTPException(status_code=429, detail="too many active posts")
 
+    check_addr = probe_addr_for_hostcheck(body.addr, fallback_host=ip)
     direct_reachable, autopunch_effective = await verify_hostable_or_raise(
-        body.addr, autopunch=body.autopunch, giuroll=body.giuroll
+        check_addr, autopunch=body.autopunch, giuroll=body.giuroll
     )
 
     LAST_CREATE_AT[ip] = now
@@ -2588,9 +2589,10 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     if reverify:
         addr_changed = body.addr != rec.post.addr
         giuroll = bool(body.giuroll or p.giuroll)
+        check_addr = probe_addr_for_hostcheck(body.addr, fallback_host=rec.creator_ip)
         try:
             direct_reachable, autopunch_effective = await verify_hostable_or_raise(
-                body.addr,
+                check_addr,
                 autopunch=body.autopunch,
                 ap_check=addr_changed,
                 consecutive=True,
@@ -3604,6 +3606,20 @@ def parse_ipv4_addr_or_raise(addr: str) -> tuple[str, int]:
     return host, port
 
 
+def probe_addr_for_hostcheck(addr: str, *, fallback_host: str = "") -> str:
+    """到達性プローブ用アドレス。0.0.0.0 はクライアント未取得時の placeholder。"""
+    host, port = parse_ipv4_addr_or_raise(addr)
+    fb = (fallback_host or "").strip()
+    if host == "0.0.0.0" and fb:
+        try:
+            socket.inet_aton(fb)
+        except OSError:
+            return addr
+        else:
+            host = fb
+    return f"{host}:{port}"
+
+
 def should_reverify_host_on_update(
     rec: PostRecord,
     *,
@@ -3632,9 +3648,9 @@ def host_probe_kwargs(*, giuroll: bool = False) -> dict[str, float | int]:
             "needed_consecutive": 1,
         }
     return {
-        "attempts": 5,
+        "attempts": 6,
         "interval_sec": 0.1,
-        "timeout_sec": 0.2,
+        "timeout_sec": 0.25,
         "needed_consecutive": 2,
     }
 
@@ -3674,6 +3690,9 @@ async def verify_hostable_or_raise(
             timeout_sec=float(probe_kwargs["timeout_sec"]),
         )
 
+    if direct:
+        return True, False
+
     if autopunch and ap_check:
         ap_ok = await asyncio.to_thread(check_hostable_autopunch, host, port)
         if not ap_ok:
@@ -3683,12 +3702,7 @@ async def verify_hostable_or_raise(
                     "message": "autopunch host not reachable (is autopunch running?)",
                 },
             )
-        if direct:
-            return True, False
         return False, True
-
-    if direct:
-        return True, False
 
     ap_ok = await asyncio.to_thread(check_hostable_autopunch, host, port)
     if ap_ok:
