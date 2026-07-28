@@ -224,6 +224,27 @@ def test_classify_post_notify_rank_band_and_battle():
     assert casual_ok is True
 
 
+@pytest.mark.asyncio
+async def test_list_posts_returns_all_rank_bands():
+    """GET /posts must not filter ranked listings by viewer rank (UI shows all bands)."""
+    async with app_client() as client:
+        await create_user("u1", name="viewer", rank="normal")
+        await create_user("u2", name="host_n", rank="normal")
+        await create_user("u3", name="host_ex", rank="ex")
+        add_post(owner_user_id="u2", owner_name="host_n", post_type="ranked", rank="normal")
+        add_post(owner_user_id="u3", owner_name="host_ex", post_type="ranked", rank="ex")
+        token = bearer_token("u1", "viewer")
+
+        res = await client.get("/posts", headers={"Authorization": f"Bearer {token}"})
+        assert res.status_code == 200
+        ranks = sorted(
+            (p.get("rank") or "").lower()
+            for p in res.json()
+            if (p.get("post_type") or "casual") == "ranked"
+        )
+        assert ranks == ["ex", "normal"]
+
+
 def test_compute_favicon_badges_excludes_own_post():
     main.RECORDS.clear()
     add_post(owner_user_id="u1", owner_name="me", post_type="casual")
