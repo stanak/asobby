@@ -1449,13 +1449,7 @@ function render() {
   let ranked = all.filter((p) => (p.post_type || "casual") === "ranked");
   const casual = all.filter((p) => (p.post_type || "casual") !== "ranked");
 
-  if (myRank) {
-    ranked = ranked.filter((p) => (p.rank || "easy").toLowerCase() === myRank);
-    rankedSectionEl.hidden = false;
-  } else {
-    rankedSectionEl.hidden = true;
-    ranked = [];
-  }
+  rankedSectionEl.hidden = false;
 
   sortPosts(ranked);
   sortPosts(casual);
@@ -1463,7 +1457,7 @@ function render() {
   fillTable(rankedRowsEl, ranked);
   fillTable(casualRowsEl, casual);
 
-  rankedEmptyEl.hidden = ranked.length > 0 || !myRank;
+  rankedEmptyEl.hidden = ranked.length > 0;
   casualEmptyEl.hidden = casual.length > 0;
   rankedCountEl.textContent = t("common.countItems", { n: ranked.length });
   casualCountEl.textContent = t("common.countItems", { n: casual.length });
