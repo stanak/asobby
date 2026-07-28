@@ -1249,7 +1249,6 @@ async function refreshHostPings() {
   }
   const targets = [];
   for (const p of posts.values()) {
-    if (!p.guest_connected) continue;
     const parsed = parsePostAddr(p.addr);
     if (!parsed) continue;
     targets.push({
