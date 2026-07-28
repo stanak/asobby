@@ -9,6 +9,7 @@ import os
 import time
 
 from detect_api import DetectionState
+from profile_gating import gate_profiles_for_scene
 
 import logging
 logger = logging.getLogger(__name__)
@@ -744,11 +745,6 @@ def read_detection_state() -> DetectionState:
         if pnet:
             lprof = _sanitize_profile(_read_cpsz_cp932(h, pnet + LPROFOFS, PROFSZ))
             rprof = _sanitize_profile(_read_cpsz_cp932(h, pnet + RPROFOFS, PROFSZ))
-            # プロフィール名はネット対戦系シーン以外では意味を持たない
-            # (giuroll 環境では未初期化のゴミが残ることがある)
-            if scene_id not in NET_SCENES:
-                lprof = ""
-                rprof = ""
             adrbeg = _read_u32le(h, pnet + ADRBEGOFS)
             if adrbeg:
                 server = _read_u32le(h, adrbeg + SERVEROFS)
@@ -806,6 +802,12 @@ def read_detection_state() -> DetectionState:
             pnet=pnet,
             server=server,
             port=port,
+        )
+        lprof, rprof = gate_profiles_for_scene(
+            lprof,
+            rprof,
+            scene_id=scene_id,
+            mode=mode,
         )
 
         lcid = _read_u32le(h, LCHARID)

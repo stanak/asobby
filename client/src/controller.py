@@ -1591,7 +1591,7 @@ class Controller:
                 addr=self.my_post.addr or "",
                 giuroll=st.giuroll,
                 autopunch=self._host_uses_autopunch(st),
-                match_status=self.my_post.match_status or "",
+                match_status=match_status,
                 net_status=net_status,
             )
             return Action("update", payload)
