@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
 
 from i18n import t
@@ -72,6 +72,30 @@ class FilterState:
     opp_profile: str | None = None
     ranked_only: bool = False
     profile_search: str = ""
+    date_from: str = ""
+    date_to: str = ""
+
+
+JST = timezone(timedelta(hours=9))
+
+
+def _match_in_date_range(played_at: float, date_from: str, date_to: str) -> bool:
+    if not date_from and not date_to:
+        return True
+    day = datetime.fromtimestamp(played_at, tz=timezone.utc).astimezone(JST).date()
+    if date_from:
+        try:
+            if day < datetime.strptime(date_from, "%Y-%m-%d").date():
+                return False
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            if day > datetime.strptime(date_to, "%Y-%m-%d").date():
+                return False
+        except ValueError:
+            pass
+    return True
 
 
 @dataclass
@@ -151,6 +175,16 @@ def apply_filter_state(
             r
             for r in out
             if LocalStore.opp_profile(r) == state.opp_profile
+        ]
+    if state.date_from or state.date_to:
+        out = [
+            r
+            for r in out
+            if _match_in_date_range(
+                float(r["played_at"]),
+                state.date_from,
+                state.date_to,
+            )
         ]
     return out
 
@@ -291,6 +325,14 @@ def format_filter_label(state: FilterState) -> str:
         parts.append(t("stats.filter_profile_search", query=state.profile_search))
     if state.ranked_only:
         parts.append(t("stats.filter_ranked_only"))
+    if state.date_from or state.date_to:
+        parts.append(
+            t(
+                "stats.filter_date_range",
+                date_from=state.date_from or "…",
+                date_to=state.date_to or "…",
+            )
+        )
     if not parts:
         return t("stats.filter_none")
     return t("stats.filter_prefix") + " / ".join(parts)
@@ -329,6 +371,8 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
     summary_var = tk.StringVar(value="")
     ranked_var = tk.BooleanVar(value=False)
     profile_search_var = tk.StringVar(value="")
+    date_from_var = tk.StringVar(value="")
+    date_to_var = tk.StringVar(value="")
 
     # --- 上部バー ---
     top_frame = ttk.Frame(win, padding=(8, 8, 8, 4))
@@ -340,6 +384,10 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         filter_state.my_char = None
         filter_state.opp_char = None
         filter_state.opp_profile = None
+        filter_state.date_from = ""
+        filter_state.date_to = ""
+        date_from_var.set("")
+        date_to_var.set("")
         history_limit[0] = HISTORY_PAGE
         refresh_view()
 
@@ -358,6 +406,26 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         refresh_view()
 
     profile_search_entry.bind("<Return>", apply_profile_search)
+
+    date_frame = ttk.Frame(win, padding=(8, 0, 8, 4))
+    date_frame.pack(fill="x")
+    ttk.Label(date_frame, text=t("stats.date_from")).pack(side="left", padx=(0, 4))
+    date_from_entry = ttk.Entry(date_frame, textvariable=date_from_var, width=12)
+    date_from_entry.pack(side="left", padx=(0, 12))
+    ttk.Label(date_frame, text=t("stats.date_to")).pack(side="left", padx=(0, 4))
+    date_to_entry = ttk.Entry(date_frame, textvariable=date_to_var, width=12)
+    date_to_entry.pack(side="left", padx=(0, 8))
+
+    def apply_date_filter(_event=None) -> None:
+        filter_state.date_from = date_from_var.get().strip()
+        filter_state.date_to = date_to_var.get().strip()
+        history_limit[0] = HISTORY_PAGE
+        refresh_view()
+
+    date_from_entry.bind("<Return>", apply_date_filter)
+    date_to_entry.bind("<Return>", apply_date_filter)
+    date_from_entry.bind("<FocusOut>", apply_date_filter)
+    date_to_entry.bind("<FocusOut>", apply_date_filter)
 
     ttk.Button(top_frame, text=t("stats.refresh"), command=lambda: reload_data()).pack(side="right")
 

@@ -61,7 +61,7 @@
   }
   header .site-logo {
     display: block;
-    height: 40px;
+    height: 56px;
     width: auto;
   }
   header .sub { color: var(--muted); font-size: 13px; }
@@ -127,6 +127,28 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
+  }
+  .date-range-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 20px;
+    margin-bottom: 10px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .date-range-row label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .date-range-row input[type="date"] {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    padding: 4px 8px;
   }
   .filter-chip {
     display: inline-flex;
@@ -289,7 +311,7 @@
 <body>
 <header>
   <a href="/" class="site-logo-link" aria-label="asobby">
-    <img class="site-logo" src="/static/logo-header.png" alt="asobby" width="63" height="40">
+    <img class="site-logo" src="/static/logo-header.png" alt="asobby" height="56">
   </a>
   <span class="sub" data-i18n="stats.subtitle">非想天則 対戦記録</span>
   <nav>
@@ -323,6 +345,16 @@
     </div>
     <div class="panel" id="filter-panel">
       <h2 data-i18n="stats.filter">絞り込み</h2>
+      <div class="date-range-row">
+        <label>
+          <span data-i18n="stats.dateFrom">日付 (from)</span>
+          <input type="date" id="stats-date-from">
+        </label>
+        <label>
+          <span data-i18n="stats.dateTo">日付 (to)</span>
+          <input type="date" id="stats-date-to">
+        </label>
+      </div>
       <div class="filter-bar" id="filter-bar"></div>
     </div>
     <div class="panel" id="summary-panel">
@@ -435,6 +467,8 @@ const filter = {
   oppChar: null,
   oppProfile: null,
   rankedOnly: false,
+  dateFrom: "",
+  dateTo: "",
 };
 
 // ファセット表のソート状態（絞り込み変更後も維持）
@@ -586,9 +620,27 @@ function computeBucket(matches) {
   };
 }
 
+function matchJstDate(playedAt) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(playedAt * 1000));
+}
+
+function matchInDateRange(playedAt) {
+  if (!filter.dateFrom && !filter.dateTo) return true;
+  const day = matchJstDate(playedAt);
+  if (filter.dateFrom && day < filter.dateFrom) return false;
+  if (filter.dateTo && day > filter.dateTo) return false;
+  return true;
+}
+
 function applyFilter(matches, excludeDim) {
   return matches.filter((m) => {
     if (filter.rankedOnly && !m.ranked) return false;
+    if (!matchInDateRange(m.played_at)) return false;
     if (excludeDim !== "myChar" && filter.myChar !== null && myChar(m) !== filter.myChar) return false;
     if (excludeDim !== "oppChar" && filter.oppChar !== null && oppChar(m) !== filter.oppChar) return false;
     if (excludeDim !== "oppProfile" && filter.oppProfile !== null && oppProfile(m) !== filter.oppProfile) return false;
@@ -829,6 +881,15 @@ function renderFilterBar() {
     const prof = filter.oppProfile || noneLabel();
     chips.push({ key: "oppProfile", label: t("stats.filterOppProfile", { profile: prof }) });
   }
+  if (filter.dateFrom || filter.dateTo) {
+    chips.push({
+      key: "dateRange",
+      label: t("stats.filterDateRange", {
+        dateFrom: filter.dateFrom || "…",
+        dateTo: filter.dateTo || "…",
+      }),
+    });
+  }
 
   for (const chip of chips) {
     const span = document.createElement("span");
@@ -841,8 +902,17 @@ function renderFilterBar() {
     btn.textContent = "×";
     btn.title = t("common.removeFilter");
     btn.addEventListener("click", () => {
-      filter[chip.key] = null;
-      if (chip.key === "oppProfile") profileShowAll = false;
+      if (chip.key === "dateRange") {
+        filter.dateFrom = "";
+        filter.dateTo = "";
+        const df = document.getElementById("stats-date-from");
+        const dt = document.getElementById("stats-date-to");
+        if (df) df.value = "";
+        if (dt) dt.value = "";
+      } else {
+        filter[chip.key] = null;
+        if (chip.key === "oppProfile") profileShowAll = false;
+      }
       renderAll();
     });
     span.appendChild(btn);
@@ -882,7 +952,13 @@ function renderFilterBar() {
     filter.oppChar = null;
     filter.oppProfile = null;
     filter.rankedOnly = false;
+    filter.dateFrom = "";
+    filter.dateTo = "";
     profileShowAll = false;
+    const df = document.getElementById("stats-date-from");
+    const dt = document.getElementById("stats-date-to");
+    if (df) df.value = "";
+    if (dt) dt.value = "";
     renderAll();
   });
   actions.appendChild(clearBtn);
@@ -1348,6 +1424,20 @@ function setupTskImport() {
   });
 }
 
+function setupDateRangeFilter() {
+  const df = document.getElementById("stats-date-from");
+  const dt = document.getElementById("stats-date-to");
+  if (!df || !dt) return;
+  const onChange = () => {
+    filter.dateFrom = df.value || "";
+    filter.dateTo = dt.value || "";
+    profileShowAll = false;
+    renderAll();
+  };
+  df.addEventListener("change", onChange);
+  dt.addEventListener("change", onChange);
+}
+
 async function init() {
   const loading = document.getElementById("loading");
   const gate = document.getElementById("gate");
@@ -1372,6 +1462,7 @@ async function init() {
     renderRanked();
     setupFacetDelegation();
     setupProfileMore();
+    setupDateRangeFilter();
     renderAll();
     setupResync();
     setupTskImport();

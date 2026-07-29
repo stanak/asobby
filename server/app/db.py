@@ -913,19 +913,26 @@ async def fetch_user_matches_since(
     user_id: str,
     since_ts: float = 0.0,
     limit: int = 500,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
 ) -> list[tuple[Match, bool]]:
     """ユーザーの確定済み対戦を played_at 昇順で返す。(Match, has_replay) のリスト。"""
     since_dt = datetime.fromtimestamp(since_ts, tz=timezone.utc)
     replay_exists = exists().where(Replay.match_id == Match.id)
+    clauses = [
+        ((Match.host_user_id == user_id) | (Match.guest_user_id == user_id)),
+        (Match.winner != ""),
+        Match.played_at.is_not(None),
+        (Match.played_at > since_dt),
+    ]
+    if date_from is not None:
+        clauses.append(Match.played_at >= date_from)
+    if date_to is not None:
+        clauses.append(Match.played_at <= date_to)
     async with session() as s:
         res = await s.execute(
             select(Match, replay_exists.label("has_replay"))
-            .where(
-                ((Match.host_user_id == user_id) | (Match.guest_user_id == user_id))
-                & (Match.winner != "")
-                & Match.played_at.is_not(None)
-                & (Match.played_at > since_dt)
-            )
+            .where(*clauses)
             .order_by(Match.played_at.asc())
             .limit(limit)
         )

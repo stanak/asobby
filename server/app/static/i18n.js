@@ -204,6 +204,9 @@
     "stats.filterMyChar": "自キャラ: {name}",
     "stats.filterOppChar": "相手: {name}",
     "stats.filterOppProfile": "相手プロファイル: {profile}",
+    "stats.filterDateRange": "日付: {dateFrom} 〜 {dateTo}",
+    "stats.dateFrom": "日付 (from)",
+    "stats.dateTo": "日付 (to)",
     "stats.filterHint": "ファセットをクリックして絞り込み",
     "stats.rankedOnly": "ランクマのみ",
     "stats.summaryMain":
@@ -671,6 +674,9 @@
     "stats.filterMyChar": "Your char: {name}",
     "stats.filterOppChar": "Opponent: {name}",
     "stats.filterOppProfile": "Opp. profile: {profile}",
+    "stats.filterDateRange": "Date: {dateFrom} – {dateTo}",
+    "stats.dateFrom": "Date (from)",
+    "stats.dateTo": "Date (to)",
     "stats.filterHint": "Click a facet row to filter",
     "stats.rankedOnly": "Ranked only",
     "stats.summaryMain":

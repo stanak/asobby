@@ -31,22 +31,27 @@ jobs:
       - name: Build client
         run: |
           $tag = "${{ github.ref_name }}"
-          $version = $tag -replace '^v',''
+          if ($tag -match '^v') {
+            $version = $tag -replace '^v',''
+          } else {
+            $version = python -c "import sys; sys.path.insert(0,'client/src'); from services import __version__; print(__version__)"
+          }
           python tools/generate_version_info.py $version
           pyinstaller --noconfirm --clean asobby.spec
 
       - name: Prepare release asset
         run: |
-          $tag = "${{ github.ref_name }}"
-          $exeName = "asobby-$tag-windows.exe"
-          Copy-Item "dist/asobby.exe" $exeName
-          echo "ASSET_NAME=$exeName" >> $env:GITHUB_ENV
+          Copy-Item "dist/asobby.exe" "asobby.exe"
+          echo "ASSET_NAME=asobby.exe" >> $env:GITHUB_ENV
 
       - name: Create or update GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v') {
+            $tag = "v" + (python -c "import sys; sys.path.insert(0,'client/src'); from services import __version__; print(__version__)")
+          }
           $asset = $env:ASSET_NAME
 
           gh release view $tag 2>$null

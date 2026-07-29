@@ -1783,6 +1783,8 @@ async def stats_me_matches(
     request: Request,
     since: float = 0,
     limit: int = 500,
+    date_from: str = "",
+    date_to: str = "",
 ) -> dict[str, Any]:
     """ログインユーザーの対戦一覧 (played_at 昇順)。"""
     sess = await resolve_session(request)
@@ -1792,7 +1794,15 @@ async def stats_me_matches(
         return {"ok": True, "matches": []}
 
     limit = min(max(1, limit), 5000)
-    rows = await db.fetch_user_matches_since(sess["id"], since_ts=since, limit=limit)
+    dt_from = _parse_jst_date_start(date_from) if date_from.strip() else None
+    dt_to = _parse_jst_date_end(date_to) if date_to.strip() else None
+    rows = await db.fetch_user_matches_since(
+        sess["id"],
+        since_ts=since,
+        limit=limit,
+        date_from=dt_from,
+        date_to=dt_to,
+    )
     matches = [_match_to_stats_item(m, sess["id"], has_replay) for m, has_replay in rows]
     total = await db.count_user_matches(sess["id"])
     return {"ok": True, "matches": matches, "total": total}

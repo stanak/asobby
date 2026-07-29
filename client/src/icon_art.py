@@ -11,8 +11,8 @@ SIZE = 32
 BADGE_RANKED = (90, 158, 255)
 BADGE_CASUAL = (87, 192, 125)
 
-MARK_BOX = (200, 290, 830, 550)
-WORDMARK_BOX = (200, 290, 830, 690)
+MARK_BOX = (276, 287, 695, 650)
+WORDMARK_BOX = (276, 287, 695, 934)
 
 _mark_rgba: Image.Image | None = None
 _wordmark_rgba: Image.Image | None = None
@@ -24,8 +24,8 @@ def _logo_source_path() -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / "logo-source.png"
 
 
-def _strip_near_white(img: Image.Image, threshold: int = 250) -> Image.Image:
-    """白背景を透明化する（ロゴ周辺のアンチエイリアスもソフトに処理）。"""
+def _strip_logo_background(img: Image.Image, *, white_threshold: int = 250, black_threshold: int = 18) -> Image.Image:
+    """白/黒背景を透明化する（ロゴ周辺のアンチエイリアスもソフトに処理）。"""
     img = img.convert("RGBA")
     px = img.load()
     w, h = img.size
@@ -35,12 +35,15 @@ def _strip_near_white(img: Image.Image, threshold: int = 250) -> Image.Image:
             r, g, b, a = px[x, y]
             if a == 0:
                 continue
-            if r >= threshold and g >= threshold and b >= threshold:
+            if r >= white_threshold and g >= white_threshold and b >= white_threshold:
+                px[x, y] = (r, g, b, 0)
+                continue
+            if r <= black_threshold and g <= black_threshold and b <= black_threshold:
                 px[x, y] = (r, g, b, 0)
                 continue
             min_rgb = min(r, g, b)
-            if min_rgb >= threshold - soft:
-                fade = int(255 * (threshold - min_rgb) / soft)
+            if min_rgb >= white_threshold - soft:
+                fade = int(255 * (white_threshold - min_rgb) / soft)
                 px[x, y] = (r, g, b, min(a, max(0, fade)))
     return img
 
@@ -48,7 +51,7 @@ def _strip_near_white(img: Image.Image, threshold: int = 250) -> Image.Image:
 def _load_rgba(path: Path, box: tuple[int, int, int, int]) -> Image.Image:
     img = Image.open(path).convert("RGBA")
     cropped = img.crop(box)
-    return _strip_near_white(cropped)
+    return _strip_logo_background(cropped)
 
 
 def _mark_image() -> Image.Image:
@@ -163,7 +166,7 @@ def write_static_assets(out_dir: Path) -> None:
     render_icon(32).save(out_dir / "favicon-32.png")
     render_icon(64).save(out_dir / "favicon-64.png")
     render_icon(192).save(out_dir / "apple-touch-icon.png")
-    render_wordmark(40).save(out_dir / "logo-header.png")
+    render_wordmark(56).save(out_dir / "logo-header.png")
     ico_images = [render_icon(s) for s in (32, 48, 64)]
     ico_images[0].save(
         out_dir / "favicon.ico",
