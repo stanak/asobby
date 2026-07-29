@@ -651,8 +651,22 @@ class TrayApp:
     def _build_menu(self) -> Menu:
         return Menu(
             MenuItem(lambda item: self._status_text(), None, enabled=False),
-            MenuItem(lambda item: t("tray.version", version=__version__), None, enabled=False),
+            MenuItem(
+                t("tray.discord_login"),
+                lambda: self._discord_action(),
+                visible=lambda item: not self.controller.is_logged_in(),
+            ),
+            MenuItem(
+                lambda item: t(
+                    "tray.discord_logout",
+                    name=self.controller.discord_user or "?",
+                ),
+                lambda: self._discord_action(),
+                visible=lambda item: self.controller.is_logged_in(),
+            ),
+            MenuItem(t("tray.open_lobby"), lambda: self._open_lobby()),
             Menu.SEPARATOR,
+            self._section_header("tray.section.lobby"),
             MenuItem(
                 t("tray.reply_requests"),
                 Menu(lambda: self._request_menu_items()),
@@ -661,27 +675,16 @@ class TrayApp:
                     bool(self.controller.pending_requests),
                 )[-1],
             ),
-            MenuItem(
-                t("tray.discord_login"),
-                lambda: self._discord_action(),
-                visible=lambda item: not self.controller.is_logged_in(),
-            ),
-            MenuItem(
-                lambda item: t(
-                    "tray.download_update",
-                    tag=self.controller.update_available[0],
-                )
-                if self.controller.update_available
-                else "",
-                lambda: self._open_update_page(),
-                visible=lambda item: self.controller.update_available is not None,
-            ),
-            Menu.SEPARATOR,
-            self._section_header("tray.section.recruitment"),
             MenuItem(t("tray.settings"), lambda: self._open_settings()),
             MenuItem(t("tray.post_type"), Menu(lambda: self._post_type_menu_items())),
             MenuItem(t("tray.comment"), Menu(lambda: self._comment_menu_items())),
             MenuItem(t("tray.stream"), Menu(lambda: self._stream_menu_items())),
+            MenuItem(
+                t("tray.challenge_upper"),
+                lambda: self._toggle_challenge_upper(),
+                checked=lambda item: self.controller.challenge_upper_enabled(),
+                visible=lambda item: self.controller.my_post.post_type == "ranked",
+            ),
             MenuItem(
                 lambda item: self._pause_menu_label(),
                 Menu(lambda: self._pause_menu_items()),
@@ -702,12 +705,6 @@ class TrayApp:
                 checked=lambda item: self.controller.copy_addr_enabled(),
             ),
             MenuItem(
-                t("tray.challenge_upper"),
-                lambda: self._toggle_challenge_upper(),
-                checked=lambda item: self.controller.challenge_upper_enabled(),
-                visible=lambda item: self.controller.my_post.post_type == "ranked",
-            ),
-            MenuItem(
                 t("tray.ping_warn"),
                 lambda: self._toggle_ping_warn(),
                 checked=lambda item: self.controller.ping_warn_enabled(),
@@ -722,27 +719,35 @@ class TrayApp:
                 lambda: self._open_session_score_settings(),
             ),
             Menu.SEPARATOR,
-            MenuItem(lambda item: self._tool_label("autopunch"),
-                     lambda: self._handle_tool("autopunch", "Select autopunch exe")),
-            MenuItem(lambda item: self._tool_label("giuroll"),
-                     lambda: self._handle_tool("giuroll", "Select giuroll exe")),
-            MenuItem(lambda item: self._tool_label("soku"),
-                     lambda: self._handle_tool("soku", "Select th123.exe")),
+            self._section_header("tray.section.tools"),
+            MenuItem(
+                lambda item: self._tool_label("autopunch"),
+                lambda: self._handle_tool("autopunch", "Select autopunch exe"),
+            ),
+            MenuItem(
+                lambda item: self._tool_label("giuroll"),
+                lambda: self._handle_tool("giuroll", "Select giuroll exe"),
+            ),
+            MenuItem(
+                lambda item: self._tool_label("soku"),
+                lambda: self._handle_tool("soku", "Select th123.exe"),
+            ),
             Menu.SEPARATOR,
             MenuItem(t("tray.open_log"), lambda: self._open_log()),
             MenuItem(t("tray.reset_paths"), lambda: self._reset_paths()),
             MenuItem(t("lang.menu"), Menu(lambda: self._lang_menu_items())),
-            MenuItem(t("tray.quit"), lambda: self._quit()),
-            Menu.SEPARATOR,
-            MenuItem(t("tray.open_lobby"), lambda: self._open_lobby()),
             MenuItem(
                 lambda item: t(
-                    "tray.discord_logout",
-                    name=self.controller.discord_user or "?",
-                ),
-                lambda: self._discord_action(),
-                visible=lambda item: self.controller.is_logged_in(),
+                    "tray.download_update",
+                    tag=self.controller.update_available[0],
+                )
+                if self.controller.update_available
+                else "",
+                lambda: self._open_update_page(),
+                visible=lambda item: self.controller.update_available is not None,
             ),
+            MenuItem(lambda item: t("tray.version", version=__version__), None, enabled=False),
+            MenuItem(t("tray.quit"), lambda: self._quit()),
         )
 
     # -----------------
