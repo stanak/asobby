@@ -150,6 +150,26 @@
     font-size: 13px;
     padding: 4px 8px;
   }
+  .date-preset-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .date-preset-row button {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 4px 10px;
+  }
+  .date-preset-row button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
   .filter-chip {
     display: inline-flex;
     align-items: center;
@@ -354,6 +374,12 @@
           <span data-i18n="stats.dateTo">日付 (to)</span>
           <input type="date" id="stats-date-to">
         </label>
+      </div>
+      <div class="date-preset-row" id="stats-date-presets">
+        <button type="button" data-preset="today" data-i18n="stats.datePresetToday">今日</button>
+        <button type="button" data-preset="yesterday" data-i18n="stats.datePresetYesterday">昨日</button>
+        <button type="button" data-preset="this_month" data-i18n="stats.datePresetThisMonth">今月</button>
+        <button type="button" data-preset="this_year" data-i18n="stats.datePresetThisYear">今年</button>
       </div>
       <div class="filter-bar" id="filter-bar"></div>
     </div>
@@ -627,6 +653,50 @@ function matchJstDate(playedAt) {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date(playedAt * 1000));
+}
+
+function jstTodayYmd() {
+  return matchJstDate(Date.now() / 1000);
+}
+
+function shiftJstYmd(ymd, dayDelta) {
+  const base = new Date(`${ymd}T12:00:00+09:00`);
+  base.setUTCDate(base.getUTCDate() + dayDelta);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(base);
+}
+
+function datePresetRange(preset) {
+  const today = jstTodayYmd();
+  switch (preset) {
+    case "today":
+      return { from: today, to: today };
+    case "yesterday": {
+      const y = shiftJstYmd(today, -1);
+      return { from: y, to: y };
+    }
+    case "this_month":
+      return { from: `${today.slice(0, 7)}-01`, to: today };
+    case "this_year":
+      return { from: `${today.slice(0, 4)}-01-01`, to: today };
+    default:
+      return { from: "", to: "" };
+  }
+}
+
+function applyDateRangeInputs(from, to) {
+  const df = document.getElementById("stats-date-from");
+  const dt = document.getElementById("stats-date-to");
+  if (df) df.value = from || "";
+  if (dt) dt.value = to || "";
+  filter.dateFrom = from || "";
+  filter.dateTo = to || "";
+  profileShowAll = false;
+  renderAll();
 }
 
 function matchInDateRange(playedAt) {
@@ -1428,14 +1498,18 @@ function setupDateRangeFilter() {
   const df = document.getElementById("stats-date-from");
   const dt = document.getElementById("stats-date-to");
   if (!df || !dt) return;
-  const onChange = () => {
-    filter.dateFrom = df.value || "";
-    filter.dateTo = dt.value || "";
-    profileShowAll = false;
-    renderAll();
-  };
+  const onChange = () => applyDateRangeInputs(df.value || "", dt.value || "");
   df.addEventListener("change", onChange);
   dt.addEventListener("change", onChange);
+
+  const presetRow = document.getElementById("stats-date-presets");
+  if (!presetRow) return;
+  for (const btn of presetRow.querySelectorAll("[data-preset]")) {
+    btn.addEventListener("click", () => {
+      const range = datePresetRange(btn.getAttribute("data-preset"));
+      applyDateRangeInputs(range.from, range.to);
+    });
+  }
 }
 
 async function init() {

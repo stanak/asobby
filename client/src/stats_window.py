@@ -8,6 +8,7 @@ from typing import Any, Callable
 from i18n import t
 from local_store import LocalStore
 from services import RANK_LABEL
+from stats_date_presets import DATE_PRESETS, date_preset_range
 
 # hisoutensoku_memory は Windows 専用のため CHAR_NAME をここに複製
 CHAR_NAME: dict[int, str] = {
@@ -422,10 +423,34 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
         history_limit[0] = HISTORY_PAGE
         refresh_view()
 
+    def apply_date_preset(preset: str) -> None:
+        date_from, date_to = date_preset_range(preset)
+        date_from_var.set(date_from)
+        date_to_var.set(date_to)
+        filter_state.date_from = date_from
+        filter_state.date_to = date_to
+        history_limit[0] = HISTORY_PAGE
+        refresh_view()
+
     date_from_entry.bind("<Return>", apply_date_filter)
     date_to_entry.bind("<Return>", apply_date_filter)
     date_from_entry.bind("<FocusOut>", apply_date_filter)
     date_to_entry.bind("<FocusOut>", apply_date_filter)
+
+    preset_frame = ttk.Frame(date_frame)
+    preset_frame.pack(side="left", padx=(8, 0))
+    preset_labels = {
+        "today": "stats.date_preset_today",
+        "yesterday": "stats.date_preset_yesterday",
+        "this_month": "stats.date_preset_this_month",
+        "this_year": "stats.date_preset_this_year",
+    }
+    for preset in DATE_PRESETS:
+        ttk.Button(
+            preset_frame,
+            text=t(preset_labels[preset]),
+            command=lambda p=preset: apply_date_preset(p),
+        ).pack(side="left", padx=(0, 4))
 
     ttk.Button(top_frame, text=t("stats.refresh"), command=lambda: reload_data()).pack(side="right")
 

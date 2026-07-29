@@ -207,6 +207,10 @@
     "stats.filterDateRange": "日付: {dateFrom} 〜 {dateTo}",
     "stats.dateFrom": "日付 (from)",
     "stats.dateTo": "日付 (to)",
+    "stats.datePresetToday": "今日",
+    "stats.datePresetYesterday": "昨日",
+    "stats.datePresetThisMonth": "今月",
+    "stats.datePresetThisYear": "今年",
     "stats.filterHint": "ファセットをクリックして絞り込み",
     "stats.rankedOnly": "ランクマのみ",
     "stats.summaryMain":
@@ -677,6 +681,10 @@
     "stats.filterDateRange": "Date: {dateFrom} – {dateTo}",
     "stats.dateFrom": "Date (from)",
     "stats.dateTo": "Date (to)",
+    "stats.datePresetToday": "Today",
+    "stats.datePresetYesterday": "Yesterday",
+    "stats.datePresetThisMonth": "This month",
+    "stats.datePresetThisYear": "This year",
     "stats.filterHint": "Click a facet row to filter",
     "stats.rankedOnly": "Ranked only",
     "stats.summaryMain":
