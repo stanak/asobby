@@ -211,7 +211,8 @@
     "stats.datePresetYesterday": "昨日",
     "stats.datePresetThisMonth": "今月",
     "stats.datePresetThisYear": "今年",
-    "stats.filterHint": "ファセットをクリックして絞り込み",
+    "stats.filterHint":
+      "下の表でキャラ名やプロフ名の行をクリックすると、自キャラ・相手キャラ・相手プロファイル別に絞り込めます。複数条件の同時絞り込みも可能です。",
     "stats.rankedOnly": "ランクマのみ",
     "stats.summaryMain":
       "{games} 戦 {wins} 勝 {losses} 敗 勝率 {rate}",
@@ -683,7 +684,8 @@
     "stats.datePresetYesterday": "Yesterday",
     "stats.datePresetThisMonth": "This month",
     "stats.datePresetThisYear": "This year",
-    "stats.filterHint": "Click a facet row to filter",
+    "stats.filterHint":
+      "Click a character or profile row in the tables below to filter by your character, opponent character, or opponent profile. You can combine multiple filters at once.",
     "stats.rankedOnly": "Ranked only",
     "stats.summaryMain":
       "{games} played · {wins}W {losses}L · win rate {rate}",
