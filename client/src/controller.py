@@ -1112,6 +1112,7 @@ class Controller:
                     resp = await self.api.update(
                         self.my_post.id, self.owner_token, act.payload
                     )
+                    self._sync_post_reachability_from_server(resp)
                     for msg in resp.get("messages") or []:
                         msg_type = msg.get("type", "")
                         from_name = msg.get("from_name", "")
@@ -1940,6 +1941,11 @@ class Controller:
     # -----------------
     # result / error handling
     # -----------------
+    def _sync_post_reachability_from_server(self, data: dict) -> None:
+        """サーバーが判定した AP 状態をローカルに反映する (404 再作成後も維持)。"""
+        if "autopunch" in data:
+            self.update_my_post(autopunch=bool(data["autopunch"]))
+
     def _on_create_result(self, result: dict, *, giuroll: bool) -> None:
         self._create_pending = False
         post = result.get("post") or {}
@@ -1952,6 +1958,7 @@ class Controller:
         self.owner_token = str(token)
         self._seen_recruit_this_run = True
         self.my_post = replace(self.my_post, id=str(rid))
+        self._sync_post_reachability_from_server(post)
         self.my_post_sink(self.my_post)
 
         post_type = str(post.get("post_type", "casual"))

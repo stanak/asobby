@@ -131,6 +131,39 @@ def test_chat_max_messages(fake_redis):
 
 
 @pytest.mark.asyncio
+async def test_hydrate_recruiting_post_survives_deploy_gap(monkeypatch):
+    """デプロイ中ハートビート途切れでも AP-only 募集を hydrate できる。"""
+    main.RECORDS.clear()
+    now = main.now_ts()
+    post = main.Post(
+        id="ap1",
+        addr="1.2.3.4:10800",
+        autopunch=True,
+        direct_reachable=False,
+        updated_at=now - 60,
+        created_at=now - 120,
+    )
+    data = main.post_record_to_dict(
+        main.PostRecord(
+            post=post,
+            owner_token="tok",
+            creator_ip="1.2.3.4",
+            last_hostcheck_at=now - 60,
+        )
+    )
+
+    monkeypatch.setattr(post_redis, "is_configured", lambda: True)
+    monkeypatch.setattr(post_redis, "load_all_record_dicts", lambda: [data])
+
+    await main._hydrate_records_from_redis()
+    assert "ap1" in main.RECORDS
+    restored = main.RECORDS["ap1"].post
+    assert restored.autopunch is True
+    assert restored.direct_reachable is False
+    main.RECORDS.clear()
+
+
+@pytest.mark.asyncio
 async def test_hydrate_battle_post_survives_stale_heartbeat(monkeypatch):
     main.RECORDS.clear()
     now = main.now_ts()
@@ -181,7 +214,7 @@ async def test_hydrate_battle_post_survives_stale_heartbeat(monkeypatch):
 async def test_hydrate_idle_post_dropped_when_stale(monkeypatch):
     main.RECORDS.clear()
     now = main.now_ts()
-    post = main.Post(id="idle1", updated_at=now - 120, created_at=now - 600)
+    post = main.Post(id="idle1", updated_at=now - 200, created_at=now - 600)
     data = main.post_record_to_dict(
         main.PostRecord(post=post, owner_token="tok", creator_ip="1.2.3.4")
     )

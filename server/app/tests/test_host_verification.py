@@ -44,8 +44,10 @@ def clean_state(tmp_path):
     main.DATABASE_URL = url
     main.RECORDS.clear()
     main.LAST_CREATE_AT.clear()
+    main.SERVER_STARTED_AT = 0.0
     yield
     main.RECORDS.clear()
+    main.SERVER_STARTED_AT = 0.0
 
 
 @asynccontextmanager
@@ -393,6 +395,111 @@ async def test_update_soft_fails_reverify_when_addr_unchanged(monkeypatch):
 
         listed = await client.get("/posts", headers={"Authorization": f"Bearer {token}"})
         assert any(p["id"] == post["id"] for p in listed.json())
+
+
+@pytest.mark.asyncio
+async def test_verify_autopunch_does_not_trust_lenient_direct(monkeypatch):
+    """AP ホストは lenient direct だけでは direct 到達と判定しない。"""
+    call_n = 0
+
+    def fake_direct(host: str, port: int, **kwargs):
+        nonlocal call_n
+        call_n += 1
+        needed = int(kwargs.get("needed_consecutive", 2))
+        if needed >= 3:
+            return False
+        return True
+
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: False)
+
+    with pytest.raises(main.HTTPException) as exc:
+        await main.verify_hostable_or_raise("203.0.113.1:10800", autopunch=True)
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_update_keeps_ap_only_when_client_sends_autopunch(monkeypatch):
+    """hydrate 後サーバー側 autopunch=false でも、クライアント AP 送信なら降格しない。"""
+    calls = 0
+
+    async def flaky_direct(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return False, True
+        return True, False
+
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    monkeypatch.setattr(main, "should_reverify_host_on_update", lambda *a, **k: True)
+    monkeypatch.setattr(main, "verify_hostable_or_raise", flaky_direct)
+
+    async with app_client() as client:
+        await create_user("host3", name="host")
+        token = bearer_token("host3", "host")
+        create = await client.post(
+            "/posts",
+            json={
+                "post_type": "casual",
+                "addr": "203.0.113.1:10800",
+                "autopunch": False,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create.status_code == 200
+        body = create.json()
+        post = body["post"]
+        owner_token = body["owner_token"]
+        rec = main.RECORDS[post["id"]]
+        rec.post.autopunch = False
+        rec.post.direct_reachable = False
+
+        updated = await client.post(
+            "/posts/update",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "post_type": "casual",
+                "addr": "203.0.113.1:10800",
+                "autopunch": True,
+                "comment": "",
+                "stream_url": "",
+                "match_status": "",
+                "net_status": 3,
+                "challenge_upper": False,
+                "ping_warn_enabled": False,
+                "ping_warn_ms": 150,
+                "ping_warn_giuroll_ms": 100,
+            },
+        )
+        assert updated.status_code == 200
+        data = updated.json()
+        assert data["direct_reachable"] is False
+        assert data["autopunch"] is True
+
+
+def test_should_not_reverify_during_startup_grace(monkeypatch):
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    main.SERVER_STARTED_AT = 1000.0
+    rec = main.PostRecord(
+        post=main.Post(addr="203.0.113.1:10800"),
+        owner_token="t",
+        creator_ip="1.2.3.4",
+        last_hostcheck_at=0.0,
+    )
+    assert not main.should_reverify_host_on_update(
+        rec,
+        addr="203.0.113.1:10800",
+        net_status=0,
+        now=1030.0,
+    )
+    assert main.should_reverify_host_on_update(
+        rec,
+        addr="203.0.113.1:10801",
+        net_status=0,
+        now=1030.0,
+    )
 
 
 @pytest.mark.asyncio

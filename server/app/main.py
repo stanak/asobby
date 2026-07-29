@@ -187,6 +187,16 @@ HOSTCHECK_ENABLED = os.environ.get("ASOBBY_HOSTCHECK", "on").lower() not in ("of
 HOSTCHECK_UPDATE_INTERVAL_SEC = float(
     os.environ.get("ASOBBY_HOSTCHECK_UPDATE_INTERVAL_SEC", "20")
 )
+# デプロイ直後は UDP プローブが不安定になりやすい。hydrate 済み募集の
+# 到達性フラグをすぐ上書きしないよう、再起動後しばらく再検証を抑止する。
+HOSTCHECK_STARTUP_GRACE_SEC = float(
+    os.environ.get("ASOBBY_HOSTCHECK_STARTUP_GRACE_SEC", "45")
+)
+# デプロイ中ハートビートが途切れても Redis から募集を復元できるよう、
+# 起動時 hydrate だけ updated_at 判定を POST_TTL より長く許容する。
+HYDRATE_STALE_GRACE_SEC = float(
+    os.environ.get("ASOBBY_HYDRATE_STALE_GRACE_SEC", "120")
+)
 
 # fly.io では任意ポートへの外向き UDP が遮断されるが、UDP サービスとして
 # 公開したポート (fly-global-services にバインド) を送信元にすれば
@@ -744,6 +754,7 @@ LOBBY_CHATS: dict[str, deque[dict[str, Any]]] = {
 }
 RECORDS: Dict[str, PostRecord] = {}
 LAST_CREATE_AT: Dict[str, float] = {}
+SERVER_STARTED_AT: float = 0.0
 
 
 async def _persist_record(rec: PostRecord) -> None:
@@ -787,7 +798,8 @@ async def _hydrate_records_from_redis() -> None:
             if post_id:
                 await _delete_persisted_post(post_id)
             continue
-        if now - rec.post.updated_at >= post_record_ttl(rec):
+        hydrate_ttl = post_record_ttl(rec) + HYDRATE_STALE_GRACE_SEC
+        if now - rec.post.updated_at >= hydrate_ttl:
             await _delete_persisted_post(rec.post.id)
             continue
         RECORDS[rec.post.id] = rec
@@ -940,6 +952,7 @@ def run_migrations() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global SERVER_STARTED_AT
     if DATABASE_URL:
         await asyncio.to_thread(run_migrations)
         db.init_engine(DATABASE_URL)
@@ -947,6 +960,7 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(geoip.init_geoip)
     await _hydrate_records_from_redis()
     await _hydrate_chat_from_redis()
+    SERVER_STARTED_AT = time.time()
     await client_release.get_latest_release()
     cleanup_task = asyncio.create_task(cleanup_loop())
     guest_probe_task = asyncio.create_task(guest_probe_loop())
@@ -2599,7 +2613,7 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     if reverify:
         addr_changed = body.addr != rec.post.addr
         giuroll = bool(body.giuroll or p.giuroll)
-        was_ap_only = p.autopunch and not p.direct_reachable
+        was_ap_only = not p.direct_reachable and (p.autopunch or body.autopunch)
         check_addr = probe_addr_for_hostcheck(body.addr, fallback_host=rec.creator_ip)
         try:
             direct_reachable, autopunch_effective = await verify_hostable_or_raise(
@@ -2622,11 +2636,15 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
                 and direct_reachable
                 and not autopunch_effective
             ):
-                pass  # AP 必須ホストを direct 誤判定へ降格させない
+                if body.autopunch:
+                    p.autopunch = True
             else:
                 p.direct_reachable = direct_reachable
                 p.autopunch = autopunch_effective
         rec.last_hostcheck_at = now
+
+    if body.autopunch and not p.direct_reachable:
+        p.autopunch = True
 
     p.post_type = body.post_type
     p.challenge_upper = body.challenge_upper
@@ -3654,6 +3672,11 @@ def should_reverify_host_on_update(
         return False
     if addr != rec.post.addr:
         return True
+    if (
+        SERVER_STARTED_AT > 0
+        and (now - SERVER_STARTED_AT) < HOSTCHECK_STARTUP_GRACE_SEC
+    ):
+        return False
     return now - rec.last_hostcheck_at >= interval_sec
 
 
@@ -3727,7 +3750,9 @@ async def verify_hostable_or_raise(
     if ap_ok:
         return False, True
 
-    if direct_lenient:
+    # AP 利用ホストは lenient direct だけでは direct 到達と判定しない
+    # (デプロイ直後の誤応答で AP バッジが消えるのを防ぐ)
+    if direct_lenient and not autopunch:
         return True, False
 
     if autopunch and ap_check:
