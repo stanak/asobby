@@ -472,11 +472,9 @@
     "guide.winNotifyScreenshotCaption":
       "Windows 11 — システム → 通知 → 優先通知を設定する",
     "guide.winNotifyImportant":
-      "ホスト接続の失敗（ポート未開放など）だけ、asobby 側で「重要な通知」扱いと短い通知音が使われます。それ以外の通知は通常表示です。",
+      "ホスト接続の失敗（ポート未開放など）だけ、asobby 側で「重要な通知」扱いになります。それ以外の通知は通常表示です。",
     "guide.winNotifyWin10":
       "Windows 10 の場合は、設定 → システム → 通知 → 集中モード で、ゲーム中・全画面アプリ中に自動でオンになるルールをオフにし、asobby の通知を許可してください。",
-    "guide.winNotifyTray":
-      "トレイメニューの 通知音 で、ホスト接続失敗時のチャイムの ON/OFF を切り替えられます（デフォルト ON）。",
     "guide.sectionAv": "ウイルス対策ソフトの警告について",
     "guide.avIntro":
       "asobby クライアント (PyInstaller でビルドした exe) は、コード署名がないため、Windows Defender などが誤検知（偽陽性）することがあります。新しい exe を配布するたびに警告が出る場合もありますが、asobby 自体にマルウェアは含まれていません。",
@@ -946,11 +944,9 @@
     "guide.winNotifyScreenshotCaption":
       "Windows 11 — System → Notifications → Set priority notifications",
     "guide.winNotifyImportant":
-      "Only host connection failures (e.g. port not open) use Important priority and a short chime on the asobby side. Other notifications use the default style.",
+      "Only host connection failures (e.g. port not open) use Important priority on the asobby side. Other notifications use the default style.",
     "guide.winNotifyWin10":
       "On Windows 10, open Settings → System → Notifications → Focus assist and turn off rules that auto-enable during games or fullscreen apps, and allow notifications from asobby.",
-    "guide.winNotifyTray":
-      "Use the tray menu item Notification sound to toggle the chime on host connection failures (on by default).",
     "guide.sectionAv": "Antivirus warnings",
     "guide.avIntro":
       "The asobby client (a PyInstaller-built exe) is unsigned, so Windows Defender and others may flag it as a false positive. A warning can appear again whenever a new exe is published, but asobby does not contain malware.",

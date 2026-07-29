@@ -288,20 +288,6 @@ class Controller:
             t("log.challenge_upper", state=t("common.on" if enabled else "common.off")),
         )
 
-    def notify_sound_enabled(self) -> bool:
-        return bool(self.config_mgr.get_value("options", "notify_sound_enabled", True))
-
-    def set_notify_sound_enabled(self, enabled: bool) -> None:
-        value = bool(enabled)
-        self.config_mgr.set_value("options", "notify_sound_enabled", value)
-        self.log_sink(
-            "info",
-            t(
-                "log.notify_sound_enabled",
-                state=t("common.on" if value else "common.off"),
-            ),
-        )
-
     def ping_warn_enabled(self) -> bool:
         return bool(self.config_mgr.get_value("options", "ping_warn_enabled", True))
 
@@ -824,7 +810,7 @@ class Controller:
                     "Host not reachable while posting paused. "
                     "Please open the port or start autopunch.",
                 )
-                self.notify_sink(t("notify.post_failed"), play_sound=True)
+                self.notify_sink(t("notify.post_failed"), important=True)
         else:
             self._host_unreachable_notified = False
 
@@ -1992,7 +1978,7 @@ class Controller:
                 self.notify_sink(t("notify.session_expired"))
             elif code == 409:
                 self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
-                self.notify_sink(t("notify.post_failed"), play_sound=True)
+                self.notify_sink(t("notify.post_failed"), important=True)
             elif code == 429:
                 self.log_sink("warn", "Rate limited by server. Retrying soon.")
             else:
@@ -2017,7 +2003,7 @@ class Controller:
             # アドレス変更時の到達性検証に失敗。ローカルを破棄して
             # 次の周期の create（クールダウン付き）からやり直す。
             self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
-            self.notify_sink(t("notify.post_failed"), play_sound=True)
+            self.notify_sink(t("notify.post_failed"), important=True)
             self.clear_my_post()
             self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
         else:

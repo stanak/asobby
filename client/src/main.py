@@ -11,7 +11,6 @@ from time import sleep
 from PIL import Image
 from pystray import Menu, MenuItem
 
-import notify_sound
 import toast
 from controller import Controller, PAUSE_UNTIL_RESUME
 from replay_refusal import REPLAY_REFUSAL_PERMANENT
@@ -82,20 +81,13 @@ class TrayApp:
     def emit_log(self, level: str, text: str) -> None:
         self._append_log(level, text)
 
-    def _play_notify_sound(self) -> None:
-        if not self.controller.notify_sound_enabled():
-            return
-        notify_sound.play(log=lambda m: self._append_log("warn", m))
-
-    def emit_notify(self, text: str, *, play_sound: bool = False) -> None:
+    def emit_notify(self, text: str, *, important: bool = False) -> None:
         shown = toast.show_info_toast(
             text,
             title="asobby",
-            important=play_sound,
+            important=important,
             log=lambda m: self._append_log("warn", m),
         )
-        if play_sound:
-            self._play_notify_sound()
         if not shown:
             self._append_log("warn", "勝敗数通知: トースト非表示のためトレイ通知にフォールバック")
             self._notify(text)
@@ -384,12 +376,6 @@ class TrayApp:
         if self.icon:
             self.icon.update_menu()
 
-    def _discord_label(self) -> str:
-        if self.controller.is_logged_in():
-            name = self.controller.discord_user or "?"
-            return t("tray.discord_logout", name=name)
-        return t("tray.discord_login")
-
     def _discord_action(self) -> None:
         if self.controller.is_logged_in():
             def done(_fut) -> None:
@@ -593,13 +579,6 @@ class TrayApp:
         if self.icon:
             self.icon.update_menu()
 
-    def _toggle_notify_sound(self) -> None:
-        self.controller.set_notify_sound_enabled(
-            not self.controller.notify_sound_enabled()
-        )
-        if self.icon:
-            self.icon.update_menu()
-
     def _toggle_ping_warn(self) -> None:
         self.controller.set_ping_warn_enabled(
             not self.controller.ping_warn_enabled()
@@ -666,15 +645,40 @@ class TrayApp:
             self.icon.update_menu()
             self._refresh_icon()
 
+    def _section_header(self, key: str) -> MenuItem:
+        return MenuItem(lambda item: t(key), None, enabled=False)
+
     def _build_menu(self) -> Menu:
         return Menu(
             MenuItem(lambda item: self._status_text(), None, enabled=False),
             MenuItem(lambda item: t("tray.version", version=__version__), None, enabled=False),
             Menu.SEPARATOR,
-            MenuItem(t("tray.open_lobby"), lambda: self._open_lobby()),
+            MenuItem(
+                t("tray.reply_requests"),
+                Menu(lambda: self._request_menu_items()),
+                visible=lambda item: (
+                    self.controller._prune_pending_requests(),
+                    bool(self.controller.pending_requests),
+                )[-1],
+            ),
+            MenuItem(
+                t("tray.discord_login"),
+                lambda: self._discord_action(),
+                visible=lambda item: not self.controller.is_logged_in(),
+            ),
+            MenuItem(
+                lambda item: t(
+                    "tray.download_update",
+                    tag=self.controller.update_available[0],
+                )
+                if self.controller.update_available
+                else "",
+                lambda: self._open_update_page(),
+                visible=lambda item: self.controller.update_available is not None,
+            ),
+            Menu.SEPARATOR,
+            self._section_header("tray.section.recruitment"),
             MenuItem(t("tray.settings"), lambda: self._open_settings()),
-            MenuItem(t("tray.stats"), lambda: self._open_stats()),
-            MenuItem(t("tray.sync_stats"), lambda: self._sync_stats()),
             MenuItem(t("tray.post_type"), Menu(lambda: self._post_type_menu_items())),
             MenuItem(t("tray.comment"), Menu(lambda: self._comment_menu_items())),
             MenuItem(t("tray.stream"), Menu(lambda: self._stream_menu_items())),
@@ -682,6 +686,12 @@ class TrayApp:
                 lambda item: self._pause_menu_label(),
                 Menu(lambda: self._pause_menu_items()),
             ),
+            Menu.SEPARATOR,
+            self._section_header("tray.section.stats"),
+            MenuItem(t("tray.stats"), lambda: self._open_stats()),
+            MenuItem(t("tray.sync_stats"), lambda: self._sync_stats()),
+            Menu.SEPARATOR,
+            self._section_header("tray.section.settings"),
             MenuItem(
                 lambda item: self._replay_refusal_menu_label(),
                 Menu(lambda: self._replay_refusal_menu_items()),
@@ -703,11 +713,6 @@ class TrayApp:
                 checked=lambda item: self.controller.ping_warn_enabled(),
             ),
             MenuItem(
-                t("tray.notify_sound"),
-                lambda: self._toggle_notify_sound(),
-                checked=lambda item: self.controller.notify_sound_enabled(),
-            ),
-            MenuItem(
                 t("tray.session_score_notify"),
                 lambda: self._toggle_session_score_notify(),
                 checked=lambda item: self.controller.session_score_notify_enabled(),
@@ -716,15 +721,6 @@ class TrayApp:
                 t("tray.session_score_settings"),
                 lambda: self._open_session_score_settings(),
             ),
-            MenuItem(
-                t("tray.reply_requests"),
-                Menu(lambda: self._request_menu_items()),
-                visible=lambda item: (
-                    self.controller._prune_pending_requests(),
-                    bool(self.controller.pending_requests),
-                )[-1],
-            ),
-            MenuItem(lambda item: self._discord_label(), lambda: self._discord_action()),
             Menu.SEPARATOR,
             MenuItem(lambda item: self._tool_label("autopunch"),
                      lambda: self._handle_tool("autopunch", "Select autopunch exe")),
@@ -733,20 +729,20 @@ class TrayApp:
             MenuItem(lambda item: self._tool_label("soku"),
                      lambda: self._handle_tool("soku", "Select th123.exe")),
             Menu.SEPARATOR,
-            MenuItem(
-                lambda item: t(
-                    "tray.download_update",
-                    tag=self.controller.update_available[0],
-                )
-                if self.controller.update_available
-                else "",
-                lambda: self._open_update_page(),
-                visible=lambda item: self.controller.update_available is not None,
-            ),
             MenuItem(t("tray.open_log"), lambda: self._open_log()),
             MenuItem(t("tray.reset_paths"), lambda: self._reset_paths()),
             MenuItem(t("lang.menu"), Menu(lambda: self._lang_menu_items())),
             MenuItem(t("tray.quit"), lambda: self._quit()),
+            Menu.SEPARATOR,
+            MenuItem(t("tray.open_lobby"), lambda: self._open_lobby()),
+            MenuItem(
+                lambda item: t(
+                    "tray.discord_logout",
+                    name=self.controller.discord_user or "?",
+                ),
+                lambda: self._discord_action(),
+                visible=lambda item: self.controller.is_logged_in(),
+            ),
         )
 
     # -----------------
