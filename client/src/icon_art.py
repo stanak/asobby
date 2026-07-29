@@ -24,11 +24,31 @@ def _logo_source_path() -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / "logo-source.png"
 
 
+def _strip_near_white(img: Image.Image, threshold: int = 250) -> Image.Image:
+    """白背景を透明化する（ロゴ周辺のアンチエイリアスもソフトに処理）。"""
+    img = img.convert("RGBA")
+    px = img.load()
+    w, h = img.size
+    soft = 24
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = px[x, y]
+            if a == 0:
+                continue
+            if r >= threshold and g >= threshold and b >= threshold:
+                px[x, y] = (r, g, b, 0)
+                continue
+            min_rgb = min(r, g, b)
+            if min_rgb >= threshold - soft:
+                fade = int(255 * (threshold - min_rgb) / soft)
+                px[x, y] = (r, g, b, min(a, max(0, fade)))
+    return img
+
+
 def _load_rgba(path: Path, box: tuple[int, int, int, int]) -> Image.Image:
     img = Image.open(path).convert("RGBA")
     cropped = img.crop(box)
-    white = Image.new("RGBA", cropped.size, (255, 255, 255, 255))
-    return Image.alpha_composite(white, cropped)
+    return _strip_near_white(cropped)
 
 
 def _mark_image() -> Image.Image:
@@ -59,7 +79,7 @@ def _style_mark(mark: Image.Image, accent: tuple[int, int, int]) -> Image.Image:
 
 
 def _fit_square(mark: Image.Image, size: int) -> Image.Image:
-    canvas = Image.new("RGBA", (size, size), (255, 255, 255, 255))
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     pad = max(1, round(size * 0.06))
     inner = size - pad * 2
     scaled = mark.copy()

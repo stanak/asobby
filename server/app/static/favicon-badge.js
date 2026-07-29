@@ -55,12 +55,10 @@
   }
 
   function drawMark(ctx) {
+    ctx.clearRect(0, 0, SIZE, SIZE);
     if (markImage) {
       ctx.drawImage(markImage, 0, 0, SIZE, SIZE);
-      return;
     }
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, SIZE, SIZE);
   }
 
   function drawBadgeDot(ctx, x, y, color) {
