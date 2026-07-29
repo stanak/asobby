@@ -47,6 +47,16 @@
     padding: 16px 20px 8px;
   }
   header h1 { margin: 0; font-size: 20px; letter-spacing: 1px; }
+  header .site-logo-link {
+    display: flex;
+    align-items: center;
+    line-height: 0;
+  }
+  header .site-logo {
+    display: block;
+    height: 40px;
+    width: auto;
+  }
   header .sub { color: var(--muted); font-size: 13px; }
   header nav { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-left: auto; }
   header nav a { color: var(--accent); text-decoration: none; }
@@ -127,7 +137,9 @@
 </head>
 <body>
 <header>
-  <h1 data-i18n="settings.title">asobby 設定</h1>
+  <a href="/" class="site-logo-link" aria-label="asobby">
+    <img class="site-logo" src="/static/logo-header.png" alt="asobby" width="63" height="40">
+  </a>
   <span class="sub" data-i18n="settings.subtitle">通知と表示</span>
   <nav>
     <a href="/" data-i18n="nav.lobby">ロビー</a>

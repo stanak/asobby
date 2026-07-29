@@ -52,6 +52,16 @@
     font-size: 20px;
     letter-spacing: 1px;
   }
+  header .site-logo-link {
+    display: flex;
+    align-items: center;
+    line-height: 0;
+  }
+  header .site-logo {
+    display: block;
+    height: 40px;
+    width: auto;
+  }
   header .sub { color: var(--muted); font-size: 13px; }
   header nav {
     margin-left: auto;
@@ -676,7 +686,9 @@
 </head>
 <body>
 <header>
-  <h1 data-i18n="common.appName">asobby</h1>
+  <a href="/" class="site-logo-link" aria-label="asobby">
+    <img class="site-logo" src="/static/logo-header.png" alt="asobby" width="63" height="40">
+  </a>
   <span class="sub" data-i18n="lobby.subtitle">非想天則 対戦募集ロビー</span>
   <nav>
     <a href="/stats" data-i18n="nav.stats">戦績</a>

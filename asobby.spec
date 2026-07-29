@@ -2,7 +2,7 @@
 
 from PyInstaller.utils.hooks import collect_all
 
-datas = []
+datas = [('client/assets/logo-source.png', 'assets')]
 binaries = []
 hiddenimports = ['pystray._win32']
 
@@ -50,4 +50,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version='client\\version_info.txt',
+    icon='server\\app\\static\\favicon.ico',
 )

@@ -2,17 +2,16 @@
   "use strict";
 
   const SIZE = 64;
-  const DESIGN = 32;
+  const DESIGN = 64;
   const SCALE = SIZE / DESIGN;
-  const BG = [23, 28, 36];
-  const FRAME = [54, 69, 89];
-  const ACCENT = [106, 176, 243];
-  const CORE = [230, 237, 245];
   const BADGE_RANKED = [90, 158, 255];
   const BADGE_CASUAL = [87, 192, 125];
 
   let linkEl = null;
   let badges = { ranked: false, casual: false };
+  let markImage = null;
+  let markReady = false;
+  const markWaiters = [];
 
   function rgb([r, g, b], alpha = 255) {
     return alpha === 255 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${alpha / 255})`;
@@ -31,59 +30,37 @@
     return linkEl;
   }
 
-  function roundRect(ctx, x, y, w, h, r) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
+  function whenMarkReady(fn) {
+    if (markReady) {
+      fn();
+      return;
+    }
+    markWaiters.push(fn);
+  }
+
+  function loadMarkImage() {
+    const img = new Image();
+    img.onload = () => {
+      markImage = img;
+      markReady = true;
+      const waiters = markWaiters.splice(0);
+      for (const fn of waiters) fn();
+      applyBadges(badges);
+    };
+    img.onerror = () => {
+      markReady = true;
+      applyBadges(badges);
+    };
+    img.src = "/static/favicon-64.png";
   }
 
   function drawMark(ctx) {
-    ctx.save();
-    ctx.scale(SCALE, SCALE);
-
-    roundRect(ctx, 0, 0, DESIGN, DESIGN, 7);
-    ctx.fillStyle = rgb(BG);
-    ctx.fill();
-
-    ctx.strokeStyle = rgb(FRAME);
-    ctx.lineWidth = 1.4;
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    ctx.moveTo(16, 3.5);
-    ctx.lineTo(26.5, 10);
-    ctx.lineTo(26.5, 22);
-    ctx.lineTo(16, 28.5);
-    ctx.lineTo(5.5, 22);
-    ctx.lineTo(5.5, 10);
-    ctx.closePath();
-    ctx.stroke();
-
-    ctx.fillStyle = rgb(ACCENT);
-    ctx.beginPath();
-    ctx.moveTo(8.5, 16);
-    ctx.lineTo(13, 12.2);
-    ctx.lineTo(13, 19.8);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.moveTo(23.5, 16);
-    ctx.lineTo(19, 12.2);
-    ctx.lineTo(19, 19.8);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.translate(16, 16);
-    ctx.rotate(Math.PI / 4);
-    roundRect(ctx, -2.35, -2.35, 4.7, 4.7, 0.55);
-    ctx.fillStyle = rgb(CORE);
-    ctx.fill();
-
-    ctx.restore();
+    if (markImage) {
+      ctx.drawImage(markImage, 0, 0, SIZE, SIZE);
+      return;
+    }
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, SIZE, SIZE);
   }
 
   function drawBadgeDot(ctx, x, y, color) {
@@ -126,31 +103,32 @@
   }
 
   function applyBadges(next) {
-    const normalized = {
+    badges = {
       ranked: !!next.ranked,
       casual: !!next.casual,
     };
-    if (sameBadges(badges, normalized)) return;
-    badges = normalized;
+    if (!markReady) return;
     const link = ensureLink();
     link.type = "image/png";
     link.sizes = "64x64";
-    link.href = drawFavicon(normalized);
+    link.href = drawFavicon(badges);
   }
 
   window.AsobbyFavicon = {
     setBadges(next) {
-      applyBadges(next || {});
+      whenMarkReady(() => applyBadges(next || {}));
     },
     setPosted(active) {
-      applyBadges({ ranked: !!active, casual: !!active });
+      whenMarkReady(() => applyBadges({ ranked: !!active, casual: !!active }));
     },
     initFromAuth(options) {
       if (!window.AsobbyNotify) {
-        applyBadges({ ranked: false, casual: false });
+        whenMarkReady(() => applyBadges({ ranked: false, casual: false }));
         return;
       }
       void AsobbyNotify.initBackgroundNotify(options);
     },
   };
+
+  loadMarkImage();
 })();
