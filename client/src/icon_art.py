@@ -11,8 +11,8 @@ SIZE = 32
 BADGE_RANKED = (90, 158, 255)
 BADGE_CASUAL = (87, 192, 125)
 
-MARK_BOX = (276, 287, 695, 650)
-WORDMARK_BOX = (276, 287, 695, 934)
+MARK_BOX = (380, 273, 708, 534)
+WORDMARK_BOX = (293, 273, 725, 712)
 
 _mark_rgba: Image.Image | None = None
 _wordmark_rgba: Image.Image | None = None
