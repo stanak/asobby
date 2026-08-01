@@ -428,7 +428,7 @@
       "asobby.com への自動投稿だけを止めます。天則の検知・到達性チェックは継続します（30 分 / 1 時間 / 3 時間 / 許可するまで、または今すぐ再開）。",
     "guide.menu.copyAddr.name": "ホスト時に IP:Port と使用ツールをコピー",
     "guide.menu.copyAddr.desc":
-      "ON にすると、募集開始時に接続アドレスと Giuroll / AutoPunch などの使用ツールをクリップボードへコピーします。",
+      "ON にすると、募集開始時に接続アドレスと Giuroll / AutoPunch など必要な使用ツールをクリップボードへコピーします（直結可能なら AutoPunch は含めません）。",
     "guide.menu.challengeUpper.name": "格上に挑戦",
     "guide.menu.challengeUpper.desc":
       "ランクマ募集時のみ表示。ON の間、1 段上位ランク帯の相手との対戦もランクマ扱いになります（ランクマモード時のみ）。",
@@ -903,7 +903,7 @@
       "Stops posting to asobby.com only. Detection and reachability checks keep running (30 min / 1 h / 3 h / until you resume, or resume now).",
     "guide.menu.copyAddr.name": "Copy IP:Port and required tools when hosting",
     "guide.menu.copyAddr.desc":
-      "When enabled, copies your host address plus tools in use (Giuroll, AutoPunch, etc.) to the clipboard when recruiting starts.",
+      "When enabled, copies your host address and required tools (Giuroll, AutoPunch, etc.) when recruiting starts. AutoPunch is omitted when direct connection works.",
     "guide.menu.challengeUpper.name": "Challenge upper rank",
     "guide.menu.challengeUpper.desc":
       "Ranked posts only. While ON, matches against guests exactly one rank band above also count as ranked.",

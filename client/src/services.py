@@ -40,6 +40,7 @@ class Post:
     stream_url: str = ""
     giuroll: bool = False
     autopunch: bool = False
+    direct_reachable: bool = False
     match_status: str = ""
     net_status: int = NET_UNKNOWN
     challenge_upper: bool = False

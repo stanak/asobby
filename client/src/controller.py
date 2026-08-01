@@ -597,11 +597,17 @@ class Controller:
             f"Copy addr on host: {'enabled' if enabled else 'disabled'}",
         )
 
-    def _format_host_clipboard(self, addr: str, *, giuroll: bool, autopunch: bool) -> str:
+    def _format_host_clipboard(
+        self,
+        addr: str,
+        *,
+        giuroll: bool,
+        include_autopunch: bool,
+    ) -> str:
         tools: list[str] = []
         if giuroll:
             tools.append("Giuroll")
-        if autopunch:
+        if include_autopunch:
             tools.append("AutoPunch")
         if tools:
             return f"{addr} {', '.join(tools)}"
@@ -612,14 +618,37 @@ class Controller:
         addr: str,
         *,
         giuroll: bool = False,
-        autopunch: bool = False,
+        include_autopunch: bool = False,
     ) -> None:
-        text = self._format_host_clipboard(addr, giuroll=giuroll, autopunch=autopunch)
+        text = self._format_host_clipboard(
+            addr,
+            giuroll=giuroll,
+            include_autopunch=include_autopunch,
+        )
         if clipboard_util.copy_text(text):
             self.log_sink("info", f"Copied host info to clipboard: {text}")
             self.notify_sink(t("notify.copy_addr", addr=text))
         else:
             self.log_sink("warn", "Clipboard copy failed")
+
+    def _try_copy_host_info_from_server(self, post_data: dict) -> None:
+        """募集作成/更新後、サーバー到達性判定を反映してクリップボードへコピー。"""
+        if not self.copy_addr_enabled() or self._addr_copied:
+            return
+        addr = str(post_data.get("addr") or self.my_post.addr or "").strip()
+        if not addr or addr.startswith("0.0.0.0:"):
+            return
+        self._sync_post_reachability_from_server(post_data)
+        giuroll = bool(post_data.get("giuroll", self.my_post.giuroll))
+        include_autopunch = bool(post_data.get("autopunch")) and not bool(
+            post_data.get("direct_reachable")
+        )
+        self._copy_addr_to_clipboard(
+            addr,
+            giuroll=giuroll,
+            include_autopunch=include_autopunch,
+        )
+        self._addr_copied = True
 
     def clear_my_post(self) -> None:
         self.owner_token = ""
@@ -1130,6 +1159,7 @@ class Controller:
                         self.my_post.id, self.owner_token, act.payload
                     )
                     self._sync_post_reachability_from_server(resp)
+                    self._try_copy_host_info_from_server(resp)
                     for msg in resp.get("messages") or []:
                         msg_type = msg.get("type", "")
                         from_name = msg.get("from_name", "")
@@ -1481,27 +1511,11 @@ class Controller:
             )
 
         # -----------------
-        # ホスト検知時の IP:Port + 使用ツール クリップボードコピー (設定 ON のときのみ)。
-        # ログインや自動投稿の一時停止とは無関係に、ホストを立てたら 1 回コピーする。
-        # ホストセッションが終わったらリセットし、次のホストで再びコピーする
+        # ホスト検知時の IP:Port + 使用ツール クリップボードコピーは、サーバー到達性
+        # 判定後 (create/update 応答) に _try_copy_host_info_from_server で行う。
         # -----------------
         if self._stable_for("addr_copy_reset", 5.0, seen=(not is_recruiting and not is_battle)):
             self._addr_copied = False
-        if (
-            not self._addr_copied
-            and self.copy_addr_enabled()
-            and self._stable_for("addr_copy", 1.0, seen=is_recruiting)
-        ):
-            self._addr_copied = True
-            addr = self._current_addr(my_ip, st.port)
-            if my_ip and addr:
-                self._copy_addr_to_clipboard(
-                    addr,
-                    giuroll=st.giuroll,
-                    autopunch=self._host_uses_autopunch(st),
-                )
-            else:
-                self.log_sink("warn", "Clipboard copy skipped: own IP unknown")
 
         # -----------------
         # 1) recruiting -> create / update
@@ -1966,6 +1980,8 @@ class Controller:
         """サーバーが判定した AP 状態をローカルに反映する (404 再作成後も維持)。"""
         if "autopunch" in data:
             self.update_my_post(autopunch=bool(data["autopunch"]))
+        if "direct_reachable" in data:
+            self.update_my_post(direct_reachable=bool(data["direct_reachable"]))
 
     def _on_create_result(self, result: dict, *, giuroll: bool) -> None:
         self._create_pending = False
@@ -1980,6 +1996,7 @@ class Controller:
         self._seen_recruit_this_run = True
         self.my_post = replace(self.my_post, id=str(rid))
         self._sync_post_reachability_from_server(post)
+        self._try_copy_host_info_from_server(post)
         self.my_post_sink(self.my_post)
 
         post_type = str(post.get("post_type", "casual"))
