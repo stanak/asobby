@@ -45,17 +45,12 @@ jobs:
           WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
           WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
         run: |
-          pwsh -File tools/sign_windows_release.ps1 -Path dist/asobby/asobby.exe
+          pwsh -File tools/sign_windows_release.ps1 -Path dist/asobby.exe
 
       - name: Prepare release asset
-        shell: pwsh
         run: |
-          if (-not (Test-Path dist/asobby/asobby.exe)) {
-            Write-Error "dist/asobby/asobby.exe not found"
-            exit 1
-          }
-          Compress-Archive -Path dist/asobby -DestinationPath asobby-win64.zip -Force
-          echo "ASSET_NAME=asobby-win64.zip" >> $env:GITHUB_ENV
+          Copy-Item "dist/asobby.exe" "asobby.exe"
+          echo "ASSET_NAME=asobby.exe" >> $env:GITHUB_ENV
 
       - name: Create or update GitHub Release
         env:

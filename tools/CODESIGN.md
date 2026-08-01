@@ -1,6 +1,6 @@
 # Windows code signing (optional)
 
-GitHub Actions can Authenticode-sign `asobby.exe` when these repository secrets are set:
+GitHub Actions can Authenticode-sign the one-file `asobby.exe` when these repository secrets are set:
 
 - `WINDOWS_CODESIGN_PFX_BASE64` — base64-encoded `.pfx` certificate
 - `WINDOWS_CODESIGN_PFX_PASSWORD` — PFX password

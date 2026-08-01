@@ -41,8 +41,9 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='asobby',
     debug=False,
     bootloader_ignore_signals=False,
@@ -59,14 +60,4 @@ exe = EXE(
     version='client\\version_info.txt',
     icon='server\\app\\static\\favicon.ico',
     manifest='client\\asobby.exe.manifest',
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name='asobby',
 )
