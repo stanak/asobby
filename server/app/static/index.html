@@ -1378,7 +1378,12 @@ function buildRow(p) {
 
   const requireCell = document.createElement("td");
   if (p.giuroll) requireCell.appendChild(badge(t("common.badgeGiu")));
-  if (p.autopunch && !p.direct_reachable) requireCell.appendChild(badge(t("common.badgeAp")));
+  if (p.autopunch && !p.direct_reachable) {
+    requireCell.appendChild(badge(t("common.badgeAp")));
+    if (p.reachability_uncertain) {
+      requireCell.appendChild(badge("❓", { title: t("common.badgeUncertainTitle") }));
+    }
+  }
   tr.appendChild(requireCell);
 
   const stream = document.createElement("td");
@@ -1475,10 +1480,11 @@ function render() {
   casualCountEl.textContent = t("common.countItems", { n: casual.length });
 }
 
-function badge(text) {
+function badge(text, opts = {}) {
   const el = document.createElement("span");
   el.className = "badge";
   el.textContent = text;
+  if (opts.title) el.title = opts.title;
   return el;
 }
 

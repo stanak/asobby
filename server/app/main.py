@@ -262,6 +262,7 @@ class Post:
     giuroll: bool = False
     autopunch: bool = False
     direct_reachable: bool = False  # 直接 UDP プローブで到達確認できたか (AP 表示用)
+    reachability_uncertain: bool = False  # AP 必須だが接続可否が保証できない (❓ 表示用)
     match_status: str = ""
     net_status: int = 0
     owner_name: str = ""  # Discord ログイン時の表示名（未ログインなら空）
@@ -2546,7 +2547,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=429, detail="too many active posts")
 
     check_addr = probe_addr_for_hostcheck(body.addr, fallback_host=ip)
-    direct_reachable, autopunch_effective = await verify_hostable_or_raise(
+    direct_reachable, autopunch_effective, reachability_uncertain = await verify_hostable_or_raise(
         check_addr, autopunch=body.autopunch, giuroll=body.giuroll
     )
 
@@ -2564,6 +2565,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         giuroll=body.giuroll,
         autopunch=autopunch_effective,
         direct_reachable=direct_reachable,
+        reachability_uncertain=reachability_uncertain,
         match_status=body.match_status,
         net_status=body.net_status,
         challenge_upper=body.challenge_upper,
@@ -2616,7 +2618,7 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
         was_ap_only = not p.direct_reachable and (p.autopunch or body.autopunch)
         check_addr = probe_addr_for_hostcheck(body.addr, fallback_host=rec.creator_ip)
         try:
-            direct_reachable, autopunch_effective = await verify_hostable_or_raise(
+            direct_reachable, autopunch_effective, reachability_uncertain = await verify_hostable_or_raise(
                 check_addr,
                 autopunch=body.autopunch,
                 ap_check=addr_changed,
@@ -2641,10 +2643,12 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
             else:
                 p.direct_reachable = direct_reachable
                 p.autopunch = autopunch_effective
+                p.reachability_uncertain = reachability_uncertain
         rec.last_hostcheck_at = now
 
     if body.autopunch and not p.direct_reachable:
         p.autopunch = True
+        p.reachability_uncertain = True
 
     p.post_type = body.post_type
     p.challenge_upper = body.challenge_upper
@@ -3523,8 +3527,29 @@ def check_hostable_once(
     return reply is not None and is_valid_reply(reply)
 
 
-def check_hostable_autopunch(host: str, port: int) -> bool:
-    """AutoPunch リレー経由でホスト登録と soku echo を検証する。"""
+def compute_reachability_uncertain(
+    *,
+    direct_reachable: bool,
+    autopunch: bool,
+    ap_verified: bool = True,
+) -> bool:
+    """AP 必須ホストで接続可否が保証できないか。
+
+    ポート制限 NAT など直結不可の環境は AP 経由でも相手から繋がらないことがある。
+    AP-only (direct 不可) の募集には ❓ を付ける。AP 検証をスキップした場合も ❓。
+    """
+    if direct_reachable or not autopunch:
+        return False
+    if not ap_verified:
+        return True
+    return True  # AP-only はポート制限 NAT 等を含め接続保証なし
+
+
+def check_hostable_autopunch(host: str, port: int) -> tuple[bool, bool]:
+    """AutoPunch リレー経由でホスト登録と soku echo を検証する。
+
+    Returns (reachable, fully_verified). fail-open 時は (True, False)。
+    """
     with _probe_lock:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -3545,7 +3570,7 @@ def check_hostable_autopunch(host: str, port: int) -> bool:
                 relay_ip = socket.gethostbyname(relay_host)
             except (OSError, ValueError):
                 print("autopunch relay resolution failed, skipping verification")
-                return True
+                return True, False
 
             relay_addr = (relay_ip, relay_port)
 
@@ -3569,7 +3594,7 @@ def check_hostable_autopunch(host: str, port: int) -> bool:
 
             if not relay_ok:
                 print("autopunch relay unreachable, skipping verification")
-                return True
+                return True, False
 
             # Stage 2: リレー上の登録確認
             lookup = struct.pack("!H", my_port) + socket.inet_aton(host) + struct.pack("!H", port)
@@ -3596,7 +3621,7 @@ def check_hostable_autopunch(host: str, port: int) -> bool:
                     pass
 
             if nat_port is None:
-                return False
+                return False, True
 
             # Stage 3: NAT ポートへ soku echo プローブ
             packet = soku_echo_packet()
@@ -3613,13 +3638,13 @@ def check_hostable_autopunch(host: str, port: int) -> bool:
                         if len(data) < 2:
                             continue
                         if data[0] in (0x07, 0x08):
-                            return True
+                            return True, True
                 except OSError:
                     pass
 
-            return False
+            return False, True
         except OSError:
-            return False
+            return False, True
         finally:
             sock.close()
 
@@ -3704,17 +3729,22 @@ async def verify_hostable_or_raise(
     ap_check: bool = True,
     consecutive: bool = True,
     giuroll: bool = False,
-) -> tuple[bool, bool]:
+) -> tuple[bool, bool, bool]:
     """到達性を検証する。
 
-    戻り値は (direct_reachable, autopunch)。
+    戻り値は (direct_reachable, autopunch, reachability_uncertain)。
     直接 UDP で届かず AutoPunch リレー経由のみ到達できるホストは
     autopunch=True, direct_reachable=False になる。
     """
     host, port = parse_ipv4_addr_or_raise(addr)
 
     if not HOSTCHECK_ENABLED:
-        return True, bool(autopunch)
+        uncertain = compute_reachability_uncertain(
+            direct_reachable=True,
+            autopunch=bool(autopunch),
+            ap_verified=True,
+        )
+        return True, bool(autopunch), uncertain
 
     probe_kwargs = host_probe_kwargs(giuroll=giuroll)
     strict_kwargs = {
@@ -3742,18 +3772,23 @@ async def verify_hostable_or_raise(
     direct_strict = (
         await run_direct(strict_kwargs) if direct_lenient else False
     )
-    ap_ok = await asyncio.to_thread(check_hostable_autopunch, host, port)
+    ap_ok, ap_verified = await asyncio.to_thread(check_hostable_autopunch, host, port)
 
     if direct_strict:
-        return True, False
+        return True, False, False
 
     if ap_ok:
-        return False, True
+        uncertain = compute_reachability_uncertain(
+            direct_reachable=False,
+            autopunch=True,
+            ap_verified=ap_verified,
+        )
+        return False, True, uncertain
 
     # AP 利用ホストは lenient direct だけでは direct 到達と判定しない
     # (デプロイ直後の誤応答で AP バッジが消えるのを防ぐ)
     if direct_lenient and not autopunch:
-        return True, False
+        return True, False, False
 
     if autopunch and ap_check:
         raise HTTPException(

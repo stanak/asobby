@@ -68,13 +68,13 @@ async def test_verify_always_runs_ap_but_direct_strict_wins(monkeypatch):
 
     def fake_ap(host: str, port: int):
         calls.append("autopunch")
-        return False
+        return False, True
 
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
     monkeypatch.setattr(main, "check_hostable_autopunch", fake_ap)
 
-    direct, autopunch = await main.verify_hostable_or_raise(
+    direct, autopunch, uncertain = await main.verify_hostable_or_raise(
         "203.0.113.1:10800", autopunch=True
     )
     assert direct is True
@@ -93,9 +93,9 @@ async def test_verify_flaky_direct_with_autopunch_stays_ap_only(monkeypatch):
 
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
-    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: True)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: (True, True))
 
-    direct, autopunch = await main.verify_hostable_or_raise(
+    direct, autopunch, uncertain = await main.verify_hostable_or_raise(
         "203.0.113.1:10800", autopunch=True
     )
     assert direct is False
@@ -114,9 +114,9 @@ async def test_verify_flaky_direct_without_client_flag_stays_ap_only(monkeypatch
 
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
-    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: True)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: (True, True))
 
-    direct, autopunch = await main.verify_hostable_or_raise(
+    direct, autopunch, uncertain = await main.verify_hostable_or_raise(
         "203.0.113.1:10800", autopunch=False
     )
     assert direct is False
@@ -133,17 +133,18 @@ async def test_verify_autopunch_requires_ap_when_direct_fails(monkeypatch):
 
     def fake_ap(host: str, port: int):
         calls.append("autopunch")
-        return True
+        return True, True
 
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
     monkeypatch.setattr(main, "check_hostable_autopunch", fake_ap)
 
-    direct, autopunch = await main.verify_hostable_or_raise(
+    direct, autopunch, uncertain = await main.verify_hostable_or_raise(
         "203.0.113.1:10800", autopunch=True
     )
     assert direct is False
     assert autopunch is True
+    assert uncertain is True
     assert calls == ["direct", "autopunch"]
 
 
@@ -151,7 +152,7 @@ async def test_verify_autopunch_requires_ap_when_direct_fails(monkeypatch):
 async def test_verify_autopunch_rejects_when_ap_unreachable(monkeypatch):
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "check_hostable_consecutive", lambda *a, **k: False)
-    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: False)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: (False, True))
 
     with pytest.raises(main.HTTPException) as exc:
         await main.verify_hostable_or_raise("203.0.113.1:10800", autopunch=True)
@@ -164,13 +165,13 @@ async def test_verify_autopunch_only_marks_not_direct(monkeypatch):
         return False
 
     def fake_ap(host: str, port: int):
-        return True
+        return True, True
 
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
     monkeypatch.setattr(main, "check_hostable_autopunch", fake_ap)
 
-    direct, autopunch = await main.verify_hostable_or_raise(
+    direct, autopunch, uncertain = await main.verify_hostable_or_raise(
         "203.0.113.1:10800", autopunch=True
     )
     assert direct is False
@@ -181,9 +182,9 @@ async def test_verify_autopunch_only_marks_not_direct(monkeypatch):
 async def test_verify_detects_ap_only_when_client_flag_false(monkeypatch):
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "check_hostable_consecutive", lambda *a, **k: False)
-    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: True)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: (True, True))
 
-    direct, autopunch = await main.verify_hostable_or_raise(
+    direct, autopunch, uncertain = await main.verify_hostable_or_raise(
         "203.0.113.1:10800", autopunch=False
     )
     assert direct is False
@@ -194,7 +195,7 @@ async def test_verify_detects_ap_only_when_client_flag_false(monkeypatch):
 async def test_verify_non_autopunch_unreachable(monkeypatch):
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "check_hostable_consecutive", lambda *a, **k: False)
-    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: False)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: (False, True))
 
     with pytest.raises(main.HTTPException) as exc:
         await main.verify_hostable_or_raise("203.0.113.1:10800", autopunch=False)
@@ -328,7 +329,7 @@ async def test_verify_giuroll_uses_relaxed_probe(monkeypatch):
 
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "check_hostable_consecutive", fake_consecutive)
-    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: False)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: (False, True))
 
     await main.verify_hostable_or_raise(
         "203.0.113.1:10800",
@@ -348,7 +349,7 @@ async def test_update_soft_fails_reverify_when_addr_unchanged(monkeypatch):
         nonlocal calls
         calls += 1
         if calls == 1:
-            return True, False
+            return True, False, False
         raise main.HTTPException(status_code=409, detail={"message": "host not reachable"})
 
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
@@ -412,7 +413,7 @@ async def test_verify_autopunch_does_not_trust_lenient_direct(monkeypatch):
 
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
-    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: False)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: (False, True))
 
     with pytest.raises(main.HTTPException) as exc:
         await main.verify_hostable_or_raise("203.0.113.1:10800", autopunch=True)
@@ -428,8 +429,8 @@ async def test_update_keeps_ap_only_when_client_sends_autopunch(monkeypatch):
         nonlocal calls
         calls += 1
         if calls == 1:
-            return False, True
-        return True, False
+            return False, True, True
+        return True, False, False
 
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "should_reverify_host_on_update", lambda *a, **k: True)
@@ -510,8 +511,8 @@ async def test_update_keeps_ap_only_when_reverify_flaky_direct(monkeypatch):
         nonlocal calls
         calls += 1
         if calls == 1:
-            return False, True
-        return True, False
+            return False, True, True
+        return True, False, False
 
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     monkeypatch.setattr(main, "should_reverify_host_on_update", lambda *a, **k: True)
@@ -578,6 +579,25 @@ def test_ap_badge_hidden_when_direct_even_if_autopunch_flag():
 
 
 def test_ap_badge_shown_when_ap_only():
-    post = main.Post(autopunch=True, direct_reachable=False)
+    post = main.Post(autopunch=True, direct_reachable=False, reachability_uncertain=True)
     show_ap = post.autopunch and not post.direct_reachable
     assert show_ap is True
+    assert post.reachability_uncertain is True
+
+
+def test_compute_reachability_uncertain_ap_only():
+    assert main.compute_reachability_uncertain(
+        direct_reachable=False,
+        autopunch=True,
+        ap_verified=True,
+    )
+    assert not main.compute_reachability_uncertain(
+        direct_reachable=True,
+        autopunch=False,
+        ap_verified=True,
+    )
+    assert main.compute_reachability_uncertain(
+        direct_reachable=False,
+        autopunch=True,
+        ap_verified=False,
+    )

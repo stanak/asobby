@@ -79,6 +79,8 @@
     "common.resultLoss": "×",
     "common.badgeGiu": "Giu",
     "common.badgeAp": "AP",
+    "common.badgeUncertainTitle":
+      "AP が必要ですが、ポート制限 NAT などのため接続できない可能性があります",
     "common.sortAsc": " ▲",
     "common.sortDesc": " ▼",
 
@@ -552,6 +554,8 @@
     "common.resultLoss": "L",
     "common.badgeGiu": "Giu",
     "common.badgeAp": "AP",
+    "common.badgeUncertainTitle":
+      "AutoPunch is required; connection may still fail (e.g. port-restricted NAT)",
     "common.sortAsc": " ▲",
     "common.sortDesc": " ▼",
 
