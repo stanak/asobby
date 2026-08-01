@@ -2638,8 +2638,12 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
                 and direct_reachable
                 and not autopunch_effective
             ):
-                if body.autopunch:
-                    p.autopunch = True
+                # heartbeat 再検証の direct 誤判定で AP-only 表示を消さない
+                p.autopunch = True
+                p.direct_reachable = False
+                p.reachability_uncertain = (
+                    reachability_uncertain or p.reachability_uncertain
+                )
             else:
                 p.direct_reachable = direct_reachable
                 p.autopunch = autopunch_effective
@@ -3785,11 +3789,7 @@ async def verify_hostable_or_raise(
         )
         return False, True, uncertain
 
-    # AP 利用ホストは lenient direct だけでは direct 到達と判定しない
-    # (デプロイ直後の誤応答で AP バッジが消えるのを防ぐ)
-    if direct_lenient and not autopunch:
-        return True, False, False
-
+    # lenient direct だけでは direct 到達と判定しない (AP 必須なのに REQUIRE 空になるのを防ぐ)
     if autopunch and ap_check:
         raise HTTPException(
             status_code=409,

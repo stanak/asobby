@@ -202,6 +202,51 @@ async def test_verify_non_autopunch_unreachable(monkeypatch):
     assert exc.value.status_code == 409
 
 
+@pytest.mark.asyncio
+async def test_verify_does_not_trust_lenient_direct_without_ap(monkeypatch):
+    """lenient direct だけでは direct 到達扱いにしない。"""
+    call_n = 0
+
+    def fake_direct(host: str, port: int, **kwargs):
+        nonlocal call_n
+        call_n += 1
+        needed = int(kwargs.get("needed_consecutive", 2))
+        if needed >= 3:
+            return False
+        return True
+
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: (False, True))
+
+    with pytest.raises(main.HTTPException) as exc:
+        await main.verify_hostable_or_raise("203.0.113.1:10800", autopunch=False)
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_verify_lenient_direct_with_ap_still_ap_only(monkeypatch):
+    call_n = 0
+
+    def fake_direct(host: str, port: int, **kwargs):
+        nonlocal call_n
+        call_n += 1
+        needed = int(kwargs.get("needed_consecutive", 2))
+        if needed >= 3:
+            return False
+        return True
+
+    monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+    monkeypatch.setattr(main, "check_hostable_consecutive", fake_direct)
+    monkeypatch.setattr(main, "check_hostable_autopunch", lambda *a, **k: (True, True))
+
+    direct, autopunch, uncertain = await main.verify_hostable_or_raise(
+        "203.0.113.1:10800", autopunch=False
+    )
+    assert direct is False
+    assert autopunch is True
+
+
 def test_should_reverify_on_addr_change(monkeypatch):
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
     rec = main.PostRecord(
