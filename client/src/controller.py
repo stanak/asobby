@@ -13,6 +13,7 @@ from collections import defaultdict
 import httpx
 
 import clipboard_util
+from host_clipboard import should_include_autopunch_in_clipboard
 from api_client import ApiClient
 from detect_api import DetectionState
 from hisoutensoku_memory import read_detection_state
@@ -597,6 +598,13 @@ class Controller:
             f"Copy addr on host: {'enabled' if enabled else 'disabled'}",
         )
 
+    def _local_autopunch_for_clipboard(self) -> bool:
+        """サーバー応答より先に、クライアントが AP 利用中と判断しているか。"""
+        if self.tool_mgr.state("autopunch") == ToolState.LOADED:
+            return True
+        payload = self._last_sent_payload or {}
+        return bool(payload.get("autopunch"))
+
     def _format_host_clipboard(
         self,
         addr: str,
@@ -638,10 +646,12 @@ class Controller:
         addr = str(post_data.get("addr") or self.my_post.addr or "").strip()
         if not addr or addr.startswith("0.0.0.0:"):
             return
+        local_autopunch = self._local_autopunch_for_clipboard()
         self._sync_post_reachability_from_server(post_data)
         giuroll = bool(post_data.get("giuroll", self.my_post.giuroll))
-        include_autopunch = bool(post_data.get("autopunch")) and not bool(
-            post_data.get("direct_reachable")
+        include_autopunch = should_include_autopunch_in_clipboard(
+            post_data,
+            local_autopunch=local_autopunch,
         )
         self._copy_addr_to_clipboard(
             addr,
