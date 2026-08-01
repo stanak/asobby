@@ -13,7 +13,10 @@ from collections import defaultdict
 import httpx
 
 import clipboard_util
-from host_clipboard import should_include_autopunch_in_clipboard
+from host_clipboard import (
+    reachability_flags_for_clipboard,
+    should_include_autopunch_in_clipboard,
+)
 from api_client import ApiClient
 from detect_api import DetectionState
 from hisoutensoku_memory import read_detection_state
@@ -632,14 +635,15 @@ class Controller:
         else:
             self.log_sink("warn", "Clipboard copy failed")
 
-    def _try_copy_host_info_from_server(self, post_data: dict) -> None:
-        """募集作成/更新後、サーバー到達性判定を反映してクリップボードへコピー。"""
+    def _copy_host_info_from_post_data(self, post_data: dict) -> None:
+        """サーバー応答またはローカルプローブ結果をクリップボードへ反映。"""
         if not self.copy_addr_enabled() or self._addr_copied:
             return
         addr = str(post_data.get("addr") or self.my_post.addr or "").strip()
         if not addr or addr.startswith("0.0.0.0:"):
             return
-        self._sync_post_reachability_from_server(post_data)
+        if "autopunch" in post_data or "direct_reachable" in post_data:
+            self._sync_post_reachability_from_server(post_data)
         giuroll = bool(post_data.get("giuroll", self.my_post.giuroll))
         include_autopunch = should_include_autopunch_in_clipboard(post_data)
         self._copy_addr_to_clipboard(
@@ -648,6 +652,34 @@ class Controller:
             include_autopunch=include_autopunch,
         )
         self._addr_copied = True
+
+    def _try_copy_host_info_from_server(self, post_data: dict) -> None:
+        """募集作成/更新後、サーバー到達性判定を反映してクリップボードへコピー。"""
+        self._copy_host_info_from_post_data(post_data)
+
+    async def _try_copy_host_info_when_paused(
+        self,
+        addr: str,
+        st: DetectionState,
+    ) -> None:
+        """投稿停止中でもホスト検知時にローカルプローブでクリップボードへコピー。"""
+        if not self.is_detect_paused() or self._addr_copied or not self.copy_addr_enabled():
+            return
+        uses_ap = self._host_uses_autopunch(st)
+        direct_ok = await self._probe_host_reachable(addr, autopunch=False)
+        if not self.is_detect_paused() or self._addr_copied:
+            return
+        flags = reachability_flags_for_clipboard(
+            direct_ok=direct_ok,
+            uses_autopunch=uses_ap,
+        )
+        self._copy_host_info_from_post_data(
+            {
+                "addr": addr,
+                "giuroll": bool(st.giuroll),
+                **flags,
+            }
+        )
 
     def clear_my_post(self) -> None:
         self.owner_token = ""
@@ -841,10 +873,19 @@ class Controller:
         )
         return rtt is not None
 
-    async def _self_check_host_when_paused(self, addr: str, autopunch: bool) -> None:
+    async def _self_check_host_when_paused(self, addr: str, st: DetectionState) -> None:
         if not self.is_detect_paused():
             return
-        ok = await self._probe_host_reachable(addr, autopunch)
+        uses_ap = self._host_uses_autopunch(st)
+        direct_ok = await self._probe_host_reachable(addr, autopunch=False)
+        if not self.is_detect_paused():
+            return
+        if direct_ok:
+            ok = True
+        elif uses_ap:
+            ok = await self._probe_host_reachable(addr, autopunch=True)
+        else:
+            ok = False
         if not self.is_detect_paused():
             return
         if not ok:
@@ -1565,19 +1606,22 @@ class Controller:
         # -----------------
         # 投稿停止中: サーバー create はしないが、到達性はローカルで確認する
         # -----------------
-        if (
-            paused
-            and recruiting_stable
-            and my_ip
-            and st.port
-            and (now - self._last_host_self_check_ts) >= HOST_SELF_CHECK_INTERVAL_SEC
-        ):
+        if paused and recruiting_stable and my_ip and st.port:
             addr = self._current_addr(my_ip, st.port)
             if addr:
-                self._last_host_self_check_ts = now
-                asyncio.get_running_loop().create_task(
-                    self._self_check_host_when_paused(addr, self._host_uses_autopunch(st))
-                )
+                if (
+                    self.copy_addr_enabled()
+                    and not self._addr_copied
+                    and not addr.startswith("0.0.0.0:")
+                ):
+                    asyncio.get_running_loop().create_task(
+                        self._try_copy_host_info_when_paused(addr, st)
+                    )
+                if (now - self._last_host_self_check_ts) >= HOST_SELF_CHECK_INTERVAL_SEC:
+                    self._last_host_self_check_ts = now
+                    asyncio.get_running_loop().create_task(
+                        self._self_check_host_when_paused(addr, st)
+                    )
 
         # -----------------
         # 2) battle -> update (ホスト側のみ)

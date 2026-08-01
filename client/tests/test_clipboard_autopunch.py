@@ -3,7 +3,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from host_clipboard import should_include_autopunch_in_clipboard
+from host_clipboard import (
+    reachability_flags_for_clipboard,
+    should_include_autopunch_in_clipboard,
+)
 
 
 def test_include_autopunch_for_ap_only_post():
@@ -48,3 +51,18 @@ def test_matches_require_column_when_no_ap():
     show_ap_in_require = post["autopunch"] and not post["direct_reachable"]
     assert not show_ap_in_require
     assert should_include_autopunch_in_clipboard(post) == show_ap_in_require
+
+
+def test_local_probe_direct_ok_omits_autopunch_even_if_ap_loaded():
+    flags = reachability_flags_for_clipboard(direct_ok=True, uses_autopunch=True)
+    assert should_include_autopunch_in_clipboard(flags) is False
+
+
+def test_local_probe_direct_fail_with_ap_includes_autopunch():
+    flags = reachability_flags_for_clipboard(direct_ok=False, uses_autopunch=True)
+    assert should_include_autopunch_in_clipboard(flags) is True
+
+
+def test_local_probe_direct_fail_without_ap_omits_autopunch():
+    flags = reachability_flags_for_clipboard(direct_ok=False, uses_autopunch=False)
+    assert should_include_autopunch_in_clipboard(flags) is False
