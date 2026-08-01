@@ -257,6 +257,7 @@ class Controller:
 
         # ホスト検知時の IP:Port クリップボードコピー (1 ホストセッション 1 回)
         self._addr_copied = False
+        self._addr_copy_pending = False
 
         # 検知系の異常 ("" = 正常)。トレイの状態表示に使う
         self.detect_error: str = ""
@@ -663,23 +664,32 @@ class Controller:
         st: DetectionState,
     ) -> None:
         """投稿停止中でもホスト検知時にローカルプローブでクリップボードへコピー。"""
-        if not self.is_detect_paused() or self._addr_copied or not self.copy_addr_enabled():
+        if (
+            not self.is_detect_paused()
+            or self._addr_copied
+            or self._addr_copy_pending
+            or not self.copy_addr_enabled()
+        ):
             return
-        uses_ap = self._host_uses_autopunch(st)
-        direct_ok = await self._probe_host_reachable(addr, autopunch=False)
-        if not self.is_detect_paused() or self._addr_copied:
-            return
-        flags = reachability_flags_for_clipboard(
-            direct_ok=direct_ok,
-            uses_autopunch=uses_ap,
-        )
-        self._copy_host_info_from_post_data(
-            {
-                "addr": addr,
-                "giuroll": bool(st.giuroll),
-                **flags,
-            }
-        )
+        self._addr_copy_pending = True
+        try:
+            uses_ap = self._host_uses_autopunch(st)
+            direct_ok = await self._probe_host_reachable(addr, autopunch=False)
+            if not self.is_detect_paused() or self._addr_copied:
+                return
+            flags = reachability_flags_for_clipboard(
+                direct_ok=direct_ok,
+                uses_autopunch=uses_ap,
+            )
+            self._copy_host_info_from_post_data(
+                {
+                    "addr": addr,
+                    "giuroll": bool(st.giuroll),
+                    **flags,
+                }
+            )
+        finally:
+            self._addr_copy_pending = False
 
     def clear_my_post(self) -> None:
         self.owner_token = ""
@@ -1199,7 +1209,7 @@ class Controller:
                         self.my_post.id, self.owner_token, act.payload
                     )
                     self._sync_post_reachability_from_server(resp)
-                    self._try_copy_host_info_from_server(resp)
+                    # クリップボードコピーは create 時のみ (update 毎だと通知が連発する)
                     for msg in resp.get("messages") or []:
                         msg_type = msg.get("type", "")
                         from_name = msg.get("from_name", "")
@@ -1340,6 +1350,7 @@ class Controller:
         if not st.alive:
             self.tool_mgr.reset_state()
             self._addr_copied = False
+            self._addr_copy_pending = False
             self._local_net_active = False
             self._reset_session_score()
             self._update_tray_ui_state_idle()
@@ -1551,11 +1562,13 @@ class Controller:
             )
 
         # -----------------
-        # ホスト検知時の IP:Port + 使用ツール クリップボードコピーは、サーバー到達性
-        # 判定後 (create/update 応答) に _try_copy_host_info_from_server で行う。
+        # ホスト検知時の IP:Port + 使用ツール クリップボードコピーは create 応答
+        # (または投稿停止中のローカルプローブ) で 1 回だけ行う。
+        # ネット対戦フロー全体 (接続〜対戦) の間は再コピーしない。
         # -----------------
-        if self._stable_for("addr_copy_reset", 5.0, seen=(not is_recruiting and not is_battle)):
+        if self._stable_for("addr_copy_reset", 5.0, seen=not in_net_flow):
             self._addr_copied = False
+            self._addr_copy_pending = False
 
         # -----------------
         # 1) recruiting -> create / update
@@ -1612,6 +1625,7 @@ class Controller:
                 if (
                     self.copy_addr_enabled()
                     and not self._addr_copied
+                    and not self._addr_copy_pending
                     and not addr.startswith("0.0.0.0:")
                 ):
                     asyncio.get_running_loop().create_task(
