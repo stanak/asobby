@@ -480,16 +480,18 @@
       "Windows 10 の場合は、設定 → システム → 通知 → 集中モード で、ゲーム中・全画面アプリ中に自動でオンになるルールをオフにし、asobby の通知を許可してください。",
     "guide.sectionAv": "ウイルス対策ソフトの警告について",
     "guide.avIntro":
-      "asobby クライアント (PyInstaller でビルドした exe) は、コード署名がないため、Windows Defender などが誤検知（偽陽性）することがあります。新しい exe を配布するたびに警告が出る場合もありますが、asobby 自体にマルウェアは含まれていません。",
+      "asobby クライアントは PyInstaller でビルドしています。v0.7.0 以降は自己展開しない ZIP 形式 (フォルダ配布) に変更し、誤検知を減らしています。コード署名がないため、Windows Defender などが警告を出すことは依然あり得ますが、asobby 自体にマルウェアは含まれていません。",
     "guide.avOpenSource":
       "ソースコードは https://github.com/stanak/asobby で公開されています。不安な場合は Actions のビルドログと照合するか、ご自身でビルドしてください。",
+    "guide.avDownload":
+      "GitHub Releases から asobby-win64.zip をダウンロードし、任意のフォルダに展開してから asobby/asobby.exe を実行してください。exe 単体では動きません。",
     "guide.avAllowTitle": "Windows Defender で許可する",
     "guide.avAllowStep1":
       "「ウイルスと脅威の防止」→「保護の履歴」を開き、asobby の検出項目を選びます。",
     "guide.avAllowStep2":
       "「操作」→「デバイス上で許可する」を選びます。",
     "guide.avAllowStep3":
-      "再度 GitHub Releases から exe をダウンロードして実行します。",
+      "再度 GitHub Releases から asobby-win64.zip をダウンロードし、展開して asobby.exe を実行します。",
     "guide.avReport":
       "Microsoft への誤検知報告: https://www.microsoft.com/en-us/wdsi/filesubmission から exe をアップロードし、「誤検知」と申告すると、今後の定義更新で改善されることがあります。",
     "guide.sectionNotify": "主な通知",
@@ -955,16 +957,18 @@
       "On Windows 10, open Settings → System → Notifications → Focus assist and turn off rules that auto-enable during games or fullscreen apps, and allow notifications from asobby.",
     "guide.sectionAv": "Antivirus warnings",
     "guide.avIntro":
-      "The asobby client (a PyInstaller-built exe) is unsigned, so Windows Defender and others may flag it as a false positive. A warning can appear again whenever a new exe is published, but asobby does not contain malware.",
+      "The asobby client is built with PyInstaller. Since v0.7.0 we ship a ZIP folder bundle (no self-extracting one-file exe) to reduce false positives. It is still unsigned, so Windows Defender may warn, but asobby does not contain malware.",
     "guide.avOpenSource":
       "Source code is public at https://github.com/stanak/asobby . Compare with Actions build logs or build it yourself if unsure.",
+    "guide.avDownload":
+      "Download asobby-win64.zip from GitHub Releases, extract it to a folder, and run asobby/asobby.exe. The exe alone will not work.",
     "guide.avAllowTitle": "Allow in Windows Defender",
     "guide.avAllowStep1":
       "Open Virus & threat protection → Protection history and select the asobby detection.",
     "guide.avAllowStep2":
       "Choose Actions → Allow on device.",
     "guide.avAllowStep3":
-      "Download the exe again from GitHub Releases and run it.",
+      "Download asobby-win64.zip again from GitHub Releases, extract it, and run asobby.exe.",
     "guide.avReport":
       "Report a false positive to Microsoft at https://www.microsoft.com/en-us/wdsi/filesubmission ; whitelisting may improve after definition updates.",
     "guide.sectionNotify": "Common notifications",
