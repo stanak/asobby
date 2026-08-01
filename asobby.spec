@@ -4,7 +4,13 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('client/assets/logo-source.png', 'assets')]
 binaries = []
-hiddenimports = ['pystray._win32']
+hiddenimports = [
+    'pystray._win32',
+    'tkinter',
+    'tkinter.ttk',
+    'tkinter.filedialog',
+    'tkinter.messagebox',
+]
 
 try:
     tmp = collect_all('windows_toasts')
@@ -25,7 +31,6 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'tkinter',
         'matplotlib',
         'numpy',
         'pandas',
