@@ -597,10 +597,27 @@ class Controller:
             f"Copy addr on host: {'enabled' if enabled else 'disabled'}",
         )
 
-    def _copy_addr_to_clipboard(self, addr: str) -> None:
-        if clipboard_util.copy_text(addr):
-            self.log_sink("info", f"Copied host addr to clipboard: {addr}")
-            self.notify_sink(t("notify.copy_addr", addr=addr))
+    def _format_host_clipboard(self, addr: str, *, giuroll: bool, autopunch: bool) -> str:
+        tools: list[str] = []
+        if giuroll:
+            tools.append("Giuroll")
+        if autopunch:
+            tools.append("AutoPunch")
+        if tools:
+            return f"{addr} {', '.join(tools)}"
+        return addr
+
+    def _copy_addr_to_clipboard(
+        self,
+        addr: str,
+        *,
+        giuroll: bool = False,
+        autopunch: bool = False,
+    ) -> None:
+        text = self._format_host_clipboard(addr, giuroll=giuroll, autopunch=autopunch)
+        if clipboard_util.copy_text(text):
+            self.log_sink("info", f"Copied host info to clipboard: {text}")
+            self.notify_sink(t("notify.copy_addr", addr=text))
         else:
             self.log_sink("warn", "Clipboard copy failed")
 
@@ -1464,7 +1481,7 @@ class Controller:
             )
 
         # -----------------
-        # ホスト検知時の IP:Port クリップボードコピー (設定 ON のときのみ)。
+        # ホスト検知時の IP:Port + 使用ツール クリップボードコピー (設定 ON のときのみ)。
         # ログインや自動投稿の一時停止とは無関係に、ホストを立てたら 1 回コピーする。
         # ホストセッションが終わったらリセットし、次のホストで再びコピーする
         # -----------------
@@ -1478,7 +1495,11 @@ class Controller:
             self._addr_copied = True
             addr = self._current_addr(my_ip, st.port)
             if my_ip and addr:
-                self._copy_addr_to_clipboard(addr)
+                self._copy_addr_to_clipboard(
+                    addr,
+                    giuroll=st.giuroll,
+                    autopunch=self._host_uses_autopunch(st),
+                )
             else:
                 self.log_sink("warn", "Clipboard copy skipped: own IP unknown")
 
