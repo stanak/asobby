@@ -19,41 +19,32 @@ def test_omit_autopunch_when_direct_without_ap():
 
 
 def test_omit_autopunch_when_direct_even_if_autopunch_flag_set():
-    """直接接続可能なら AP バッジと同様、クリップボードにも AP を載せない。"""
+    """直接接続可能なら REQUIRE と同様、クリップボードにも AP を載せない。"""
     assert not should_include_autopunch_in_clipboard(
         {"autopunch": True, "direct_reachable": True},
     )
 
 
-def test_include_autopunch_when_reachability_uncertain():
-    assert should_include_autopunch_in_clipboard(
-        {
-            "autopunch": True,
-            "direct_reachable": False,
-            "reachability_uncertain": True,
-        },
-    )
-
-
-def test_include_autopunch_when_local_ap_but_server_says_direct():
-    """サーバーが direct と誤判定しても、クライアントが AP 利用なら含める。"""
-    assert should_include_autopunch_in_clipboard(
-        {"autopunch": False, "direct_reachable": True},
-        local_autopunch=True,
-    )
-
-
-def test_omit_autopunch_when_ap_exe_loaded_but_not_used_for_post():
-    """AP exe が常駐していても、募集で AP 未使用なら含めない。"""
+def test_omit_autopunch_when_server_says_direct_despite_client_payload():
+    """クライアントが AP 常駐でも、サーバー判定が direct なら REQUIRE に AP なし。"""
     assert not should_include_autopunch_in_clipboard(
         {"autopunch": False, "direct_reachable": True},
-        local_autopunch=False,
     )
 
 
-def test_old_logic_false_positive_direct():
+def test_matches_require_column_with_uncertain_badge():
+    post = {
+        "autopunch": True,
+        "direct_reachable": False,
+        "reachability_uncertain": True,
+    }
+    show_ap_in_require = post["autopunch"] and not post["direct_reachable"]
+    assert show_ap_in_require
+    assert should_include_autopunch_in_clipboard(post) == show_ap_in_require
+
+
+def test_matches_require_column_when_no_ap():
     post = {"autopunch": False, "direct_reachable": True}
-    old = bool(post.get("autopunch")) and not bool(post.get("direct_reachable"))
-    new = should_include_autopunch_in_clipboard(post, local_autopunch=True)
-    assert old is False
-    assert new is True
+    show_ap_in_require = post["autopunch"] and not post["direct_reachable"]
+    assert not show_ap_in_require
+    assert should_include_autopunch_in_clipboard(post) == show_ap_in_require

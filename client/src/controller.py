@@ -598,11 +598,6 @@ class Controller:
             f"Copy addr on host: {'enabled' if enabled else 'disabled'}",
         )
 
-    def _local_autopunch_for_clipboard(self) -> bool:
-        """サーバー応答より先に、この募集で AP 利用を申告していたか。"""
-        payload = self._last_sent_payload or {}
-        return bool(payload.get("autopunch"))
-
     def _format_host_clipboard(
         self,
         addr: str,
@@ -644,13 +639,9 @@ class Controller:
         addr = str(post_data.get("addr") or self.my_post.addr or "").strip()
         if not addr or addr.startswith("0.0.0.0:"):
             return
-        local_autopunch = self._local_autopunch_for_clipboard()
         self._sync_post_reachability_from_server(post_data)
         giuroll = bool(post_data.get("giuroll", self.my_post.giuroll))
-        include_autopunch = should_include_autopunch_in_clipboard(
-            post_data,
-            local_autopunch=local_autopunch,
-        )
+        include_autopunch = should_include_autopunch_in_clipboard(post_data)
         self._copy_addr_to_clipboard(
             addr,
             giuroll=giuroll,
