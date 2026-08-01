@@ -80,7 +80,7 @@
     "common.badgeGiu": "Giu",
     "common.badgeAp": "AP",
     "common.badgeUncertainTitle":
-      "AP が必要ですが、ポート制限 NAT などのため接続できない可能性があります",
+      "NATタイプの問題で凸れない可能性があります",
     "common.sortAsc": " ▲",
     "common.sortDesc": " ▼",
 
@@ -555,7 +555,7 @@
     "common.badgeGiu": "Giu",
     "common.badgeAp": "AP",
     "common.badgeUncertainTitle":
-      "AutoPunch is required; connection may still fail (e.g. port-restricted NAT)",
+      "Connection may fail due to NAT type",
     "common.sortAsc": " ▲",
     "common.sortDesc": " ▼",
 
