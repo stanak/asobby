@@ -59,5 +59,4 @@ exe = EXE(
     entitlements_file=None,
     version='client\\version_info.txt',
     icon='server\\app\\static\\favicon.ico',
-    manifest='client\\asobby.exe.manifest',
 )

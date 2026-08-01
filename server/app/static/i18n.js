@@ -480,7 +480,7 @@
       "Windows 10 の場合は、設定 → システム → 通知 → 集中モード で、ゲーム中・全画面アプリ中に自動でオンになるルールをオフにし、asobby の通知を許可してください。",
     "guide.sectionAv": "ウイルス対策ソフトの警告について",
     "guide.avIntro":
-      "asobby クライアント (PyInstaller one-file exe) はコード署名がないため、Windows Defender などが誤検知（偽陽性）することがあります。v0.7.1 以降は Windows マニフェスト付きビルドと、任意のコード署名 (GitHub Secrets) に対応しています。asobby 自体にマルウェアは含まれていません。",
+      "asobby クライアント (PyInstaller one-file exe) はコード署名がないため、Windows Defender などが誤検知（偽陽性）することがあります。asobby 自体にマルウェアは含まれていません。",
     "guide.avOpenSource":
       "ソースコードは https://github.com/stanak/asobby で公開されています。不安な場合は Actions のビルドログと照合するか、ご自身でビルドしてください。",
     "guide.avAllowTitle": "Windows Defender で許可する",
@@ -955,7 +955,7 @@
       "On Windows 10, open Settings → System → Notifications → Focus assist and turn off rules that auto-enable during games or fullscreen apps, and allow notifications from asobby.",
     "guide.sectionAv": "Antivirus warnings",
     "guide.avIntro":
-      "The asobby client (PyInstaller one-file exe) is unsigned, so Windows Defender may flag false positives. Since v0.7.1 builds include a Windows manifest and optional Authenticode signing (GitHub Secrets). asobby does not contain malware.",
+      "The asobby client (PyInstaller one-file exe) is unsigned, so Windows Defender may flag false positives. asobby does not contain malware.",
     "guide.avOpenSource":
       "Source code is public at https://github.com/stanak/asobby . Compare with Actions build logs or build it yourself if unsure.",
     "guide.avAllowTitle": "Allow in Windows Defender",
