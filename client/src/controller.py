@@ -599,9 +599,7 @@ class Controller:
         )
 
     def _local_autopunch_for_clipboard(self) -> bool:
-        """サーバー応答より先に、クライアントが AP 利用中と判断しているか。"""
-        if self.tool_mgr.state("autopunch") == ToolState.LOADED:
-            return True
+        """サーバー応答より先に、この募集で AP 利用を申告していたか。"""
         payload = self._last_sent_payload or {}
         return bool(payload.get("autopunch"))
 

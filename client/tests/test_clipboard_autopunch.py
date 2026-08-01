@@ -18,6 +18,13 @@ def test_omit_autopunch_when_direct_without_ap():
     )
 
 
+def test_omit_autopunch_when_direct_even_if_autopunch_flag_set():
+    """直接接続可能なら AP バッジと同様、クリップボードにも AP を載せない。"""
+    assert not should_include_autopunch_in_clipboard(
+        {"autopunch": True, "direct_reachable": True},
+    )
+
+
 def test_include_autopunch_when_reachability_uncertain():
     assert should_include_autopunch_in_clipboard(
         {
@@ -25,13 +32,6 @@ def test_include_autopunch_when_reachability_uncertain():
             "direct_reachable": False,
             "reachability_uncertain": True,
         },
-    )
-
-
-def test_include_autopunch_when_hostcheck_off_keeps_both_flags():
-    """HOSTCHECK 無効時は direct_reachable=True でも autopunch が残る。"""
-    assert should_include_autopunch_in_clipboard(
-        {"autopunch": True, "direct_reachable": True},
     )
 
 
@@ -43,12 +43,12 @@ def test_include_autopunch_when_local_ap_but_server_says_direct():
     )
 
 
-def test_old_logic_would_have_omitted_ap_only():
-    post = {"autopunch": True, "direct_reachable": False}
-    old = bool(post.get("autopunch")) and not bool(post.get("direct_reachable"))
-    new = should_include_autopunch_in_clipboard(post)
-    assert old is True
-    assert new is True
+def test_omit_autopunch_when_ap_exe_loaded_but_not_used_for_post():
+    """AP exe が常駐していても、募集で AP 未使用なら含めない。"""
+    assert not should_include_autopunch_in_clipboard(
+        {"autopunch": False, "direct_reachable": True},
+        local_autopunch=False,
+    )
 
 
 def test_old_logic_false_positive_direct():
