@@ -163,7 +163,8 @@ Web ページのログインはクッキーセッション（`asobby_session`、
 ホスト・ゲスト双方が asobby を導入している場合、KO 検出はほぼ同時に届くため、
 直近 60 秒以内の重複報告は排除する（ゲスト報告はスキップ、ホスト報告はゲスト報告行を
 昇格して上書きする）。
-`ASOBBY_HOSTCHECK=off` の場合はプローブ自体が無効になる。
+`ASOBBY_HOSTCHECK` は既定 **off**（UDP 到達性プローブ無効。REQUIRE の AP 表示は
+クライアント申告の `autopunch` のみ）。`ASOBBY_HOSTCHECK=on` で従来の直接/AP 判定を有効化できる。
 
 ### 戦績
 

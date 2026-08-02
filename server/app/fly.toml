@@ -17,6 +17,8 @@ primary_region = 'nrt'
   ASOBBY_PROBE_BIND_HOST = 'fly-global-services'
   ASOBBY_PROBE_BIND_PORT = '10800'
   ASOBBY_STORE_DIR = '/data/asobby'
+  # 到達性 UDP プローブは誤検知が多いため無効 (autopunch はクライアント申告を表示)
+  ASOBBY_HOSTCHECK = 'off'
 
 [mounts]
   source = 'asobby_store'

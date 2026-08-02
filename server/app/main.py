@@ -183,7 +183,8 @@ _FILENAME_UNSAFE_RE = re.compile(r"[\x00-\x1f\\/:\"*?<>|]")
 
 # ホスト到達性検証 (UDP プローブ) の有効/無効。
 # 外向き UDP が一切通らない環境では off にする。
-HOSTCHECK_ENABLED = os.environ.get("ASOBBY_HOSTCHECK", "on").lower() not in ("off", "0", "false")
+# 誤検知が多いため既定は off。クライアント申告の autopunch をそのまま表示する。
+HOSTCHECK_ENABLED = os.environ.get("ASOBBY_HOSTCHECK", "off").lower() not in ("off", "0", "false")
 HOSTCHECK_UPDATE_INTERVAL_SEC = float(
     os.environ.get("ASOBBY_HOSTCHECK_UPDATE_INTERVAL_SEC", "20")
 )
@@ -2650,7 +2651,11 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
                 p.reachability_uncertain = reachability_uncertain
         rec.last_hostcheck_at = now
 
-    if body.autopunch and not p.direct_reachable:
+    if not HOSTCHECK_ENABLED:
+        p.autopunch = body.autopunch
+        p.direct_reachable = True
+        p.reachability_uncertain = False
+    elif body.autopunch and not p.direct_reachable:
         p.autopunch = True
         p.reachability_uncertain = True
 

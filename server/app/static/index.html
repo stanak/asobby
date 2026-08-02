@@ -1378,11 +1378,8 @@ function buildRow(p) {
 
   const requireCell = document.createElement("td");
   if (p.giuroll) requireCell.appendChild(badge(t("common.badgeGiu")));
-  if (p.autopunch && !p.direct_reachable) {
+  if (p.autopunch) {
     requireCell.appendChild(badge(t("common.badgeAp")));
-    if (p.reachability_uncertain) {
-      requireCell.appendChild(badge("❓", { title: t("common.badgeUncertainTitle") }));
-    }
   }
   tr.appendChild(requireCell);
 
