@@ -1380,9 +1380,6 @@ function buildRow(p) {
   if (p.giuroll) requireCell.appendChild(badge(t("common.badgeGiu")));
   if (p.autopunch && !p.direct_reachable) {
     requireCell.appendChild(badge(t("common.badgeAp")));
-    if (p.reachability_uncertain) {
-      requireCell.appendChild(badge("❓", { title: t("common.badgeUncertainTitle") }));
-    }
   }
   tr.appendChild(requireCell);
 
