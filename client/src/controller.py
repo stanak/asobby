@@ -13,7 +13,10 @@ from collections import defaultdict
 import httpx
 
 import clipboard_util
-from host_clipboard import should_include_autopunch_in_clipboard
+from host_clipboard import (
+    reachability_flags_for_clipboard,
+    should_include_autopunch_in_clipboard,
+)
 from api_client import ApiClient
 from detect_api import DetectionState
 from hisoutensoku_memory import read_detection_state
@@ -670,11 +673,19 @@ class Controller:
             return
         self._addr_copy_pending = True
         try:
+            uses_ap = self._host_uses_autopunch(st)
+            direct_ok = await self._probe_host_reachable(addr, autopunch=False)
+            if not self.is_detect_paused() or self._addr_copied:
+                return
+            flags = reachability_flags_for_clipboard(
+                direct_ok=direct_ok,
+                uses_autopunch=uses_ap,
+            )
             self._copy_host_info_from_post_data(
                 {
                     "addr": addr,
                     "giuroll": bool(st.giuroll),
-                    "autopunch": self._host_uses_autopunch(st),
+                    **flags,
                 }
             )
         finally:
