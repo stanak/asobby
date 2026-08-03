@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import time
 from datetime import datetime, timedelta, timezone
@@ -198,6 +199,7 @@ class Replay(Base):
     )
     filename: Mapped[str] = mapped_column(String(255), default="")
     size: Mapped[int] = mapped_column(Integer, default=0)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     # リプレイは 100KB 程度なので bytea で DB に直接持つ
     data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -589,7 +591,7 @@ async def insert_match_result(
 
 
 async def find_recent_match_as_guest(
-    guest_user_id: str, within_sec: int = 60
+    guest_user_id: str, within_sec: int = 30
 ) -> Optional[Match]:
     """guest_user_id 一致 & played_at が直近 within_sec 秒以内の match を 1 件返す。"""
     cutoff = utcnow() - timedelta(seconds=within_sec)
@@ -613,7 +615,7 @@ async def find_near_match_by_profiles(
     winner: str,
     host_profile: str,
     guest_profile: str,
-    window_sec: int = 90,
+    window_sec: int = 30,
 ) -> Optional[Match]:
     """勝敗・両プロファイル・時刻 (±window_sec) が一致する match を 1 件返す。
 
@@ -663,7 +665,7 @@ async def claim_match_side(match_id: str, side: str, user_id: str) -> bool:
 
 
 async def find_recent_guest_reported_match(
-    guest_user_id: str, within_sec: int = 60
+    guest_user_id: str, within_sec: int = 30
 ) -> Optional[Match]:
     """直近のゲスト報告 (source=='guest') match を 1 件返す。"""
     cutoff = utcnow() - timedelta(seconds=within_sec)
@@ -837,14 +839,30 @@ async def find_match_for_replay_by_profiles(
     return None
 
 
+def replay_content_sha256(data: bytes) -> str:
+    """リプレイ生データの SHA-256 (hex)。"""
+    return hashlib.sha256(data).hexdigest()
+
+
+async def find_replay_by_content_hash(content_sha256: str) -> Optional[Replay]:
+    """同一内容のリプレイが既に登録されていれば返す。"""
+    async with session() as s:
+        res = await s.execute(
+            select(Replay).where(Replay.content_sha256 == content_sha256).limit(1)
+        )
+        return res.scalar_one_or_none()
+
+
 async def insert_replay(match_id: str, filename: str, data: bytes) -> bool:
     """リプレイを insert する。unique 制約違反時は False。"""
+    content_sha256 = replay_content_sha256(data)
     async with session() as s:
         try:
             replay = Replay(
                 match_id=match_id,
                 filename=filename,
                 size=len(data),
+                content_sha256=content_sha256,
                 data=data,
             )
             s.add(replay)

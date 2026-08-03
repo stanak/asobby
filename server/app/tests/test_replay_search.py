@@ -91,11 +91,13 @@ async def create_match_with_replay(
         )
         s.add(match)
         if with_replay:
+            replay_bytes = REPLAY_DATA + match_id.encode()
             s.add(db.Replay(
                 match_id=match_id,
                 filename=f"{match_id}.rep",
-                size=len(REPLAY_DATA),
-                data=REPLAY_DATA,
+                size=len(replay_bytes),
+                content_sha256=db.replay_content_sha256(replay_bytes),
+                data=replay_bytes,
             ))
         await s.commit()
 
@@ -263,7 +265,7 @@ async def test_replay_search_public_access():
 
         dl = await client.get(f"/replays/{match_id}")
         assert dl.status_code == 200
-        assert dl.content == REPLAY_DATA
+        assert dl.content == REPLAY_DATA + match_id.encode()
 
         page = await client.get("/replays")
         assert page.status_code == 200

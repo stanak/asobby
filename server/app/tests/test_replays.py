@@ -151,6 +151,74 @@ async def test_replay_upload_stored_and_duplicate():
 
 
 @pytest.mark.asyncio
+async def test_replay_upload_rejects_same_content_on_different_match():
+    """同一 .rep を別 match に紐付けようとしたら duplicate。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4")
+        await create_user("888", name="guest", last_ip="5.6.7.8")
+
+        host_token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "casual", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+
+        first_result = {
+            "id": post["id"],
+            "owner_token": owner_token,
+            "winner": "host",
+            "host_char": 0,
+            "guest_char": 1,
+            "host_profile": "hp",
+            "guest_profile": "gp",
+        }
+        assert (await client.post("/posts/result", json=first_result)).json()["recorded"]
+
+        up = await client.post(
+            "/replays/upload",
+            content=REPLAY_DATA,
+            headers={
+                "Authorization": f"Bearer {host_token}",
+                "Content-Type": "application/octet-stream",
+            },
+        )
+        assert up.json()["stored"] is True
+
+        second_result = {
+            **first_result,
+            "winner": "guest",
+            "host_char": 1,
+            "guest_char": 6,
+            "host_profile": "hp2",
+            "guest_profile": "gp2",
+        }
+        assert (await client.post("/posts/result", json=second_result)).json()["recorded"]
+
+        dup = await client.post(
+            "/replays/upload",
+            content=REPLAY_DATA,
+            headers={
+                "Authorization": f"Bearer {host_token}",
+                "Content-Type": "application/octet-stream",
+            },
+        )
+        assert dup.json() == {"ok": True, "stored": False, "reason": "duplicate"}
+
+        async with db.session() as s:
+            from sqlalchemy import select
+
+            res_m = await s.execute(select(db.Match))
+            assert len(list(res_m.scalars().all())) == 2
+            res_r = await s.execute(select(db.Replay))
+            assert len(list(res_r.scalars().all())) == 1
+
+
+@pytest.mark.asyncio
 async def test_replay_upload_blocked_by_host_refusal():
     async with app_client() as client:
         await create_user("999", name="host", last_ip="1.2.3.4")

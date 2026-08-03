@@ -1437,7 +1437,7 @@ def _is_near_existing(
     played_at: datetime,
     existing_ts: list[float],
     *,
-    window_sec: int = 60,
+    window_sec: int = 30,
 ) -> bool:
     """existing_ts (昇順) に ±window_sec 以内の時刻があるか bisect で判定する。"""
     if not existing_ts:
@@ -1621,7 +1621,7 @@ def _is_near_existing_with_id(
     played_at: datetime,
     existing: list[tuple[float, str]],
     *,
-    window_sec: int = 60,
+    window_sec: int = 30,
 ) -> Optional[str]:
     """existing [(ts, id), ...] 昇順) に ±window_sec 以内の時刻があればその match id を返す。"""
     if not existing:
@@ -2894,6 +2894,10 @@ async def upload_replay(
         raise HTTPException(status_code=422, detail="empty body")
     if len(data) > REPLAY_MAX_BYTES:
         raise HTTPException(status_code=413, detail="replay too large")
+
+    content_sha256 = db.replay_content_sha256(data)
+    if await db.find_replay_by_content_hash(content_sha256) is not None:
+        return {"ok": True, "stored": False, "reason": "duplicate"}
 
     uploader_settings = await db.get_user_settings(sess["id"])
     if db.is_replay_refusal_active(uploader_settings["replay_refusal_until"]):

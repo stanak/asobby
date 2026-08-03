@@ -234,7 +234,7 @@ async def test_tsk_import_skips_near_existing_match(tmp_path):
             "played_at": played_at,
         }])
 
-        ft = jst_to_filetime(2025, 1, 2, 12, 0, 30)  # ±60 秒以内
+        ft = jst_to_filetime(2025, 1, 2, 12, 0, 30)  # ±30 秒以内
         tsk_path = str(tmp_path / "tsk_near.db")
         db_bytes = create_tsk_db(tsk_path, [
             (ft, b"me", 0, 2, b"opp", 1, 0),

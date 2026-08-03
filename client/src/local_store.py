@@ -137,7 +137,7 @@ class LocalStore:
         winner: str,
         host_profile: str,
         guest_profile: str,
-        window_sec: float = 90,
+        window_sec: float = 30,
     ) -> str | None:
         host_profile = host_profile or ""
         guest_profile = guest_profile or ""
@@ -232,7 +232,7 @@ class LocalStore:
                         """
                         SELECT * FROM matches
                         WHERE server_id IS NULL
-                          AND ABS(played_at - ?) <= 60
+                          AND ABS(played_at - ?) <= 30
                           AND winner = ?
                           AND host_profile = ?
                           AND guest_profile = ?
@@ -252,7 +252,7 @@ class LocalStore:
                         """
                         SELECT * FROM matches
                         WHERE server_id IS NULL
-                          AND ABS(played_at - ?) <= 60
+                          AND ABS(played_at - ?) <= 30
                           AND winner = ?
                         ORDER BY ABS(played_at - ?)
                         LIMIT 1
@@ -291,7 +291,7 @@ class LocalStore:
                     cur = conn.execute(
                         """
                         SELECT id FROM matches
-                        WHERE ABS(played_at - ?) <= 90
+                        WHERE ABS(played_at - ?) <= 30
                           AND winner = ?
                           AND host_profile = ?
                           AND guest_profile = ?
@@ -305,7 +305,7 @@ class LocalStore:
                     cur = conn.execute(
                         """
                         SELECT id FROM matches
-                        WHERE ABS(played_at - ?) <= 90
+                        WHERE ABS(played_at - ?) <= 30
                           AND winner = ?
                           AND my_side = ?
                         LIMIT 1
