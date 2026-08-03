@@ -14,6 +14,7 @@ import httpx
 
 import clipboard_util
 from host_clipboard import (
+    format_host_clipboard_text,
     reachability_flags_for_clipboard,
     should_include_autopunch_in_clipboard,
 )
@@ -255,8 +256,8 @@ class Controller:
         # ローカル天則がネット対戦フロー中 (ロビー Ping を止める)
         self._local_net_active: bool = False
 
-        # ホスト検知時の IP:Port クリップボードコピー (1 ホストセッション 1 回)
-        self._addr_copied = False
+        # ホスト検知時の IP:Port クリップボードコピー (内容が変わったときだけ再コピー)
+        self._last_clipboard_text = ""
         self._addr_copy_pending = False
 
         # 検知系の異常 ("" = 正常)。トレイの状態表示に使う
@@ -602,34 +603,7 @@ class Controller:
             f"Copy addr on host: {'enabled' if enabled else 'disabled'}",
         )
 
-    def _format_host_clipboard(
-        self,
-        addr: str,
-        *,
-        giuroll: bool,
-        include_autopunch: bool,
-    ) -> str:
-        tools: list[str] = []
-        if giuroll:
-            tools.append("Giuroll")
-        if include_autopunch:
-            tools.append("AutoPunch")
-        if tools:
-            return f"{addr} {', '.join(tools)}"
-        return addr
-
-    def _copy_addr_to_clipboard(
-        self,
-        addr: str,
-        *,
-        giuroll: bool = False,
-        include_autopunch: bool = False,
-    ) -> None:
-        text = self._format_host_clipboard(
-            addr,
-            giuroll=giuroll,
-            include_autopunch=include_autopunch,
-        )
+    def _copy_addr_to_clipboard(self, text: str) -> None:
         if clipboard_util.copy_text(text):
             self.log_sink("info", f"Copied host info to clipboard: {text}")
             self.notify_sink(t("notify.copy_addr", addr=text))
@@ -638,7 +612,7 @@ class Controller:
 
     def _copy_host_info_from_post_data(self, post_data: dict) -> None:
         """サーバー応答またはローカルプローブ結果をクリップボードへ反映。"""
-        if not self.copy_addr_enabled() or self._addr_copied:
+        if not self.copy_addr_enabled():
             return
         addr = str(post_data.get("addr") or self.my_post.addr or "").strip()
         if not addr or addr.startswith("0.0.0.0:"):
@@ -647,12 +621,15 @@ class Controller:
             self._sync_post_reachability_from_server(post_data)
         giuroll = bool(post_data.get("giuroll", self.my_post.giuroll))
         include_autopunch = should_include_autopunch_in_clipboard(post_data)
-        self._copy_addr_to_clipboard(
+        text = format_host_clipboard_text(
             addr,
             giuroll=giuroll,
             include_autopunch=include_autopunch,
         )
-        self._addr_copied = True
+        if text == self._last_clipboard_text:
+            return
+        self._copy_addr_to_clipboard(text)
+        self._last_clipboard_text = text
 
     def _try_copy_host_info_from_server(self, post_data: dict) -> None:
         """募集作成/更新後、サーバー到達性判定を反映してクリップボードへコピー。"""
@@ -666,7 +643,6 @@ class Controller:
         """投稿停止中でもホスト検知時にローカルプローブでクリップボードへコピー。"""
         if (
             not self.is_detect_paused()
-            or self._addr_copied
             or self._addr_copy_pending
             or not self.copy_addr_enabled()
         ):
@@ -675,7 +651,7 @@ class Controller:
         try:
             uses_ap = self._host_uses_autopunch(st)
             direct_ok = await self._probe_host_reachable(addr, autopunch=False)
-            if not self.is_detect_paused() or self._addr_copied:
+            if not self.is_detect_paused():
                 return
             flags = reachability_flags_for_clipboard(
                 direct_ok=direct_ok,
@@ -1209,7 +1185,8 @@ class Controller:
                         self.my_post.id, self.owner_token, act.payload
                     )
                     self._sync_post_reachability_from_server(resp)
-                    # クリップボードコピーは create 時のみ (update 毎だと通知が連発する)
+                    # Giuroll / AP 到達性が後から変わったときだけ再コピー (内容一致ならスキップ)
+                    self._try_copy_host_info_from_server(resp)
                     for msg in resp.get("messages") or []:
                         msg_type = msg.get("type", "")
                         from_name = msg.get("from_name", "")
@@ -1349,7 +1326,7 @@ class Controller:
         # -----------------
         if not st.alive:
             self.tool_mgr.reset_state()
-            self._addr_copied = False
+            self._last_clipboard_text = ""
             self._addr_copy_pending = False
             self._local_net_active = False
             self._reset_session_score()
@@ -1562,12 +1539,12 @@ class Controller:
             )
 
         # -----------------
-        # ホスト検知時の IP:Port + 使用ツール クリップボードコピーは create 応答
-        # (または投稿停止中のローカルプローブ) で 1 回だけ行う。
-        # ネット対戦フロー全体 (接続〜対戦) の間は再コピーしない。
+        # ホスト検知時の IP:Port + 使用ツール クリップボードコピーは create/update
+        # (または投稿停止中のローカルプローブ) で行う。内容が同じなら再コピーしない。
+        # ネット対戦フロー終了後に状態をリセットする。
         # -----------------
         if self._stable_for("addr_copy_reset", 5.0, seen=not in_net_flow):
-            self._addr_copied = False
+            self._last_clipboard_text = ""
             self._addr_copy_pending = False
 
         # -----------------
@@ -1624,13 +1601,21 @@ class Controller:
             if addr:
                 if (
                     self.copy_addr_enabled()
-                    and not self._addr_copied
-                    and not self._addr_copy_pending
                     and not addr.startswith("0.0.0.0:")
                 ):
-                    asyncio.get_running_loop().create_task(
-                        self._try_copy_host_info_when_paused(addr, st)
-                    )
+                    if self._last_clipboard_text == "" and not self._addr_copy_pending:
+                        asyncio.get_running_loop().create_task(
+                            self._try_copy_host_info_when_paused(addr, st)
+                        )
+                    else:
+                        self._copy_host_info_from_post_data(
+                            {
+                                "addr": addr,
+                                "giuroll": bool(st.giuroll),
+                                "autopunch": self.my_post.autopunch,
+                                "direct_reachable": self.my_post.direct_reachable,
+                            }
+                        )
                 if (now - self._last_host_self_check_ts) >= HOST_SELF_CHECK_INTERVAL_SEC:
                     self._last_host_self_check_ts = now
                     asyncio.get_running_loop().create_task(

@@ -4,9 +4,28 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from host_clipboard import (
+    format_host_clipboard_text,
     reachability_flags_for_clipboard,
     should_include_autopunch_in_clipboard,
 )
+
+
+def test_format_host_clipboard_text_addr_only():
+    assert format_host_clipboard_text("1.2.3.4:10800", giuroll=False, include_autopunch=False) == (
+        "1.2.3.4:10800"
+    )
+
+
+def test_format_host_clipboard_text_with_giuroll():
+    assert format_host_clipboard_text("1.2.3.4:10800", giuroll=True, include_autopunch=False) == (
+        "1.2.3.4:10800 Giuroll"
+    )
+
+
+def test_format_host_clipboard_text_with_both_tools():
+    assert format_host_clipboard_text("1.2.3.4:10800", giuroll=True, include_autopunch=True) == (
+        "1.2.3.4:10800 Giuroll, AutoPunch"
+    )
 
 
 def test_include_autopunch_for_ap_only_post():

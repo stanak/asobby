@@ -1,6 +1,22 @@
 from __future__ import annotations
 
 
+def format_host_clipboard_text(
+    addr: str,
+    *,
+    giuroll: bool,
+    include_autopunch: bool,
+) -> str:
+    tools: list[str] = []
+    if giuroll:
+        tools.append("Giuroll")
+    if include_autopunch:
+        tools.append("AutoPunch")
+    if tools:
+        return f"{addr} {', '.join(tools)}"
+    return addr
+
+
 def should_include_autopunch_in_clipboard(post_data: dict) -> bool:
     """クリップボードに AutoPunch を含めるか。
 
