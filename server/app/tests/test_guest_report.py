@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import socket
 import struct
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -272,3 +273,125 @@ async def test_guest_report_unauthorized():
     async with app_client() as client:
         res = await client.post("/matches/report", json=GUEST_REPORT_BODY)
         assert res.status_code == 401
+
+
+RANKED_MATCH_PROFILES = {
+    "winner": "host",
+    "host_char": 0,
+    "guest_char": 1,
+    "host_profile": "rank_hp",
+    "guest_profile": "rank_gp",
+}
+
+
+@pytest.mark.asyncio
+async def test_host_result_without_guest_ip_promotes_ranked():
+    """ゲスト報告先行・プローブなしでも host /posts/result がランクマ昇格する。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
+
+        guest_token = bearer_token("888", "guest")
+        guest_res = await client.post(
+            "/matches/report",
+            json=RANKED_MATCH_PROFILES,
+            headers={"Authorization": f"Bearer {guest_token}"},
+        )
+        assert guest_res.json()["recorded"] is True
+
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            promoted_id = list(res_m.scalars().all())[0].id
+
+        host_token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+        assert rec.guest_ip == ""
+
+        host_result = await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                **RANKED_MATCH_PROFILES,
+            },
+        )
+        assert host_result.status_code == 200
+        data = host_result.json()
+        assert data["recorded"] is True
+        assert data["ranked"] is True
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            matches = list(res_m.scalars().all())
+            assert len(matches) == 1
+            m = matches[0]
+            assert m.id == promoted_id
+            assert m.source == "host"
+            assert m.ranked is True
+            assert m.match_rank == "normal"
+            assert m.host_user_id == "999"
+            assert m.guest_user_id == "888"
+
+
+@pytest.mark.asyncio
+async def test_sync_promotes_guest_report_ranked():
+    """host sync (ranked=true) が先行ゲスト報告を昇格する。"""
+    async with app_client() as client:
+        await create_user("999", name="host", rank="normal")
+        await create_user("888", name="guest", rank="normal")
+
+        guest_token = bearer_token("888", "guest")
+        guest_res = await client.post(
+            "/matches/report",
+            json=RANKED_MATCH_PROFILES,
+            headers={"Authorization": f"Bearer {guest_token}"},
+        )
+        assert guest_res.json()["recorded"] is True
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            promoted_id = list(res_m.scalars().all())[0].id
+
+        host_token = bearer_token("999", "host")
+        client_id = "a" * 32
+        sync_res = await client.post(
+            "/matches/sync",
+            json={
+                "matches": [{
+                    "client_id": client_id,
+                    "played_at": time.time(),
+                    "my_side": "host",
+                    "winner": "host",
+                    "my_char": RANKED_MATCH_PROFILES["host_char"],
+                    "opp_char": RANKED_MATCH_PROFILES["guest_char"],
+                    "my_profile": RANKED_MATCH_PROFILES["host_profile"],
+                    "opp_profile": RANKED_MATCH_PROFILES["guest_profile"],
+                    "ranked": True,
+                    "match_rank": "normal",
+                }],
+            },
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        assert sync_res.status_code == 200
+        assert sync_res.json()["results"][0]["status"] == "duplicate"
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            matches = list(res_m.scalars().all())
+            assert len(matches) == 1
+            m = matches[0]
+            assert m.id == promoted_id
+            assert m.source == "host"
+            assert m.ranked is True
+            assert m.match_rank == "normal"
+            assert m.host_user_id == "999"
+            assert m.guest_user_id == "888"

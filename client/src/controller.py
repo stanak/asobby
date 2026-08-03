@@ -1924,7 +1924,7 @@ class Controller:
             opp_char = row.get("host_char")
             my_profile = row.get("guest_profile", "")
             opp_profile = row.get("host_profile", "")
-        return {
+        payload = {
             "client_id": row["id"],
             "played_at": row["played_at"],
             "my_side": my_side,
@@ -1933,7 +1933,12 @@ class Controller:
             "opp_char": opp_char,
             "my_profile": my_profile or "",
             "opp_profile": opp_profile or "",
+            "ranked": bool(row.get("ranked", 0)),
         }
+        match_rank = row.get("match_rank")
+        if match_rank:
+            payload["match_rank"] = match_rank
+        return payload
 
     async def stats_sync_loop(self) -> None:
         """ログイン時にサーバー戦績と双方向同期する。"""

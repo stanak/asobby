@@ -467,6 +467,8 @@ class SyncMatchIn(BaseModel):
     opp_char: Optional[int] = None
     my_profile: str = Field(default="", max_length=64)
     opp_profile: str = Field(default="", max_length=64)
+    ranked: bool = False
+    match_rank: Optional[str] = None
 
     @field_validator("client_id")
     @classmethod
@@ -1772,7 +1774,8 @@ def _sync_row_from_item(user_id: str, item: SyncMatchIn, match_id: str, played_a
             "guest_char": opp_char,
             "host_profile": item.my_profile,
             "guest_profile": item.opp_profile,
-            "ranked": False,
+            "ranked": item.ranked,
+            "match_rank": item.match_rank,
             "source": "sync",
             "played_at": played_at,
         }
@@ -1787,7 +1790,8 @@ def _sync_row_from_item(user_id: str, item: SyncMatchIn, match_id: str, played_a
         "guest_char": my_char,
         "host_profile": item.opp_profile,
         "guest_profile": item.my_profile,
-        "ranked": False,
+        "ranked": item.ranked,
+        "match_rank": item.match_rank,
         "source": "sync",
         "played_at": played_at,
     }
@@ -1997,7 +2001,26 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
         if near_match is not None:
             # 既存行に自分の側が未同定で残っていれば紐付ける
             side = "guest" if item.my_side == "client" else item.my_side
-            await db.claim_match_side(near_match.id, side, user_id)
+            if (
+                side == "host"
+                and near_match.source in ("guest", "sync")
+                and not near_match.host_user_id
+                and item.my_side == "host"
+            ):
+                await db.promote_guest_match(
+                    near_match.id,
+                    host_user_id=user_id,
+                    host_ip="",
+                    winner=item.winner,
+                    host_char=_normalize_char(item.my_char),
+                    guest_char=_normalize_char(item.opp_char),
+                    host_profile=item.my_profile,
+                    guest_profile=item.opp_profile,
+                    ranked=item.ranked,
+                    match_rank=item.match_rank,
+                )
+            else:
+                await db.claim_match_side(near_match.id, side, user_id)
             results.append({
                 "client_id": item.client_id,
                 "server_id": near_match.id,
@@ -2985,12 +3008,10 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
 @app.post("/posts/result")
 async def report_result(body: ReportResultIn) -> dict[str, Any]:
     rec = get_record_or_raise(body.id, body.owner_token)
-    if not rec.guest_ip or not db.is_configured():
+    if not db.is_configured():
         return {"ok": True, "recorded": False}
 
     post = rec.post
-    is_ranked = post.ranked_active and rec.session_games < RANKED_SESSION_MAX_GAMES
-    match_rank = post.rank if is_ranked else None
     host_ip, _, _ = post.addr.partition(":")
 
     # 接続時点で同定できなかったゲストを再試行する
@@ -3000,6 +3021,32 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
         if user is not None and user.id != rec.owner_user_id:
             rec.guest_user_id = user.id
             rec.guest_rank = user.rank
+
+    near_for_gate = None
+    if not rec.guest_user_id:
+        near_for_gate = await db.find_near_match_by_profiles(
+            db.utcnow(), body.winner, body.host_profile, body.guest_profile
+        )
+        if near_for_gate is not None and near_for_gate.guest_user_id:
+            rec.guest_user_id = near_for_gate.guest_user_id
+            guest_user = await db.get_user(near_for_gate.guest_user_id)
+            if guest_user is not None:
+                rec.guest_rank = guest_user.rank
+
+    can_record = bool(
+        rec.guest_ip
+        or rec.guest_user_id
+        or (
+            near_for_gate is not None
+            and near_for_gate.source in ("guest", "sync")
+        )
+    )
+    if not can_record:
+        return {"ok": True, "recorded": False}
+
+    refresh_ranked_active(rec)
+    is_ranked = post.ranked_active and rec.session_games < RANKED_SESSION_MAX_GAMES
+    match_rank = post.rank if is_ranked else None
 
     promoted = False
     if rec.guest_user_id:
@@ -3050,7 +3097,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
             host_user_id=rec.owner_user_id,
             guest_user_id=rec.guest_user_id or None,
             host_ip=host_ip,
-            guest_ip=rec.guest_ip,
+            guest_ip=rec.guest_ip or "",
             winner=body.winner,
             host_char=body.host_char,
             guest_char=body.guest_char,
