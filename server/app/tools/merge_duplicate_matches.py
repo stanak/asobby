@@ -270,32 +270,30 @@ async def run(*, apply: bool, limit: Optional[int]) -> int:
                     print(f"  skip: keeper {keeper.id} missing", file=sys.stderr)
                     continue
 
-                keeper_shas = set(replay_map.get(keeper.id, set()))
+                keeper_has_replay = bool(replay_map.get(keeper.id))
                 for donor in donors:
                     donor_row = await session.get(db.Match, donor.id)
                     if donor_row is None:
                         continue
                     _merge_fields(keeper_row, donor_row)
 
-                    for sha in replay_map.get(donor.id, set()):
-                        if sha in keeper_shas:
-                            await session.execute(
-                                delete(db.Replay).where(
-                                    db.Replay.match_id == donor.id,
-                                    db.Replay.content_sha256 == sha,
-                                )
-                            )
-                        else:
-                            res = await session.execute(
-                                select(db.Replay).where(
-                                    db.Replay.match_id == donor.id,
-                                    db.Replay.content_sha256 == sha,
-                                )
-                            )
-                            rep = res.scalar_one_or_none()
-                            if rep is not None:
-                                rep.match_id = keeper.id
-                                keeper_shas.add(sha)
+                    if keeper_has_replay:
+                        await session.execute(
+                            delete(db.Replay).where(db.Replay.match_id == donor.id)
+                        )
+                    else:
+                        res = await session.execute(
+                            select(db.Replay).where(db.Replay.match_id == donor.id)
+                        )
+                        reps = list(res.scalars().all())
+                        if reps:
+                            reps[0].match_id = keeper.id
+                            keeper_has_replay = True
+                            replay_map[keeper.id] = replay_map.get(keeper.id, set()) | {
+                                reps[0].content_sha256
+                            }
+                            for extra in reps[1:]:
+                                await session.delete(extra)
 
                     await session.delete(donor_row)
 
