@@ -254,8 +254,8 @@ fly deploy --ha=false                  # デプロイ（マシン1台）
 ```sh
 cd app
 # 本番 VM 内 (DATABASE_URL は fly secrets から注入済み)
-fly ssh console -a asobby -C 'python tools/merge_duplicate_matches.py'
-fly ssh console -a asobby -C 'python tools/merge_duplicate_matches.py --apply'
+fly ssh console -a asobby -C 'sh -c "cd /app && PYTHONPATH=/app python tools/merge_duplicate_matches.py"'
+fly ssh console -a asobby -C 'sh -c "cd /app && PYTHONPATH=/app python tools/merge_duplicate_matches.py --apply"'
 ```
 
 VM サイズ変更は `fly.toml` の `[[vm]] size` を編集して再デプロイする。
