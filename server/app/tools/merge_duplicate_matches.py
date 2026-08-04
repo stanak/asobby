@@ -104,52 +104,33 @@ def _should_cluster(a: db.Match, b: db.Match) -> bool:
 
 
 def _cluster_bucket(group: list[db.Match]) -> list[list[db.Match]]:
-    """同一プロファイル・勝敗バケット内だけ union-find (O(k log k))。"""
+    """同一プロファイル・勝敗バケット内で重複ペアのみ拾う (連鎖マージしない)。"""
     if len(group) < 2:
         return []
 
-    timed = [m for m in group if _ts(m) is not None]
-    untimed = [m for m in group if _ts(m) is None]
+    timed = sorted([m for m in group if _ts(m) is not None], key=_ts)  # type: ignore[arg-type]
+    if len(timed) < 2:
+        return []
 
+    used: set[str] = set()
     clusters: list[list[db.Match]] = []
-    if len(timed) >= 2:
-        timed.sort(key=_ts)  # type: ignore[arg-type]
-        n = len(timed)
-        parent = list(range(n))
-
-        def find(i: int) -> int:
-            while parent[i] != i:
-                parent[i] = parent[parent[i]]
-                i = parent[i]
-            return i
-
-        def union(i: int, j: int) -> None:
-            ri, rj = find(i), find(j)
-            if ri != rj:
-                parent[rj] = ri
-
-        for i in range(n):
+    for i in range(len(timed)):
+        if timed[i].id in used:
+            continue
+        for j in range(i + 1, len(timed)):
+            if timed[j].id in used:
+                continue
+            tj = _ts(timed[j])
             ti = _ts(timed[i])
-            assert ti is not None
-            for j in range(i + 1, n):
-                tj = _ts(timed[j])
-                assert tj is not None
-                if tj - ti > WINDOW_SEC:
-                    break
-                if _should_cluster(timed[i], timed[j]):
-                    union(i, j)
-
-        grouped: dict[int, list[db.Match]] = defaultdict(list)
-        for i, m in enumerate(timed):
-            grouped[find(i)].append(m)
-        clusters.extend(g for g in grouped.values() if len(g) > 1)
-
-    if len(untimed) >= 2:
-        for i in range(len(untimed)):
-            for j in range(i + 1, len(untimed)):
-                if _should_cluster(untimed[i], untimed[j]):
-                    clusters.append([untimed[i], untimed[j]])
-
+            assert ti is not None and tj is not None
+            if tj - ti > WINDOW_SEC:
+                break
+            if not _should_cluster(timed[i], timed[j]):
+                continue
+            clusters.append([timed[i], timed[j]])
+            used.add(timed[i].id)
+            used.add(timed[j].id)
+            break
     return clusters
 
 
