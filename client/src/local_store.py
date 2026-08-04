@@ -92,9 +92,11 @@ class LocalStore:
         guest_profile: str,
         *,
         ranked: int = 0,
+        played_at: float | None = None,
     ) -> str:
         """ローカル対戦を記録する。戻り値は生成した id (重複時は既存 id)。"""
-        played_at = time.time()
+        if played_at is None:
+            played_at = time.time()
         existing_id = self._find_recent_duplicate(
             played_at=played_at,
             my_side=my_side,

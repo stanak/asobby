@@ -87,6 +87,7 @@ class ApiClient:
         guest_char: int | None = None,
         host_profile: str = "",
         guest_profile: str = "",
+        played_at: float = 0,
     ) -> dict:
         r = await self.http.post(
             f"{self.base}/posts/result",
@@ -98,6 +99,7 @@ class ApiClient:
                 "guest_char": guest_char,
                 "host_profile": host_profile,
                 "guest_profile": guest_profile,
+                "played_at": played_at,
             },
             headers=self._request_headers(),
         )
@@ -111,6 +113,7 @@ class ApiClient:
         guest_char: int | None = None,
         host_profile: str = "",
         guest_profile: str = "",
+        played_at: float = 0,
     ) -> dict:
         r = await self.http.post(
             f"{self.base}/matches/report",
@@ -120,6 +123,7 @@ class ApiClient:
                 "guest_char": guest_char,
                 "host_profile": host_profile,
                 "guest_profile": guest_profile,
+                "played_at": played_at,
             },
             headers=self._request_headers(),
         )

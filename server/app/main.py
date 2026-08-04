@@ -395,6 +395,7 @@ class ReportResultIn(BaseModel):
     guest_char: Optional[int] = None
     host_profile: str = Field(default="", max_length=64)
     guest_profile: str = Field(default="", max_length=64)
+    played_at: float = 0
 
 
 class GuestReportIn(BaseModel):
@@ -403,6 +404,7 @@ class GuestReportIn(BaseModel):
     guest_char: Optional[int] = None
     host_profile: str = Field(default="", max_length=64)
     guest_profile: str = Field(default="", max_length=64)
+    played_at: float = 0
 
 
 class DevicePollIn(BaseModel):
@@ -1653,6 +1655,11 @@ def _parse_sync_played_at(ts: float) -> Optional[datetime]:
     if dt > db.utcnow() + timedelta(days=1):
         return None
     return dt
+
+
+def _resolve_report_played_at(ts: float) -> datetime:
+    parsed = _parse_sync_played_at(ts)
+    return parsed if parsed is not None else db.utcnow()
 
 
 def _match_to_stats_item(match: db.Match, user_id: str, has_replay: bool) -> dict[str, Any]:
@@ -2981,9 +2988,11 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
     if await db.find_recent_match_as_guest(uid) is not None:
         return {"ok": True, "recorded": False, "reason": "duplicate"}
 
+    played_at = _resolve_report_played_at(body.played_at)
+
     # ゲスト未同定の host 報告と重複しないようプロファイルでも照合する
     near = await db.find_near_match_by_profiles(
-        db.utcnow(), body.winner, body.host_profile, body.guest_profile
+        played_at, body.winner, body.host_profile, body.guest_profile
     )
     if near is not None:
         await db.claim_match_side(near.id, "guest", uid)
@@ -3001,6 +3010,7 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
         guest_profile=body.guest_profile,
         ranked=False,
         source="guest",
+        played_at=played_at,
     )
     return {"ok": True, "recorded": True}
 
@@ -3010,6 +3020,8 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
     rec = get_record_or_raise(body.id, body.owner_token)
     if not db.is_configured():
         return {"ok": True, "recorded": False}
+
+    played_at = _resolve_report_played_at(body.played_at)
 
     post = rec.post
     host_ip, _, _ = post.addr.partition(":")
@@ -3025,7 +3037,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
     near_for_gate = None
     if not rec.guest_user_id:
         near_for_gate = await db.find_near_match_by_profiles(
-            db.utcnow(), body.winner, body.host_profile, body.guest_profile
+            played_at, body.winner, body.host_profile, body.guest_profile
         )
         if near_for_gate is not None and near_for_gate.guest_user_id:
             rec.guest_user_id = near_for_gate.guest_user_id
@@ -3068,7 +3080,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
 
     if not promoted:
         near = await db.find_near_match_by_profiles(
-            db.utcnow(), body.winner, body.host_profile, body.guest_profile
+            played_at, body.winner, body.host_profile, body.guest_profile
         )
         if near is not None:
             if near.source in ("sync", "guest"):
@@ -3106,6 +3118,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
             ranked=is_ranked,
             match_rank=match_rank,
             source="host",
+            played_at=played_at,
         )
     rec.session_games += 1
 

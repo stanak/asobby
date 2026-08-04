@@ -567,6 +567,7 @@ async def insert_match_result(
     ranked: bool = False,
     match_rank: Optional[str] = None,
     source: str = "host",
+    played_at: Optional[datetime] = None,
 ) -> str:
     """対戦結果を matches に新規 insert する。insert した行の id を返す。"""
     async with session() as s:
@@ -583,7 +584,7 @@ async def insert_match_result(
             ranked=ranked,
             match_rank=match_rank,
             source=source,
-            played_at=utcnow(),
+            played_at=played_at if played_at is not None else utcnow(),
         )
         s.add(match)
         await s.commit()

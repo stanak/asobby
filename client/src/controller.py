@@ -197,6 +197,7 @@ class Controller:
         self._close_pending = False
         self._result_reported = False
         self._last_ko_fingerprint = ""
+        self._last_ko_played_at = 0.0
         self._round_battle_engaged = False
         self._round_char_ids: tuple[Optional[int], Optional[int]] = (None, None)
         self._pending_local_match: Optional[dict] = None
@@ -1254,6 +1255,7 @@ class Controller:
                             guest_char=act.payload.get("guest_char"),
                             host_profile=act.payload.get("host_profile", ""),
                             guest_profile=act.payload.get("guest_profile", ""),
+                            played_at=act.payload.get("played_at", 0),
                         )
                         self._replay_result_reported = True
                         self.log_sink(
@@ -1271,6 +1273,7 @@ class Controller:
                             guest_char=act.payload.get("guest_char"),
                             host_profile=act.payload.get("host_profile", ""),
                             guest_profile=act.payload.get("guest_profile", ""),
+                            played_at=act.payload.get("played_at", 0),
                         )
                         if resp.get("recorded") or resp.get("reason") == "duplicate":
                             self._replay_result_reported = True
@@ -1426,6 +1429,7 @@ class Controller:
             self._last_ko_fingerprint = ko_fp
             self._round_battle_engaged = False
             self._round_char_ids = (None, None)
+            self._last_ko_played_at = time.time()
             my_side = "host" if st.net_side == "host" else "client"
             winner = "host" if st.lwin == 2 else "guest"
             ranked = 0
@@ -1443,6 +1447,7 @@ class Controller:
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
                 "ranked": ranked,
+                "played_at": self._last_ko_played_at,
             }
             self._pending_local_match = payload
             self._handle_session_score(payload)
@@ -1471,6 +1476,7 @@ class Controller:
                 "guest_char": guest_char,
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
+                "played_at": self._last_ko_played_at or time.time(),
             })
 
         # クライアント側: ホストが asobby 非導入でも戦績を補完報告する
@@ -1495,6 +1501,7 @@ class Controller:
                 "guest_char": guest_char,
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
+                "played_at": self._last_ko_played_at or time.time(),
             })
 
         # -----------------
@@ -1510,6 +1517,7 @@ class Controller:
                 # btl_mode!=5 への一瞬の落ち込みでリセットすると二重登録になる。
                 self._result_reported = False
                 self._last_ko_fingerprint = ""
+                self._last_ko_played_at = 0.0
 
         if (
             is_net_battle

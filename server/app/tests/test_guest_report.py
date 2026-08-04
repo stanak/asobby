@@ -291,10 +291,11 @@ async def test_host_result_without_guest_ip_promotes_ranked():
         await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
         await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
 
+        played_at = time.time()
         guest_token = bearer_token("888", "guest")
         guest_res = await client.post(
             "/matches/report",
-            json=RANKED_MATCH_PROFILES,
+            json={**RANKED_MATCH_PROFILES, "played_at": played_at},
             headers={"Authorization": f"Bearer {guest_token}"},
         )
         assert guest_res.json()["recorded"] is True
@@ -321,6 +322,7 @@ async def test_host_result_without_guest_ip_promotes_ranked():
             json={
                 "id": post["id"],
                 "owner_token": owner_token,
+                "played_at": played_at,
                 **RANKED_MATCH_PROFILES,
             },
         )
@@ -343,16 +345,64 @@ async def test_host_result_without_guest_ip_promotes_ranked():
 
 
 @pytest.mark.asyncio
+async def test_guest_and_sync_same_played_at_dedup():
+    """guest 報告と sync が同一 played_at・プロファイルなら 1 行に dedup される。"""
+    async with app_client() as client:
+        await create_user("888", name="guest", rank="normal")
+
+        played_at = time.time()
+        guest_token = bearer_token("888", "guest")
+        guest_body = {**RANKED_MATCH_PROFILES, "played_at": played_at}
+        guest_res = await client.post(
+            "/matches/report",
+            json=guest_body,
+            headers={"Authorization": f"Bearer {guest_token}"},
+        )
+        assert guest_res.json()["recorded"] is True
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            promoted_id = list(res_m.scalars().all())[0].id
+
+        sync_res = await client.post(
+            "/matches/sync",
+            json={
+                "matches": [{
+                    "client_id": "b" * 32,
+                    "played_at": played_at,
+                    "my_side": "client",
+                    "winner": RANKED_MATCH_PROFILES["winner"],
+                    "my_char": RANKED_MATCH_PROFILES["guest_char"],
+                    "opp_char": RANKED_MATCH_PROFILES["host_char"],
+                    "my_profile": RANKED_MATCH_PROFILES["guest_profile"],
+                    "opp_profile": RANKED_MATCH_PROFILES["host_profile"],
+                    "ranked": False,
+                }],
+            },
+            headers={"Authorization": f"Bearer {guest_token}"},
+        )
+        assert sync_res.status_code == 200
+        assert sync_res.json()["results"][0]["status"] == "duplicate"
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            matches = list(res_m.scalars().all())
+            assert len(matches) == 1
+            assert matches[0].id == promoted_id
+
+
+@pytest.mark.asyncio
 async def test_sync_promotes_guest_report_ranked():
     """host sync (ranked=true) が先行ゲスト報告を昇格する。"""
     async with app_client() as client:
         await create_user("999", name="host", rank="normal")
         await create_user("888", name="guest", rank="normal")
 
+        played_at = time.time()
         guest_token = bearer_token("888", "guest")
         guest_res = await client.post(
             "/matches/report",
-            json=RANKED_MATCH_PROFILES,
+            json={**RANKED_MATCH_PROFILES, "played_at": played_at},
             headers={"Authorization": f"Bearer {guest_token}"},
         )
         assert guest_res.json()["recorded"] is True
@@ -368,7 +418,7 @@ async def test_sync_promotes_guest_report_ranked():
             json={
                 "matches": [{
                     "client_id": client_id,
-                    "played_at": time.time(),
+                    "played_at": played_at,
                     "my_side": "host",
                     "winner": "host",
                     "my_char": RANKED_MATCH_PROFILES["host_char"],
