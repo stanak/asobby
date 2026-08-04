@@ -93,7 +93,7 @@ def _should_cluster(a: db.Match, b: db.Match) -> bool:
         return dt <= 60
 
     # host 報告 + sync (同一対戦)
-    if sources <= {"host", "sync"}:
+    if sources == {"host", "sync"}:
         return dt <= 180
 
     # host + guest (promote 漏れ)
