@@ -752,6 +752,79 @@ async def promote_guest_match(
         return match
 
 
+async def count_ranked_streak_before(
+    host_user_id: str,
+    *,
+    host_profile: str,
+    guest_profile: str,
+    guest_user_id: Optional[str],
+    match_rank: Optional[str],
+    before: datetime,
+    gap_minutes: int = 30,
+) -> int:
+    """anchor より前の同一対戦相手との連続ランクマ試合数 (30 分超の空白で区切る)。"""
+    clauses = [
+        Match.host_user_id == host_user_id,
+        Match.winner != "",
+        Match.ranked.is_(True),
+        Match.played_at.is_not(None),
+        Match.played_at < before,
+        Match.host_profile == host_profile,
+        Match.guest_profile == guest_profile,
+    ]
+    if guest_user_id:
+        clauses.append(Match.guest_user_id == guest_user_id)
+    if match_rank:
+        clauses.append(Match.match_rank == match_rank)
+
+    async with session() as s:
+        res = await s.execute(
+            select(Match)
+            .where(*clauses)
+            .order_by(Match.played_at.desc())
+            .limit(10)
+        )
+        matches = list(res.scalars().all())
+
+    gap_sec = gap_minutes * 60
+    count = 0
+    prev_ts: Optional[float] = None
+    for m in matches:
+        if m.played_at is None:
+            break
+        ts = m.played_at.timestamp()
+        if m.played_at.tzinfo is None:
+            ts = m.played_at.replace(tzinfo=timezone.utc).timestamp()
+        if prev_ts is not None and prev_ts - ts > gap_sec:
+            break
+        count += 1
+        prev_ts = ts
+    return count
+
+
+async def find_guest_user_id_by_profiles(
+    host_profile: str,
+    guest_profile: str,
+) -> Optional[str]:
+    """プロファイル一致の直近 match から guest_user_id を推定する。"""
+    if not host_profile or not guest_profile:
+        return None
+    async with session() as s:
+        res = await s.execute(
+            select(Match.guest_user_id)
+            .where(
+                Match.host_profile == host_profile,
+                Match.guest_profile == guest_profile,
+                Match.guest_user_id.is_not(None),
+                Match.winner != "",
+            )
+            .order_by(Match.played_at.desc())
+            .limit(1)
+        )
+        uid = res.scalar_one_or_none()
+        return str(uid) if uid else None
+
+
 async def fetch_user_matches(user_id: str, limit: int = 1000) -> list[Match]:
     """ユーザーの確定済み対戦を played_at 降順で返す。"""
     async with session() as s:

@@ -253,6 +253,7 @@ class Controller:
         self._session_client_wins: int = 0
         self._session_my_wins: int = 0
         self._session_my_losses: int = 0
+        self._session_ranked_games: int = 0
 
         # ローカル天則がネット対戦フロー中 (ロビー Ping を止める)
         self._local_net_active: bool = False
@@ -533,6 +534,7 @@ class Controller:
             self._session_client_wins = 0
             self._session_my_wins = 0
             self._session_my_losses = 0
+            self._session_ranked_games = 0
 
         winner = str(payload.get("winner", ""))
         my_side = str(payload.get("my_side", ""))
@@ -548,6 +550,9 @@ class Controller:
             self._session_my_wins += 1
         else:
             self._session_my_losses += 1
+
+        if int(payload.get("ranked", 0)):
+            self._session_ranked_games += 1
 
         score = f"{self._session_host_wins}-{self._session_client_wins}"
         if self.session_score_notify_enabled():
@@ -1458,6 +1463,7 @@ class Controller:
                 st.net_side == "host"
                 and self.has_active_post()
                 and self.my_post.post_type == "ranked"
+                and self._session_ranked_games < 3
             ):
                 ranked = 1
             payload = {

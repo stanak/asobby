@@ -79,6 +79,8 @@ RANKED_EVAL_MIN_GAMES = 30
 RANKED_EVAL_WINDOW = 30
 # 1 セッション (ゲスト接続) でランクマ扱いになるのは最初の 3 戦まで
 RANKED_SESSION_MAX_GAMES = 3
+# この分数以上空くと別セッション (sync 遅延時の streak 判定)
+RANKED_SESSION_GAP_MINUTES = 30
 
 # 昇降格ルール (rank -> promote_at, demote_at, promote_to, demote_to)
 # promote_at / demote_at は None なら該当方向の判定なし
@@ -112,6 +114,68 @@ def refresh_ranked_active(rec: PostRecord) -> None:
     rec.post.ranked_active = ranked_session_active(
         rec.post, rec.guest_user_id, rec.guest_rank
     )
+
+
+def _find_active_ranked_record(
+    host_user_id: str,
+    guest_user_id: Optional[str],
+) -> Optional[PostRecord]:
+    """ホストの進行中ランクマ募集 (同一ゲスト) を返す。"""
+    if not guest_user_id:
+        return None
+    for rec in RECORDS.values():
+        if rec.owner_user_id != host_user_id:
+            continue
+        if rec.post.post_type != "ranked":
+            continue
+        if rec.guest_user_id == guest_user_id:
+            return rec
+    return None
+
+
+async def resolve_ranked_for_host_session(
+    host_user_id: str,
+    *,
+    guest_user_id: Optional[str],
+    host_profile: str,
+    guest_profile: str,
+    client_wants_ranked: bool,
+    match_rank: Optional[str],
+    played_at: datetime,
+) -> tuple[bool, Optional[str]]:
+    """ホスト側報告/sync の ranked 可否 (セッション 3 戦上限)。"""
+    if not client_wants_ranked:
+        return False, None
+
+    rec = _find_active_ranked_record(host_user_id, guest_user_id)
+    if rec is not None:
+        refresh_ranked_active(rec)
+        if not rec.post.ranked_active:
+            return False, None
+        if rec.session_games >= RANKED_SESSION_MAX_GAMES:
+            return False, None
+        return True, rec.post.rank
+
+    streak = await db.count_ranked_streak_before(
+        host_user_id,
+        host_profile=host_profile,
+        guest_profile=guest_profile,
+        guest_user_id=guest_user_id,
+        match_rank=match_rank,
+        before=played_at,
+        gap_minutes=RANKED_SESSION_GAP_MINUTES,
+    )
+    if streak >= RANKED_SESSION_MAX_GAMES:
+        return False, None
+    return True, match_rank
+
+
+async def _bump_session_games(host_user_id: str, guest_user_id: Optional[str]) -> None:
+    rec = _find_active_ranked_record(host_user_id, guest_user_id)
+    if rec is None:
+        return
+    rec.session_games += 1
+    await _persist_record(rec)
 
 NET_CHECKING = 2  # hisoutensoku net_status: 接続処理中 (キャラセレ/ロード)
 NET_ALIVE = 3  # hisoutensoku net_status: ホスト待ち
@@ -2025,6 +2089,23 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
         if near_match is not None:
             # 既存行に自分の側が未同定で残っていれば紐付ける
             side = "guest" if item.my_side == "client" else item.my_side
+            guest_uid = near_match.guest_user_id
+            if item.my_side == "host" and not guest_uid:
+                guest_uid = await db.find_guest_user_id_by_profiles(
+                    item.my_profile, item.opp_profile
+                )
+            is_ranked = item.ranked
+            match_rank = item.match_rank
+            if item.my_side == "host":
+                is_ranked, match_rank = await resolve_ranked_for_host_session(
+                    user_id,
+                    guest_user_id=guest_uid,
+                    host_profile=item.my_profile,
+                    guest_profile=item.opp_profile,
+                    client_wants_ranked=item.ranked,
+                    match_rank=item.match_rank,
+                    played_at=played_at,
+                )
             if (
                 side == "host"
                 and near_match.source in ("guest", "sync")
@@ -2040,10 +2121,12 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
                     guest_char=_normalize_char(item.opp_char),
                     host_profile=item.my_profile,
                     guest_profile=item.opp_profile,
-                    ranked=item.ranked,
-                    match_rank=item.match_rank,
+                    ranked=is_ranked,
+                    match_rank=match_rank if is_ranked else None,
                     played_at=played_at,
                 )
+                if is_ranked:
+                    await _bump_session_games(user_id, guest_uid)
             else:
                 await db.claim_match_side(near_match.id, side, user_id)
             results.append({
@@ -2054,6 +2137,23 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
             continue
 
         row = _sync_row_from_item(user_id, item, match_id, played_at)
+        if item.my_side == "host":
+            guest_uid = await db.find_guest_user_id_by_profiles(
+                item.my_profile, item.opp_profile
+            )
+            is_ranked, match_rank = await resolve_ranked_for_host_session(
+                user_id,
+                guest_user_id=guest_uid,
+                host_profile=item.my_profile,
+                guest_profile=item.opp_profile,
+                client_wants_ranked=item.ranked,
+                match_rank=item.match_rank,
+                played_at=played_at,
+            )
+            row["ranked"] = is_ranked
+            row["match_rank"] = match_rank if is_ranked else None
+            if is_ranked:
+                await _bump_session_games(user_id, guest_uid)
         to_insert.append(row)
         existing_ids.add(match_id)
         bisect.insort(near_existing, (_dt_ts(played_at), match_id))

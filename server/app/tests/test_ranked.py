@@ -119,6 +119,9 @@ async def test_ranked_match_flow():
         assert rec.post.guest_connected is True
         assert rec.post.ranked_active is True
 
+        import time
+
+        played_at = time.time()
         for i in range(4):
             r = await client.post(
                 "/posts/result",
@@ -130,6 +133,7 @@ async def test_ranked_match_flow():
                     "guest_char": 1,
                     "host_profile": "hp",
                     "guest_profile": "gp",
+                    "played_at": played_at + i * 200,
                 },
             )
             assert r.status_code == 200
@@ -404,10 +408,13 @@ async def test_challenge_upper_one_rank_above():
 
 
 @pytest.mark.asyncio
-async def test_challenge_upper_disabled():
+async def test_sync_respects_ranked_session_limit():
+    """sync も /posts/result と同様、同一セッション 4 戦目以降は ranked=false。"""
+    import time
+
     async with app_client() as client:
-        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
-        await create_user("888", name="guest", last_ip="5.6.7.8", rank="ex")
+        await create_user("999", name="host", last_ip="1.2.3.4")
+        await create_user("888", name="guest", last_ip="5.6.7.8")
 
         token = bearer_token("999", "host")
         res = await client.post(
@@ -416,6 +423,54 @@ async def test_challenge_upper_disabled():
             headers={"Authorization": f"Bearer {token}"},
         )
         post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
         rec = main.RECORDS[post["id"]]
         await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
-        assert rec.post.ranked_active is False
+
+        played_at = time.time()
+        for i in range(3):
+            r = await client.post(
+                "/posts/result",
+                json={
+                    "id": post["id"],
+                    "owner_token": owner_token,
+                    "winner": "host",
+                    "host_char": 0,
+                    "guest_char": 1,
+                    "host_profile": "hp",
+                    "guest_profile": "gp",
+                    "played_at": played_at + i * 200,
+                },
+            )
+            assert r.json()["ranked"] is True
+
+        sync_res = await client.post(
+            "/matches/sync",
+            json={
+                "matches": [{
+                    "client_id": "d" * 32,
+                    "played_at": played_at + 600,
+                    "my_side": "host",
+                    "winner": "host",
+                    "my_char": 0,
+                    "opp_char": 1,
+                    "my_profile": "hp",
+                    "opp_profile": "gp",
+                    "ranked": True,
+                    "match_rank": "normal",
+                }],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert sync_res.status_code == 200
+        assert sync_res.json()["results"][0]["status"] == "imported"
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            matches = list(res_m.scalars().all())
+            assert len(matches) == 4
+            ranked_count = sum(1 for m in matches if m.ranked)
+            assert ranked_count == 3
+            sync_match = await s.get(db.Match, sync_res.json()["results"][0]["server_id"])
+            assert sync_match is not None
+            assert sync_match.ranked is False
