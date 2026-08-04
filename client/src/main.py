@@ -89,7 +89,7 @@ class TrayApp:
             log=lambda m: self._append_log("warn", m),
         )
         if not shown:
-            self._append_log("warn", "勝敗数通知: トースト非表示のためトレイ通知にフォールバック")
+            self._append_log("warn", t("log.toast_tray_fallback"))
             self._notify(text)
         if self.icon:
             try:

@@ -84,7 +84,7 @@ def show_request_toast(
     """ボタン付き Windows トーストを表示する。非対応環境では False。"""
     if not INTERACTIVE_AVAILABLE:
         if log:
-            log(f"windows-toasts が利用できないため通常通知にフォールバックします: {IMPORT_ERROR}")
+            log(t("toast.error.unavailable", detail=IMPORT_ERROR or ""))
         return False
     try:
 
@@ -103,7 +103,7 @@ def show_request_toast(
         return True
     except Exception as e:
         if log:
-            log(f"ボタン付きトーストの表示に失敗: {e!r}")
+            log(t("toast.error.request_failed", detail=repr(e)))
         return False
 
 
@@ -118,8 +118,7 @@ def show_info_toast(
     if not INTERACTIVE_AVAILABLE:
         if log:
             log(
-                "windows-toasts が利用できないためトーストを表示できません: "
-                f"{IMPORT_ERROR}"
+                t("toast.error.info_unavailable", detail=IMPORT_ERROR or "")
             )
         return False
     try:
@@ -134,7 +133,7 @@ def show_info_toast(
 
         def on_failed(args) -> None:
             if log:
-                log(f"トースト表示失敗 (OS): {args!r}")
+                log(t("toast.error.os_failed", detail=repr(args)))
 
         toast.on_failed = on_failed
         _get_toaster().show_toast(toast)
@@ -143,5 +142,5 @@ def show_info_toast(
         return True
     except Exception as e:
         if log:
-            log(f"トーストの表示に失敗: {e!r}")
+            log(t("toast.error.failed", detail=repr(e)))
         return False

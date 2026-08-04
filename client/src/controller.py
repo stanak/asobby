@@ -606,15 +606,15 @@ class Controller:
         self.config_mgr.set_value("options", "copy_addr_on_host", bool(enabled))
         self.log_sink(
             "info",
-            f"Copy addr on host: {'enabled' if enabled else 'disabled'}",
+            t("log.copy_addr_toggle", state=t("common.on" if enabled else "common.off")),
         )
 
     def _copy_addr_to_clipboard(self, text: str) -> None:
         if clipboard_util.copy_text(text):
-            self.log_sink("info", f"Copied host info to clipboard: {text}")
+            self.log_sink("info", t("log.clipboard_copied", addr=text))
             self.notify_sink(t("notify.copy_addr", addr=text))
         else:
-            self.log_sink("warn", "Clipboard copy failed")
+            self.log_sink("warn", t("log.clipboard_failed"))
 
     def _copy_host_info_from_post_data(self, post_data: dict) -> None:
         """サーバー応答またはローカルプローブ結果をクリップボードへ反映。"""
@@ -727,7 +727,7 @@ class Controller:
                 }
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 401:
-                    self._clear_expired_session()
+                    self._clear_expired_session(notify=True)
                 return
             except httpx.HTTPError:
                 return
@@ -769,7 +769,7 @@ class Controller:
         else:
             self._detect_pause_until = time.time() + seconds
         label = self._pause_duration_label(seconds)
-        self.log_sink("info", f"Auto posting paused for {label}")
+        self.log_sink("info", t("log.auto_posting_paused", label=label))
         self.notify_sink(t("notify.pause", label=label))
         self.pause_ui_sink()
 
@@ -777,7 +777,7 @@ class Controller:
         if self._detect_pause_until:
             self._detect_pause_until = 0.0
             self._host_unreachable_notified = False
-            self.log_sink("info", "Auto posting resumed manually")
+            self.log_sink("info", t("log.auto_posting_resumed"))
             self.notify_sink(t("notify.pause_resumed"))
             self.pause_ui_sink()
 
@@ -883,11 +883,7 @@ class Controller:
         if not ok:
             if not self._host_unreachable_notified:
                 self._host_unreachable_notified = True
-                self.log_sink(
-                    "error",
-                    "Host not reachable while posting paused. "
-                    "Please open the port or start autopunch.",
-                )
+                self.log_sink("error", t("log.host_unreachable_paused"))
                 self.notify_sink(t("notify.post_failed"), important=True)
         else:
             self._host_unreachable_notified = False
@@ -898,14 +894,10 @@ class Controller:
             return
         self.detect_error = err
         if err == "access_denied":
-            self.log_sink(
-                "warn",
-                "th123.exe found but memory is not readable (access denied). "
-                "Game may be running as administrator",
-            )
+            self.log_sink("warn", t("log.memory_access_denied"))
             self.notify_sink(t("notify.detect_access_denied"))
         elif not err:
-            self.log_sink("info", "Memory read recovered")
+            self.log_sink("info", t("log.memory_recovered"))
         self.my_post_sink(self.my_post)  # トレイの状態表示を更新
 
     def _log_detect_snapshot(self, st: DetectionState) -> None:
@@ -1107,12 +1099,12 @@ class Controller:
             if name and name != self.discord_user:
                 self.discord_user = name
                 self.config_mgr.set_value("auth", "username", name)
-            self.log_sink("info", f"Discord ログイン中: {self.discord_user}")
+            self.log_sink("info", t("log.discord_logged_in", name=self.discord_user))
             await self._refresh_lobby_badge()
             await self._sync_replay_refusal_to_server()
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
-                self._clear_expired_session()
+                self._clear_expired_session(notify=True)
         except httpx.HTTPError:
             pass  # オフライン等。セッションは保持したままにする
 
@@ -1345,7 +1337,7 @@ class Controller:
         ):
             self._detect_pause_until = 0.0
             self._host_unreachable_notified = False
-            self.log_sink("info", "Auto posting pause expired")
+            self.log_sink("info", t("log.auto_posting_resumed_expired"))
             self.notify_sink(t("notify.pause_resumed"))
             self.pause_ui_sink()
 
@@ -1617,10 +1609,7 @@ class Controller:
                     ):
                         self._notified_login_required = True
                         self.notify_sink(t("notify.login_required_post"))
-                        self.log_sink(
-                            "warn",
-                            "Recruitment requires Discord login",
-                        )
+                        self.log_sink("warn", t("log.login_required_recruit"))
                 elif not self._create_pending and now >= self._next_create_ts:
                     self._create_pending = True
                     self._last_sent_payload = payload
@@ -2214,7 +2203,7 @@ class Controller:
                 if force:
                     url += "&force=1"
                 open_browser(url)
-                self.log_sink("info", "ブラウザで Discord ログインを確認しています...")
+                self.log_sink("info", t("log.discord_login_checking"))
                 code = await asyncio.wait_for(code_fut, timeout=180.0)
             finally:
                 server.close()
@@ -2230,21 +2219,29 @@ class Controller:
                 )
                 self._notified_login_required = False
                 self._auto_login_attempted = False
-                self.log_sink("info", f"Discord にログインしました: {self.discord_user}")
+                self.log_sink(
+                    "info",
+                    t("log.discord_logged_in", name=self.discord_user),
+                )
                 self.notify_sink(t("notify.discord_login_ok", name=self.discord_user))
                 await self._refresh_lobby_badge()
                 await self._sync_replay_refusal_to_server()
         except asyncio.TimeoutError:
-            self.log_sink("warn", "Discord ログインがタイムアウトしました")
+            self.log_sink("warn", t("log.discord_login_timeout"))
+            self.notify_sink(t("notify.discord_login_timeout"))
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 503:
-                self.log_sink("error", "サーバーで Discord ログインが設定されていません")
+                self.log_sink("error", t("log.discord_login_not_configured"))
+                self.notify_sink(t("notify.discord_login_not_configured"))
             elif e.response.status_code == 404:
-                self.log_sink("warn", "ログイン要求が期限切れになりました。もう一度お試しください")
+                self.log_sink("warn", t("log.discord_login_expired"))
+                self.notify_sink(t("notify.discord_login_expired"))
             else:
-                self.log_sink("error", f"Discord ログインに失敗: {e}")
+                self.log_sink("error", t("log.discord_login_failed", error=e))
+                self.notify_sink(t("notify.discord_login_failed"))
         except httpx.HTTPError as e:
-            self.log_sink("error", f"Discord ログインに失敗: {e}")
+            self.log_sink("error", t("log.discord_login_failed", error=e))
+            self.notify_sink(t("notify.discord_login_failed"))
         finally:
             self._login_in_progress = False
 
@@ -2274,9 +2271,9 @@ class Controller:
         self.lobby_activity_sink()
         # 明示的なログアウト後はブラウザ連携の自動ログインを走らせない
         self._auto_login_attempted = True
-        self.log_sink("info", "Discord からログアウトしました")
+        self.log_sink("info", t("log.discord_logged_out"))
 
-    def _clear_expired_session(self) -> None:
+    def _clear_expired_session(self, *, notify: bool = False) -> None:
         self.api.session_token = ""
         self.discord_user = ""
         self.config_mgr.set_values("auth", session_token="", username="")
@@ -2284,7 +2281,9 @@ class Controller:
         self.lobby_activity_sink()
         # 期限切れは自動再ログインの対象にする
         self._auto_login_attempted = False
-        self.log_sink("warn", "Discord セッションが期限切れです。再ログインしてください")
+        self.log_sink("warn", t("log.discord_session_expired"))
+        if notify:
+            self.notify_sink(t("notify.session_expired"))
 
     # -----------------
     # external updates
