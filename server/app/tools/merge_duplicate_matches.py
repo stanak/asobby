@@ -75,19 +75,32 @@ def _should_cluster(a: db.Match, b: db.Match) -> bool:
         return False
 
     sources = {a.source, b.source}
-    if sources <= {"host"}:
-        t1, t2 = _ts(a), _ts(b)
-        if t1 is None or t2 is None:
-            return False
-        return abs(t1 - t2) <= 90
-
-    if "guest" not in sources and "sync" not in sources:
-        return False
-
     t1, t2 = _ts(a), _ts(b)
-    if t1 is not None and t2 is not None and abs(t1 - t2) <= WINDOW_SEC:
-        return True
-    return _same_players(a, b) and ("guest" in sources and "sync" in sources)
+    if t1 is None or t2 is None:
+        return False
+    dt = abs(t1 - t2)
+
+    # 典型: ゲスト報告 + ホスト/ゲスト sync
+    if "guest" in sources and "sync" in sources:
+        return dt <= WINDOW_SEC or _same_players(a, b)
+
+    # 二重 sync (再送)
+    if sources == {"sync"}:
+        return dt <= 90
+
+    # 二重ゲスト報告 (同一 KO)
+    if sources == {"guest"}:
+        return dt <= 60
+
+    # host 報告 + sync (同一対戦)
+    if sources <= {"host", "sync"}:
+        return dt <= 180
+
+    # host + guest (promote 漏れ)
+    if sources == {"guest", "host"}:
+        return dt <= 180
+
+    return False
 
 
 def _cluster_bucket(group: list[db.Match]) -> list[list[db.Match]]:
