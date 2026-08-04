@@ -107,9 +107,11 @@ async def main() -> int:
     )
     args = parser.parse_args()
 
-    if not db.is_configured():
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
         print("DATABASE_URL が未設定です", file=sys.stderr)
         return 1
+    db.init_engine(url)
 
     demote_ids = await find_demote_ids()
     print(f"demote candidates: {len(demote_ids)}")
