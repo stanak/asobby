@@ -99,15 +99,7 @@ def ranked_session_active(post: Post, guest_user_id: str, guest_rank: str) -> bo
     """現在接続中ゲストとの対戦がランクマ扱いか。"""
     if post.post_type != "ranked" or not guest_user_id or not guest_rank:
         return False
-    if guest_rank == post.rank:
-        return True
-    if not post.challenge_upper:
-        return False
-    host_ord = RANK_ORDER.get(post.rank)
-    guest_ord = RANK_ORDER.get(guest_rank)
-    if host_ord is None or guest_ord is None:
-        return False
-    return guest_ord == host_ord + 1
+    return guest_rank == post.rank
 
 
 def refresh_ranked_active(rec: PostRecord) -> None:
@@ -335,7 +327,6 @@ class Post:
     guest_avatar: str = ""
     guest_connected: bool = False  # プローブでゲスト検出中
     ranked_active: bool = False  # 現在のゲストとのセッションがランクマ扱いか
-    challenge_upper: bool = False  # ランクマ時に 1 段上位帯のゲストもランクマ扱い
     ping_warn_enabled: bool = True  # 高 Ping 警告をホストへ送るか
     ping_warn_ms: int = PING_WARN_MS_DEFAULT  # この RTT 以上の viewer ping でホストへ警告
     ping_warn_giuroll_ms: int = PING_WARN_GIUROLL_MS_DEFAULT  # Giuroll ホスト向け警告しきい値
@@ -397,7 +388,8 @@ def post_record_to_dict(rec: PostRecord) -> dict[str, Any]:
 
 
 def post_record_from_dict(data: dict[str, Any]) -> PostRecord:
-    post_data = data.get("post") or {}
+    post_data = dict(data.get("post") or {})
+    post_data.pop("challenge_upper", None)
     return PostRecord(
         post=Post(**post_data),
         owner_token=str(data.get("owner_token", "")),
@@ -430,7 +422,7 @@ class CreatePostIn(BaseModel):
     autopunch: bool = False
     match_status: str = Field(default="", max_length=200)
     net_status: int = 0
-    challenge_upper: bool = False
+    challenge_upper: bool = False  # 互換用 (無視)
     ping_warn_enabled: bool = True
     ping_warn_ms: int = Field(default=PING_WARN_MS_DEFAULT, ge=PING_WARN_MS_MIN, le=PING_WARN_MS_MAX)
     ping_warn_giuroll_ms: int = Field(
@@ -2716,7 +2708,6 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         reachability_uncertain=reachability_uncertain,
         match_status=body.match_status,
         net_status=body.net_status,
-        challenge_upper=body.challenge_upper,
         ping_warn_enabled=body.ping_warn_enabled,
         ping_warn_ms=body.ping_warn_ms,
         ping_warn_giuroll_ms=body.ping_warn_giuroll_ms,
@@ -2803,7 +2794,6 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
         p.reachability_uncertain = True
 
     p.post_type = body.post_type
-    p.challenge_upper = body.challenge_upper
     p.ping_warn_enabled = body.ping_warn_enabled
     p.ping_warn_ms = body.ping_warn_ms
     p.ping_warn_giuroll_ms = body.ping_warn_giuroll_ms

@@ -330,7 +330,7 @@
       "asobby の利用（募集の自動投稿・Web ロビー・戦績・チャットなど）には、トレイメニューから Discord ログインが必要です。",
     "guide.sectionRanked": "ランクマの仕様",
     "guide.rankedIntro":
-      "ランクマ募集で、同じランク帯の相手（または「格上に挑戦」ON 時は 1 段上位）と Discord ログイン済みの相手が対戦すると、条件を満たす対戦はランクマとして記録されます。",
+      "ランクマ募集で、同じランク帯の Discord ログイン済み相手と対戦すると、条件を満たす対戦はランクマとして記録されます。",
     "guide.rankedSessionLimit":
       "同じ相手との連続対戦では、ランクマとして数えられるのは最初の 3 戦までです。4 戦目以降はカジュアル扱いになります（募集タイプがランクマのままでも）。",
     "guide.rankedGuestReset":
@@ -393,6 +393,21 @@
       "ページを再読み込みするか、ロビー上部の「接続を再試行」を押す",
     "guide.highPingBrowserNote":
       "クライアント未起動の場合も Ping は「—」のままです。asobby トレイアイコンが表示されているかも確認してください。",
+    "guide.sectionVpn": "VPN 利用時の注意",
+    "guide.vpnIntro":
+      "asobby は公開 IP と UDP 到達性を使ってロビー掲載・接続確認を行います。VPN 利用時は経路が分かれると、トレイは「募集中」でも Web ロビーに載らないことがあります。",
+    "guide.vpnHostPostTitle": "ホストでロビーに載らないとき",
+    "guide.vpnHostPost1":
+      "対戦・募集中は VPN を OFF にするか、asobby クライアントと非想天則を VPN の除外リスト（スプリットトンネル）に入れてください。",
+    "guide.vpnHostPost2":
+      "UDP が遮断される VPN では AutoPunch の起動が必要です。直接接続できない環境では AP 表示（❓）になることがあります。",
+    "guide.vpnHostPost3":
+      "通知が「サーバーへ接続できません」の場合は HTTPS / VPN 回線、「接続確認が取れません」の場合は UDP 到達性の問題です。",
+    "guide.vpnRankedTitle": "ランクマ・ゲスト同定",
+    "guide.vpnRanked":
+      "API 通信 IP と天則 P2P の IP が一致しないと、相手が未ログイン扱いになりランクマにならないことがあります。対戦中は VPN 設定を変えないでください。",
+    "guide.vpnLimitation":
+      "VPN ON のまま確実に掲載する機能は今後追加予定です。現時点では上記の運用回避が最も確実です。",
     "guide.sectionIcon": "トレイアイコンの色",
     "guide.iconIdle": "灰色 — 待機中。天則でホストを立てると自動投稿を開始します。",
     "guide.iconRecruit": "緑 — 募集中。ロビーに掲載中です。",
@@ -404,7 +419,7 @@
       "Web ロビーをブラウザで開きます。募集一覧の閲覧・ロビーチャット・相手への定型メッセージ送信ができます（要 Discord ログイン）。",
     "guide.menu.settings.name": "投稿設定...",
     "guide.menu.settings.desc":
-      "募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、ランクマ時の「格上に挑戦」、高 Ping 警告 (ON/OFF・通常 60ms / Giuroll 100ms) を設定します。OK でサーバーへ反映されます。",
+      "募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、高 Ping 警告 (ON/OFF・通常 60ms / Giuroll 100ms) を設定します。OK でサーバーへ反映されます。",
     "guide.menu.pingWarn.name": "高 Ping 警告",
     "guide.menu.pingWarn.desc":
       "高 Ping 警告の ON/OFF を切り替えます。しきい値 (ms) の変更は「投稿設定...」から行います。",
@@ -429,9 +444,6 @@
     "guide.menu.copyAddr.name": "ホスト時に IP:Port と使用ツールをコピー",
     "guide.menu.copyAddr.desc":
       "ON にすると、募集開始時に接続アドレスと Giuroll / AutoPunch など必要な使用ツールをクリップボードへコピーします（直結可能なら AutoPunch は含めません）。",
-    "guide.menu.challengeUpper.name": "格上に挑戦",
-    "guide.menu.challengeUpper.desc":
-      "ランクマ募集時のみ表示。ON の間、1 段上位ランク帯の相手との対戦もランクマ扱いになります（ランクマモード時のみ）。",
     "guide.menu.reply.name": "リクエストに返信",
     "guide.menu.reply.desc":
       "ロビー閲覧者から Giuroll 使用依頼やカジュアルお誘いが届いたとき、承諾 / 拒否で返信します。未返信があるときだけ表示されます。",
@@ -506,7 +518,7 @@
     "guide.notifyLogin":
       "ログインが必要 — 募集の自動投稿などを行う前に Discord ログインしてください。",
     "guide.notifyCasual":
-      "カジュアル扱い — ランクマ募集でも、相手が未ログインまたはランク帯不一致（格上挑戦 OFF 時）だと戦績はカジュアルになります。",
+      "カジュアル扱い — ランクマ募集でも、相手が未ログインまたはランク帯不一致だと戦績はカジュアルになります。",
     "guide.notifyUpdate":
       "更新あり — 新しい exe が公開されたとき。トレイからダウンロードできます。",
     "guide.notifyHighPing":
@@ -827,7 +839,7 @@
       "Discord login from the tray menu is required to use asobby (auto-posting, web lobby, stats, chat, and more).",
     "guide.sectionRanked": "Ranked rules",
     "guide.rankedIntro":
-      "On ranked posts, qualifying matches against a logged-in opponent in the same band (or one band above with Challenge upper rank) are recorded as ranked.",
+      "On ranked posts, qualifying matches against a logged-in opponent in the same rank band are recorded as ranked.",
     "guide.rankedSessionLimit":
       "With the same opponent in one session, only the first 3 matches count as ranked. From the 4th onward they are casual, even if your post stays ranked.",
     "guide.rankedGuestReset":
@@ -890,6 +902,21 @@
       "Reload the page or click Retry connection at the top of the lobby",
     "guide.highPingBrowserNote":
       "Ping stays “—” if the client is not running too. Check that the asobby tray icon is visible.",
+    "guide.sectionVpn": "Using a VPN",
+    "guide.vpnIntro":
+      "asobby uses your public IP and UDP reachability to post to the lobby and verify hosts. With a VPN, split routes can leave the tray showing “recruiting” while the web lobby stays empty.",
+    "guide.vpnHostPostTitle": "When your host post does not appear",
+    "guide.vpnHostPost1":
+      "Turn VPN off while hosting, or add the asobby client and Hisoutensoku to your VPN split-tunnel / bypass list.",
+    "guide.vpnHostPost2":
+      "If your VPN blocks inbound UDP, start AutoPunch. Direct-only hosts may show AP (❓) on the lobby.",
+    "guide.vpnHostPost3":
+      "“Could not reach server” points to HTTPS / VPN connectivity; “could not verify your host” points to UDP reachability.",
+    "guide.vpnRankedTitle": "Ranked matches and guest identification",
+    "guide.vpnRanked":
+      "If API traffic and game P2P use different IPs, guests may stay unidentified and matches may count as casual. Do not change VPN settings mid-session.",
+    "guide.vpnLimitation":
+      "Posting reliably with VPN always on is planned for a future update. For now, the workarounds above are the most reliable.",
     "guide.sectionIcon": "Tray icon colors",
     "guide.iconIdle": "Gray — idle. Start a host in Hisoutensoku to begin auto-posting.",
     "guide.iconRecruit": "Green — recruiting. Your post is live on the lobby.",
@@ -901,7 +928,7 @@
       "Opens the web lobby in your browser: post list, lobby chat, and preset messages to hosts (Discord login required).",
     "guide.menu.settings.name": "Post settings...",
     "guide.menu.settings.desc":
-      "Post mode (casual / ranked), comment presets, stream URL presets, “Challenge upper rank” for ranked mode, and Ping warning thresholds (default 60ms / Giuroll 100ms). OK applies to the server.",
+      "Post mode (casual / ranked), comment presets, stream URL presets, and Ping warning thresholds (default 60ms / Giuroll 100ms). OK applies to the server.",
     "guide.menu.pingWarn.name": "High ping warnings",
     "guide.menu.pingWarn.desc":
       "Toggle high ping warnings on or off. Change thresholds (ms) in Post settings….",
@@ -926,9 +953,6 @@
     "guide.menu.copyAddr.name": "Copy IP:Port and required tools when hosting",
     "guide.menu.copyAddr.desc":
       "When enabled, copies your host address and required tools (Giuroll, AutoPunch, etc.) when recruiting starts. AutoPunch is omitted when direct connection works.",
-    "guide.menu.challengeUpper.name": "Challenge upper rank",
-    "guide.menu.challengeUpper.desc":
-      "Ranked posts only. While ON, matches against guests exactly one rank band above also count as ranked.",
     "guide.menu.reply.name": "Reply to requests",
     "guide.menu.reply.desc":
       "Accept or decline Giuroll requests and casual invites from lobby viewers. Shown only while requests are pending.",
@@ -1003,7 +1027,7 @@
     "guide.notifyLogin":
       "Login required — sign in with Discord before auto-posting and other features.",
     "guide.notifyCasual":
-      "Casual match — even on ranked posts, stats stay casual if the opponent is not logged in or ranks do not match (unless Challenge upper rank is on).",
+      "Casual match — even on ranked posts, stats stay casual if the opponent is not logged in or ranks do not match.",
     "guide.notifyUpdate":
       "Update available — a new exe is published; download it from the tray menu.",
     "guide.notifyHighPing":

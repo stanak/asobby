@@ -256,7 +256,6 @@ class TrayApp:
                 post_type=result["post_type"],
                 comment=result["comment"],
                 stream_url=result["stream_url"],
-                challenge_upper=result.get("challenge_upper", False),
             )
             if self.controller.has_active_post():
                 asyncio.run_coroutine_threadsafe(
@@ -572,13 +571,6 @@ class TrayApp:
         if self.icon:
             self.icon.update_menu()
 
-    def _toggle_challenge_upper(self) -> None:
-        self.controller.set_challenge_upper_enabled(
-            not self.controller.challenge_upper_enabled()
-        )
-        if self.icon:
-            self.icon.update_menu()
-
     def _toggle_ping_warn(self) -> None:
         self.controller.set_ping_warn_enabled(
             not self.controller.ping_warn_enabled()
@@ -679,12 +671,6 @@ class TrayApp:
             MenuItem(t("tray.post_type"), Menu(lambda: self._post_type_menu_items())),
             MenuItem(t("tray.comment"), Menu(lambda: self._comment_menu_items())),
             MenuItem(t("tray.stream"), Menu(lambda: self._stream_menu_items())),
-            MenuItem(
-                t("tray.challenge_upper"),
-                lambda: self._toggle_challenge_upper(),
-                checked=lambda item: self.controller.challenge_upper_enabled(),
-                visible=lambda item: self.controller.my_post.post_type == "ranked",
-            ),
             MenuItem(
                 lambda item: self._pause_menu_label(),
                 Menu(lambda: self._pause_menu_items()),

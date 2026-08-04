@@ -247,7 +247,7 @@
 
   <section class="panel">
     <h2 data-i18n="guide.sectionRanked">ランクマの仕様</h2>
-    <p data-i18n="guide.rankedIntro">ランクマ募集で、同じランク帯の相手（または「格上に挑戦」ON 時は 1 段上位）と Discord ログイン済みの相手が対戦すると、条件を満たす対戦はランクマとして記録されます。</p>
+    <p data-i18n="guide.rankedIntro">ランクマ募集で、同じランク帯の Discord ログイン済み相手と対戦すると、条件を満たす対戦はランクマとして記録されます。</p>
     <p data-i18n="guide.rankedSessionLimit">同じ相手との連続対戦では、ランクマとして数えられるのは最初の 3 戦までです。4 戦目以降はカジュアル扱いになります（募集タイプがランクマのままでも）。</p>
     <p data-i18n="guide.rankedGuestReset">相手が切断したり、別の人が入ったりするとセッションが切り替わり、対戦カウントがリセットされます。一度 3 戦終えた相手でも、間に別の人が入ったあとなら、再びランクマ 3 戦が可能です。</p>
     <p data-i18n="guide.rankedEval">昇格・降格は、現在のランク帯における直近 30 戦の勝率で判定します（30 戦揃ってから判定されます）。</p>
@@ -334,6 +334,20 @@
   </section>
 
   <section class="panel">
+    <h2 data-i18n="guide.sectionVpn">VPN 利用時の注意</h2>
+    <p data-i18n="guide.vpnIntro">asobby は公開 IP と UDP 到達性を使ってロビー掲載・接続確認を行います。VPN 利用時は経路が分かれると、トレイは「募集中」でも Web ロビーに載らないことがあります。</p>
+    <h3 data-i18n="guide.vpnHostPostTitle">ホストでロビーに載らないとき</h3>
+    <ul>
+      <li data-i18n="guide.vpnHostPost1">対戦・募集中は VPN を OFF にするか、asobby クライアントと非想天則を VPN の除外リスト（スプリットトンネル）に入れてください。</li>
+      <li data-i18n="guide.vpnHostPost2">UDP が遮断される VPN では AutoPunch の起動が必要です。直接接続できない環境では AP 表示（❓）になることがあります。</li>
+      <li data-i18n="guide.vpnHostPost3">通知が「サーバーへ接続できません」の場合は HTTPS / VPN 回線、「接続確認が取れません」の場合は UDP 到達性の問題です。</li>
+    </ul>
+    <h3 data-i18n="guide.vpnRankedTitle">ランクマ・ゲスト同定</h3>
+    <p data-i18n="guide.vpnRanked">API 通信 IP と天則 P2P の IP が一致しないと、相手が未ログイン扱いになりランクマにならないことがあります。対戦中は VPN 設定を変えないでください。</p>
+    <p class="note" data-i18n="guide.vpnLimitation">VPN ON のまま確実に掲載する機能は今後追加予定です。現時点では上記の運用回避が最も確実です。</p>
+  </section>
+
+  <section class="panel">
     <h2 data-i18n="guide.sectionIcon">トレイアイコンの色</h2>
     <ul class="icon-list">
       <li>
@@ -361,7 +375,7 @@
     </div>
     <div class="menu-item">
       <h3 data-i18n="guide.menu.settings.name">投稿設定...</h3>
-      <p data-i18n="guide.menu.settings.desc">募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、ランクマ時の「格上に挑戦」、高 Ping 警告 (ON/OFF・通常 60ms / Giuroll 100ms) を設定します。OK でサーバーへ反映されます。</p>
+      <p data-i18n="guide.menu.settings.desc">募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、高 Ping 警告 (ON/OFF・通常 60ms / Giuroll 100ms) を設定します。OK でサーバーへ反映されます。</p>
     </div>
     <div class="menu-item">
       <h3 data-i18n="guide.menu.pingWarn.name">高 Ping 警告</h3>
@@ -394,10 +408,6 @@
     <div class="menu-item">
       <h3 data-i18n="guide.menu.copyAddr.name">ホスト時に IP:Port と使用ツールをコピー</h3>
       <p data-i18n="guide.menu.copyAddr.desc">ON にすると、募集開始時に接続アドレスと Giuroll / AutoPunch など必要な使用ツールをクリップボードへコピーします（直結可能なら AutoPunch は含めません）。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.challengeUpper.name">格上に挑戦</h3>
-      <p data-i18n="guide.menu.challengeUpper.desc">ランクマ募集時のみ表示。ON の間、1 段上位ランク帯の相手との対戦もランクマ扱いになります（ランクマモード時のみ）。</p>
     </div>
     <div class="menu-item">
       <h3 data-i18n="guide.menu.reply.name">リクエストに返信</h3>
@@ -481,7 +491,7 @@
       <li data-i18n="guide.notifyLogin">ログインが必要 — 募集の自動投稿などを行う前に Discord ログインしてください。</li>
       <li data-i18n="guide.notifySessionExpired">セッション期限切れ — Discord ログインの有効期限が切れたとき。再ログインを促します。</li>
       <li data-i18n="guide.notifyDiscordLogin">Discord ログイン — 成功・タイムアウト・失敗時に通知します。</li>
-      <li data-i18n="guide.notifyCasual">カジュアル扱い — ランクマ募集でも、相手が未ログインまたはランク帯不一致（格上挑戦 OFF 時）だと戦績はカジュアルになります。</li>
+      <li data-i18n="guide.notifyCasual">カジュアル扱い — ランクマ募集でも、相手が未ログインまたはランク帯不一致だと戦績はカジュアルになります。</li>
       <li data-i18n="guide.notifySessionScore">勝敗数 — 同一相手との連戦で、ホスト-クライアント形式 (例: 「勝敗数 2-1 (ホスト-クライアント)」) を通知します。</li>
       <li data-i18n="guide.notifyHighPing">高 Ping 警告 — 接続中ゲストの Ping がしきい値以上のとき、ホスト PC にトースト通知します。</li>
       <li data-i18n="guide.notifyRequest">リクエスト — ロビー閲覧者から Giuroll 使用依頼やカジュアルお誘いが届いたとき。ボタン付きトーストで承諾 / 拒否できます。</li>

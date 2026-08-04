@@ -360,22 +360,18 @@ async def test_legacy_post_body():
         assert res.json()["post"]["post_type"] == "casual"
 
 
-def test_ranked_session_active_challenge_upper():
-    post = main.Post(post_type="ranked", rank="normal", challenge_upper=True)
+def test_ranked_session_active_same_band_only():
+    post = main.Post(post_type="ranked", rank="normal")
     assert main.ranked_session_active(post, "guest", "normal") is True
-    assert main.ranked_session_active(post, "guest", "ex") is True
-    assert main.ranked_session_active(post, "guest", "hard") is False
-    assert main.ranked_session_active(post, "", "ex") is False
+    assert main.ranked_session_active(post, "guest", "ex") is False
+    assert main.ranked_session_active(post, "", "normal") is False
 
-    post_off = main.Post(post_type="ranked", rank="normal", challenge_upper=False)
-    assert main.ranked_session_active(post_off, "guest", "ex") is False
-
-    casual = main.Post(post_type="casual", rank="normal", challenge_upper=True)
-    assert main.ranked_session_active(casual, "guest", "ex") is False
+    casual = main.Post(post_type="casual", rank="normal")
+    assert main.ranked_session_active(casual, "guest", "normal") is False
 
 
 @pytest.mark.asyncio
-async def test_challenge_upper_one_rank_above():
+async def test_cross_rank_band_not_ranked():
     async with app_client() as client:
         await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
         await create_user("888", name="guest", last_ip="5.6.7.8", rank="ex")
@@ -383,18 +379,14 @@ async def test_challenge_upper_one_rank_above():
         token = bearer_token("999", "host")
         res = await client.post(
             "/posts",
-            json={
-                "post_type": "ranked",
-                "addr": "1.2.3.4:10800",
-                "challenge_upper": True,
-            },
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
             headers={"Authorization": f"Bearer {token}"},
         )
         post = res.json()["post"]
         owner_token = res.json()["owner_token"]
         rec = main.RECORDS[post["id"]]
         await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
-        assert rec.post.ranked_active is True
+        assert rec.post.ranked_active is False
 
         r = await client.post(
             "/posts/result",
@@ -404,7 +396,7 @@ async def test_challenge_upper_one_rank_above():
                 "winner": "host",
             },
         )
-        assert r.json()["ranked"] is True
+        assert r.json()["ranked"] is False
 
 
 @pytest.mark.asyncio

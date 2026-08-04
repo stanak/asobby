@@ -41,6 +41,7 @@ ActionType = Literal["create", "update", "close", "result", "guest_result"]
 
 HEARTBEAT_SEC = 5  # サーバー側 TTL (20s) の 1/4
 CREATE_RETRY_COOLDOWN_SEC = 10
+MYIP_REFRESH_INTERVAL_SEC = 60.0
 UPDATE_CHECK_INTERVAL_SEC = 6 * 3600
 
 # KO 直後の btl_mode==5 は短時間しか観測できないため、AlwaysRecordable と
@@ -283,18 +284,7 @@ class Controller:
     def _default_post_params(self) -> Dict[str, Any]:
         # post_defaults には comment_presets 等 Post に無いキーも入るので絞る
         d = self.config_mgr.get_post_defaults()
-        return {k: d[k] for k in ("post_type", "comment", "stream_url", "challenge_upper") if k in d}
-
-    def challenge_upper_enabled(self) -> bool:
-        return bool(self.config_mgr.get_value("post_defaults", "challenge_upper", False))
-
-    def set_challenge_upper_enabled(self, enabled: bool) -> None:
-        self.config_mgr.set_post_default("challenge_upper", bool(enabled))
-        self.update_my_post(challenge_upper=bool(enabled))
-        self.log_sink(
-            "info",
-            t("log.challenge_upper", state=t("common.on" if enabled else "common.off")),
-        )
+        return {k: d[k] for k in ("post_type", "comment", "stream_url") if k in d}
 
     def ping_warn_enabled(self) -> bool:
         return bool(self.config_mgr.get_value("options", "ping_warn_enabled", True))
@@ -1014,7 +1004,6 @@ class Controller:
     ) -> dict:
         return {
             "post_type": self.my_post.post_type or "casual",
-            "challenge_upper": bool(self.my_post.challenge_upper),
             "ping_warn_enabled": self.ping_warn_enabled(),
             "ping_warn_ms": self.ping_warn_ms(),
             "ping_warn_giuroll_ms": self.ping_warn_giuroll_ms(),
@@ -1140,15 +1129,44 @@ class Controller:
             except asyncio.TimeoutError:
                 pass
 
-    async def detector_loop(self) -> None:
+    async def _refresh_myip(
+        self,
+        my_ip: str,
+        fetched_at: float,
+        *,
+        force: bool = False,
+    ) -> tuple[str, float]:
+        now = time.time()
+        if (
+            not force
+            and my_ip
+            and (now - fetched_at) < MYIP_REFRESH_INTERVAL_SEC
+        ):
+            return my_ip, fetched_at
         try:
-            my_ip = await self.api.myip()
+            new_ip = await self.api.myip()
+            if new_ip and new_ip != my_ip:
+                if my_ip:
+                    self.log_sink(
+                        "info",
+                        t("log.myip_changed", old=my_ip, new=new_ip),
+                    )
+                my_ip = new_ip
+            elif new_ip:
+                my_ip = new_ip
+            return my_ip, now
         except Exception as e:
-            self.log_sink("error", f"Detector error: {e}")
-            my_ip = ""
+            self.log_sink("warn", t("log.myip_refresh_failed", error=e))
+            return my_ip, fetched_at
+
+    async def detector_loop(self) -> None:
+        my_ip, my_ip_fetched_at = await self._refresh_myip("", 0.0, force=True)
 
         while not self._stop.is_set():
             try:
+                my_ip, my_ip_fetched_at = await self._refresh_myip(
+                    my_ip, my_ip_fetched_at
+                )
                 st: DetectionState = read_detection_state()
                 self._track_detect_error(st.detect_error)
                 self._log_detect_snapshot(st)
@@ -1316,12 +1334,7 @@ class Controller:
             except httpx.HTTPStatusError as e:
                 self._on_api_error(act, e)
             except httpx.HTTPError as e:
-                if act.type == "create":
-                    self._create_pending = False
-                    self._last_sent_payload = None
-                elif act.type == "close":
-                    self._close_pending = False
-                self.log_sink("error", f"API error: {e}")
+                self._on_api_transport_error(act, e)
 
     # -----------------
     # auto post logic
@@ -2085,6 +2098,43 @@ class Controller:
             f"Post created: {self.my_post.addr} [{type_label}] ({rank_display})",
         )
 
+    def _post_failure_detail(self, e: httpx.HTTPStatusError) -> str:
+        try:
+            body = e.response.json()
+            if isinstance(body, dict):
+                detail = body.get("detail")
+                if isinstance(detail, dict):
+                    return str(detail.get("message") or "")
+                return str(detail or "")
+        except Exception:
+            pass
+        return ""
+
+    def _notify_post_unreachable(self, *, detail: str) -> None:
+        detail_lower = detail.lower()
+        if "autopunch" in detail_lower:
+            self.log_sink("error", t("log.post_failed_autopunch"))
+            self.notify_sink(t("notify.post_failed_autopunch"), important=True)
+        else:
+            self.log_sink("error", t("log.post_failed_unreachable"))
+            self.notify_sink(t("notify.post_failed_unreachable"), important=True)
+
+    def _on_api_transport_error(self, act: Action, e: httpx.HTTPError) -> None:
+        if act.type == "create":
+            self._create_pending = False
+            self._last_sent_payload = None
+            self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
+            if isinstance(e, httpx.TimeoutException):
+                self.log_sink("error", t("log.post_failed_timeout"))
+            else:
+                self.log_sink("error", t("log.post_failed_network", error=e))
+            self.notify_sink(t("notify.post_failed_network"), important=True)
+            return
+
+        if act.type == "close":
+            self._close_pending = False
+        self.log_sink("error", t("log.api_transport_error", error=e))
+
     def _on_api_error(self, act: Action, e: httpx.HTTPStatusError) -> None:
         code = e.response.status_code
 
@@ -2097,8 +2147,9 @@ class Controller:
                 self._clear_expired_session()
                 self.notify_sink(t("notify.session_expired"))
             elif code == 409:
-                self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
-                self.notify_sink(t("notify.post_failed"), important=True)
+                self._notify_post_unreachable(
+                    detail=self._post_failure_detail(e),
+                )
             elif code == 429:
                 self.log_sink("warn", "Rate limited by server. Retrying soon.")
             else:
@@ -2122,8 +2173,7 @@ class Controller:
                     return
             # アドレス変更時の到達性検証に失敗。ローカルを破棄して
             # 次の周期の create（クールダウン付き）からやり直す。
-            self.log_sink("error", "Host not reachable. Please open the port or start autopunch.")
-            self.notify_sink(t("notify.post_failed"), important=True)
+            self._notify_post_unreachable(detail=self._post_failure_detail(e))
             self.clear_my_post()
             self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
         else:

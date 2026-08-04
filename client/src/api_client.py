@@ -1,8 +1,15 @@
 from __future__ import annotations
+
+import asyncio
 from typing import Optional, Tuple
+
 import httpx
 
 from services import __version__
+
+CREATE_POST_TIMEOUT = httpx.Timeout(connect=15.0, read=30.0, write=15.0, pool=15.0)
+CREATE_POST_RETRIES = 3
+CREATE_POST_RETRY_DELAY_SEC = 2.0
 
 GITHUB_LATEST_RELEASE_URL = (
     "https://api.github.com/repos/stanak/asobby/releases/latest"
@@ -37,11 +44,27 @@ class ApiClient:
 
     async def create(self, payload: dict) -> dict:
         """投稿を新規作成する。返り値は {"post": {...}, "owner_token": "..."}"""
-        r = await self.http.post(
-            f"{self.base}/posts", json=payload, headers=self._request_headers()
-        )
-        r.raise_for_status()
-        return r.json()
+        last_exc: Optional[httpx.HTTPError] = None
+        for attempt in range(CREATE_POST_RETRIES):
+            try:
+                r = await self.http.post(
+                    f"{self.base}/posts",
+                    json=payload,
+                    headers=self._request_headers(),
+                    timeout=CREATE_POST_TIMEOUT,
+                )
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPStatusError:
+                raise
+            except httpx.HTTPError as e:
+                last_exc = e
+                if attempt + 1 < CREATE_POST_RETRIES:
+                    await asyncio.sleep(
+                        CREATE_POST_RETRY_DELAY_SEC * (attempt + 1)
+                    )
+        assert last_exc is not None
+        raise last_exc
 
     async def update(self, post_id: str, owner_token: str, payload: dict) -> dict:
         body = {**payload, "id": post_id, "owner_token": owner_token}
