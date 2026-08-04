@@ -25,6 +25,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py db.py geoip.py post_redis.py client_release.py alembic.ini ./
+COPY tools ./tools
 COPY migrations ./migrations
 COPY static ./static
 COPY --from=framedata /src/vendor/th123data/docs ./static/data

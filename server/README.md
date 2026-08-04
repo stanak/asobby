@@ -245,6 +245,19 @@ fly deploy --ha=false                  # デプロイ（マシン1台）
 ```
 
 更新は `fly deploy` だけでよい。ログは `fly logs`。
+
+### 重複戦績 (guest/sync) の一括整理
+
+`tools/merge_duplicate_matches.py` が同一プロファイル・勝敗・時刻近傍の重複行を検出し、
+ランクマ付き / リプレイ付き / source=host を優先して 1 行にマージする。デフォルトは dry-run。
+
+```sh
+cd app
+# 本番 VM 内 (DATABASE_URL は fly secrets から注入済み)
+fly ssh console -a asobby -C 'python tools/merge_duplicate_matches.py'
+fly ssh console -a asobby -C 'python tools/merge_duplicate_matches.py --apply'
+```
+
 VM サイズ変更は `fly.toml` の `[[vm]] size` を編集して再デプロイする。
 
 注意:
