@@ -94,7 +94,10 @@ async def test_guest_report_recorded_and_stats():
             headers={"Authorization": f"Bearer {guest_token}"},
         )
         assert res.status_code == 200
-        assert res.json() == {"ok": True, "recorded": True}
+        body = res.json()
+        assert body["ok"] is True
+        assert body["recorded"] is True
+        assert body.get("match_id")
 
         async with db.session() as s:
             res_m = await s.execute(select(db.Match))
@@ -389,6 +392,61 @@ async def test_guest_and_sync_same_played_at_dedup():
             matches = list(res_m.scalars().all())
             assert len(matches) == 1
             assert matches[0].id == promoted_id
+
+
+@pytest.mark.asyncio
+async def test_host_sync_mergeable_dedup_played_at_skew():
+    """guest 報告と host sync の played_at が 3 分ズレても 1 行にまとまる。"""
+    async with app_client() as client:
+        await create_user("999", name="host", rank="normal")
+        await create_user("888", name="guest", rank="normal")
+
+        guest_played_at = time.time() - 180
+        guest_token = bearer_token("888", "guest")
+        guest_res = await client.post(
+            "/matches/report",
+            json={**RANKED_MATCH_PROFILES, "played_at": guest_played_at},
+            headers={"Authorization": f"Bearer {guest_token}"},
+        )
+        assert guest_res.json()["recorded"] is True
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            promoted_id = list(res_m.scalars().all())[0].id
+
+        host_token = bearer_token("999", "host")
+        host_played_at = time.time()
+        sync_res = await client.post(
+            "/matches/sync",
+            json={
+                "matches": [{
+                    "client_id": "c" * 32,
+                    "played_at": host_played_at,
+                    "my_side": "host",
+                    "winner": "host",
+                    "my_char": RANKED_MATCH_PROFILES["host_char"],
+                    "opp_char": RANKED_MATCH_PROFILES["guest_char"],
+                    "my_profile": RANKED_MATCH_PROFILES["host_profile"],
+                    "opp_profile": RANKED_MATCH_PROFILES["guest_profile"],
+                    "ranked": True,
+                    "match_rank": "normal",
+                }],
+            },
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        assert sync_res.status_code == 200
+        assert sync_res.json()["results"][0]["status"] == "duplicate"
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            matches = list(res_m.scalars().all())
+            assert len(matches) == 1
+            m = matches[0]
+            assert m.id == promoted_id
+            assert m.source == "host"
+            assert m.ranked is True
+            assert m.host_user_id == "999"
+            assert m.guest_user_id == "888"
 
 
 @pytest.mark.asyncio

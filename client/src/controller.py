@@ -1247,7 +1247,7 @@ class Controller:
 
                 elif act.type == "result":
                     try:
-                        await self.api.report_result(
+                        resp = await self.api.report_result(
                             self.my_post.id,
                             self.owner_token,
                             act.payload["winner"],
@@ -1258,6 +1258,16 @@ class Controller:
                             played_at=act.payload.get("played_at", 0),
                         )
                         self._replay_result_reported = True
+                        server_id = str(resp.get("match_id") or "")
+                        if resp.get("recorded") and server_id:
+                            await asyncio.to_thread(
+                                self.local_store.mark_pushed_for_report,
+                                float(act.payload.get("played_at") or 0),
+                                act.payload["winner"],
+                                act.payload.get("host_profile", ""),
+                                act.payload.get("guest_profile", ""),
+                                server_id,
+                            )
                         self.log_sink(
                             "info",
                             f"Match result reported: {act.payload['winner']}",
@@ -1277,6 +1287,16 @@ class Controller:
                         )
                         if resp.get("recorded") or resp.get("reason") == "duplicate":
                             self._replay_result_reported = True
+                        server_id = str(resp.get("match_id") or "")
+                        if server_id:
+                            await asyncio.to_thread(
+                                self.local_store.mark_pushed_for_report,
+                                float(act.payload.get("played_at") or 0),
+                                act.payload["winner"],
+                                act.payload.get("host_profile", ""),
+                                act.payload.get("guest_profile", ""),
+                                server_id,
+                            )
                         if resp.get("recorded"):
                             self.log_sink(
                                 "info",
@@ -1429,7 +1449,8 @@ class Controller:
             self._last_ko_fingerprint = ko_fp
             self._round_battle_engaged = False
             self._round_char_ids = (None, None)
-            self._last_ko_played_at = time.time()
+            played_at = time.time()
+            self._last_ko_played_at = played_at
             my_side = "host" if st.net_side == "host" else "client"
             winner = "host" if st.lwin == 2 else "guest"
             ranked = 0
@@ -1447,7 +1468,7 @@ class Controller:
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
                 "ranked": ranked,
-                "played_at": self._last_ko_played_at,
+                "played_at": played_at,
             }
             self._pending_local_match = payload
             self._handle_session_score(payload)
@@ -1470,13 +1491,15 @@ class Controller:
         ):
             self._result_reported = True
             winner = "host" if st.lwin == 2 else "guest"
+            played_at = self._last_ko_played_at or time.time()
+            self._last_ko_played_at = played_at
             return Action("result", {
                 "winner": winner,
                 "host_char": host_char,
                 "guest_char": guest_char,
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
-                "played_at": self._last_ko_played_at or time.time(),
+                "played_at": played_at,
             })
 
         # クライアント側: ホストが asobby 非導入でも戦績を補完報告する
@@ -1495,13 +1518,15 @@ class Controller:
         ):
             self._result_reported = True
             winner = "host" if st.lwin == 2 else "guest"
+            played_at = self._last_ko_played_at or time.time()
+            self._last_ko_played_at = played_at
             return Action("guest_result", {
                 "winner": winner,
                 "host_char": host_char,
                 "guest_char": guest_char,
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
-                "played_at": self._last_ko_played_at or time.time(),
+                "played_at": played_at,
             })
 
         # -----------------

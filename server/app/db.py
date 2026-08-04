@@ -616,7 +616,7 @@ async def find_near_match_by_profiles(
     winner: str,
     host_profile: str,
     guest_profile: str,
-    window_sec: int = 30,
+    window_sec: int = 180,
 ) -> Optional[Match]:
     """勝敗・両プロファイル・時刻 (±window_sec) が一致する match を 1 件返す。
 
@@ -637,6 +637,37 @@ async def find_near_match_by_profiles(
                 & Match.played_at.is_not(None)
                 & (Match.played_at >= lo)
                 & (Match.played_at <= hi)
+            )
+            .order_by(Match.played_at.desc())
+            .limit(1)
+        )
+        return res.scalar_one_or_none()
+
+
+async def find_mergeable_profile_match(
+    winner: str,
+    host_profile: str,
+    guest_profile: str,
+    *,
+    within_sec: int = 600,
+) -> Optional[Match]:
+    """played_at がズレた guest/sync 行をプロファイルで照合する (時刻非依存フォールバック)。
+
+    ホストとゲストで KO 時刻が異なる・guest 報告が utcnow() になる等で
+    find_near_match_by_profiles が外れた場合の保険。source=guest/sync のみ対象。"""
+    if not host_profile or not guest_profile:
+        return None
+    cutoff = utcnow() - timedelta(seconds=within_sec)
+    async with session() as s:
+        res = await s.execute(
+            select(Match)
+            .where(
+                (Match.winner == winner)
+                & (Match.host_profile == host_profile)
+                & (Match.guest_profile == guest_profile)
+                & (Match.source.in_(("guest", "sync")))
+                & Match.played_at.is_not(None)
+                & (Match.played_at >= cutoff)
             )
             .order_by(Match.played_at.desc())
             .limit(1)
@@ -666,7 +697,7 @@ async def claim_match_side(match_id: str, side: str, user_id: str) -> bool:
 
 
 async def find_recent_guest_reported_match(
-    guest_user_id: str, within_sec: int = 30
+    guest_user_id: str, within_sec: int = 180
 ) -> Optional[Match]:
     """直近のゲスト報告 (source=='guest') match を 1 件返す。"""
     cutoff = utcnow() - timedelta(seconds=within_sec)
@@ -698,6 +729,7 @@ async def promote_guest_match(
     guest_profile: str,
     ranked: bool,
     match_rank: Optional[str] = None,
+    played_at: Optional[datetime] = None,
 ) -> Optional[Match]:
     """ゲスト報告行をホスト報告に昇格する (delete+insert 禁止)。更新後の Match を返す。"""
     async with session() as s:
@@ -714,6 +746,8 @@ async def promote_guest_match(
         match.ranked = ranked
         match.match_rank = match_rank
         match.source = "host"
+        if played_at is not None:
+            match.played_at = played_at
         await s.commit()
         return match
 

@@ -396,6 +396,45 @@ class LocalStore:
                 (local_id,),
             )
 
+    def mark_pushed_for_report(
+        self,
+        played_at: float,
+        winner: str,
+        host_profile: str,
+        guest_profile: str,
+        server_id: str,
+        *,
+        window_sec: float = 180,
+    ) -> None:
+        """API 報告成功後、同一対戦の未 push 行を server_id 付きで済みにする。"""
+        if played_at <= 0 or not server_id:
+            return
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                SELECT id FROM matches
+                WHERE pushed = 0
+                  AND ABS(played_at - ?) <= ?
+                  AND winner = ?
+                  AND host_profile = ?
+                  AND guest_profile = ?
+                ORDER BY ABS(played_at - ?)
+                LIMIT 1
+                """,
+                (
+                    played_at,
+                    window_sec,
+                    winner,
+                    host_profile,
+                    guest_profile,
+                    played_at,
+                ),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return
+        self.mark_pushed(str(row[0]), server_id)
+
     def max_server_played_at(self) -> float:
         with self._connect() as conn:
             cur = conn.execute(

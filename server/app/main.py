@@ -1625,7 +1625,7 @@ def _is_near_existing_with_id(
     played_at: datetime,
     existing: list[tuple[float, str]],
     *,
-    window_sec: int = 30,
+    window_sec: int = 180,
 ) -> Optional[str]:
     """existing [(ts, id), ...] 昇順) に ±window_sec 以内の時刻があればその match id を返す。"""
     if not existing:
@@ -1660,6 +1660,23 @@ def _parse_sync_played_at(ts: float) -> Optional[datetime]:
 def _resolve_report_played_at(ts: float) -> datetime:
     parsed = _parse_sync_played_at(ts)
     return parsed if parsed is not None else db.utcnow()
+
+
+async def _find_dedup_match(
+    played_at: datetime,
+    winner: str,
+    host_profile: str,
+    guest_profile: str,
+) -> Optional[db.Match]:
+    """時刻±180s のプロファイル照合 → guest/sync 行の時刻非依存フォールバック。"""
+    near = await db.find_near_match_by_profiles(
+        played_at, winner, host_profile, guest_profile
+    )
+    if near is not None:
+        return near
+    return await db.find_mergeable_profile_match(
+        winner, host_profile, guest_profile
+    )
 
 
 def _match_to_stats_item(match: db.Match, user_id: str, has_replay: bool) -> dict[str, Any]:
@@ -2002,7 +2019,7 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
             hp, gp = item.my_profile, item.opp_profile
         else:
             hp, gp = item.opp_profile, item.my_profile
-        near_match = await db.find_near_match_by_profiles(
+        near_match = await _find_dedup_match(
             played_at, item.winner, hp, gp
         )
         if near_match is not None:
@@ -2025,6 +2042,7 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
                     guest_profile=item.opp_profile,
                     ranked=item.ranked,
                     match_rank=item.match_rank,
+                    played_at=played_at,
                 )
             else:
                 await db.claim_match_side(near_match.id, side, user_id)
@@ -2991,14 +3009,19 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
     played_at = _resolve_report_played_at(body.played_at)
 
     # ゲスト未同定の host 報告と重複しないようプロファイルでも照合する
-    near = await db.find_near_match_by_profiles(
+    near = await _find_dedup_match(
         played_at, body.winner, body.host_profile, body.guest_profile
     )
     if near is not None:
         await db.claim_match_side(near.id, "guest", uid)
-        return {"ok": True, "recorded": False, "reason": "duplicate"}
+        return {
+            "ok": True,
+            "recorded": False,
+            "reason": "duplicate",
+            "match_id": near.id,
+        }
 
-    await db.insert_match_result(
+    match_id = await db.insert_match_result(
         host_user_id=None,
         guest_user_id=uid,
         host_ip="",
@@ -3012,7 +3035,7 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
         source="guest",
         played_at=played_at,
     )
-    return {"ok": True, "recorded": True}
+    return {"ok": True, "recorded": True, "match_id": match_id}
 
 
 @app.post("/posts/result")
@@ -3036,7 +3059,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
 
     near_for_gate = None
     if not rec.guest_user_id:
-        near_for_gate = await db.find_near_match_by_profiles(
+        near_for_gate = await _find_dedup_match(
             played_at, body.winner, body.host_profile, body.guest_profile
         )
         if near_for_gate is not None and near_for_gate.guest_user_id:
@@ -3060,6 +3083,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
     is_ranked = post.ranked_active and rec.session_games < RANKED_SESSION_MAX_GAMES
     match_rank = post.rank if is_ranked else None
 
+    match_id: Optional[str] = None
     promoted = False
     if rec.guest_user_id:
         guest_match = await db.find_recent_guest_reported_match(rec.guest_user_id)
@@ -3075,11 +3099,13 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 guest_profile=body.guest_profile,
                 ranked=is_ranked,
                 match_rank=match_rank,
+                played_at=played_at,
             )
+            match_id = guest_match.id
             promoted = True
 
     if not promoted:
-        near = await db.find_near_match_by_profiles(
+        near = await _find_dedup_match(
             played_at, body.winner, body.host_profile, body.guest_profile
         )
         if near is not None:
@@ -3095,17 +3121,20 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                     guest_profile=body.guest_profile,
                     ranked=is_ranked,
                     match_rank=match_rank,
+                    played_at=played_at,
                 )
                 if rec.guest_user_id:
                     await db.claim_match_side(near.id, "guest", rec.guest_user_id)
+                match_id = near.id
                 promoted = True
             elif near.host_user_id == rec.owner_user_id:
                 if rec.guest_user_id:
                     await db.claim_match_side(near.id, "guest", rec.guest_user_id)
+                match_id = near.id
                 promoted = True
 
     if not promoted:
-        await db.insert_match_result(
+        match_id = await db.insert_match_result(
             host_user_id=rec.owner_user_id,
             guest_user_id=rec.guest_user_id or None,
             host_ip=host_ip,
@@ -3141,7 +3170,12 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
             )
 
     await _persist_record(rec)
-    return {"ok": True, "recorded": True, "ranked": is_ranked}
+    return {
+        "ok": True,
+        "recorded": True,
+        "ranked": is_ranked,
+        "match_id": match_id,
+    }
 
 
 @app.post("/posts/upsert")
