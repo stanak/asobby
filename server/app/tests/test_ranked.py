@@ -466,3 +466,87 @@ async def test_sync_respects_ranked_session_limit():
             sync_match = await s.get(db.Match, sync_res.json()["results"][0]["server_id"])
             assert sync_match is not None
             assert sync_match.ranked is False
+
+
+@pytest.mark.asyncio
+async def test_ranked_pair_limit_when_host_and_client_swap():
+    """ホスト/クライアントを入れ替えても同一ペアの 3 戦上限を共有する。"""
+    import time
+
+    async with app_client() as client:
+        await create_user("111", name="alice", last_ip="1.1.1.1", rank="normal")
+        await create_user("222", name="bob", last_ip="2.2.2.2", rank="normal")
+
+        alice_token = bearer_token("111", "alice")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.1.1.1:10800"},
+            headers={"Authorization": f"Bearer {alice_token}"},
+        )
+        post_a = res.json()["post"]
+        token_a = res.json()["owner_token"]
+        rec_a = main.RECORDS[post_a["id"]]
+        await main.apply_guest_probe(rec_a, make_0x08_reply("2.2.2.2"))
+
+        played_at = time.time()
+        for i in range(3):
+            r = await client.post(
+                "/posts/result",
+                json={
+                    "id": post_a["id"],
+                    "owner_token": token_a,
+                    "winner": "host",
+                    "host_char": 0,
+                    "guest_char": 1,
+                    "host_profile": "alice_prof",
+                    "guest_profile": "bob_prof",
+                    "played_at": played_at + i * 200,
+                },
+            )
+            assert r.json()["ranked"] is True
+
+        await client.post(
+            "/posts/close",
+            json={"id": post_a["id"], "owner_token": token_a},
+            headers={"Authorization": f"Bearer {alice_token}"},
+        )
+
+        import asyncio
+
+        await asyncio.sleep(2.5)
+
+        bob_token = bearer_token("222", "bob")
+        res_b = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "2.2.2.2:10800"},
+            headers={"Authorization": f"Bearer {bob_token}"},
+        )
+        assert res_b.status_code == 200, res_b.text
+        post_b = res_b.json()["post"]
+        token_b = res_b.json()["owner_token"]
+        rec_b = main.RECORDS[post_b["id"]]
+        await main.apply_guest_probe(rec_b, make_0x08_reply("1.1.1.1"))
+
+        r = await client.post(
+            "/posts/result",
+            json={
+                "id": post_b["id"],
+                "owner_token": token_b,
+                "winner": "guest",
+                "host_char": 3,
+                "guest_char": 4,
+                "host_profile": "bob_prof",
+                "guest_profile": "alice_prof",
+                "played_at": played_at + 900,
+            },
+        )
+        assert r.json()["recorded"] is True
+        assert r.json()["ranked"] is False
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            matches = list(res_m.scalars().all())
+            assert len(matches) == 4
+            assert sum(1 for m in matches if m.ranked) == 3
+            assert all(m.ranked for m in matches[:3])
+            assert matches[3].ranked is False

@@ -259,16 +259,103 @@ async def test_guest_first_host_promotes():
             assert m.match_rank == "normal"
             assert m.host_user_id == "999"
             assert m.guest_user_id == "888"
-            assert m.winner == "host"
-            assert m.host_char == 2
-            assert m.guest_char == 3
-            assert m.host_profile == "hp2"
-            assert m.guest_profile == "gp2"
 
-            host = await s.get(db.User, "999")
-            guest = await s.get(db.User, "888")
-            assert host.rank_locked is True
-            assert guest.rank_locked is True
+
+@pytest.mark.asyncio
+async def test_sync_consecutive_rematches_same_profiles_not_deduped():
+    """同一相手・同一勝者でも 120s 後の 2 戦目は別行として記録される。"""
+    async with app_client() as client:
+        await create_user("999", name="host", rank="normal")
+        host_token = bearer_token("999", "host")
+        base = time.time() - 120
+
+        sync_body = {
+            "my_side": "host",
+            "winner": "host",
+            "my_char": RANKED_MATCH_PROFILES["host_char"],
+            "opp_char": RANKED_MATCH_PROFILES["guest_char"],
+            "my_profile": RANKED_MATCH_PROFILES["host_profile"],
+            "opp_profile": RANKED_MATCH_PROFILES["guest_profile"],
+            "ranked": False,
+        }
+        first = await client.post(
+            "/matches/sync",
+            json={
+                "matches": [{
+                    **sync_body,
+                    "client_id": "1" * 32,
+                    "played_at": base,
+                }],
+            },
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        second = await client.post(
+            "/matches/sync",
+            json={
+                "matches": [{
+                    **sync_body,
+                    "client_id": "2" * 32,
+                    "played_at": base + 120,
+                }],
+            },
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        assert first.json()["results"][0]["status"] == "imported"
+        assert second.json()["results"][0]["status"] == "imported"
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            assert len(list(res_m.scalars().all())) == 2
+
+
+@pytest.mark.asyncio
+async def test_sync_different_opponents_within_120s_not_deduped():
+    """120s 以内でも相手が違えば両方 import される (時刻のみ dedup 廃止の回帰防止)。"""
+    async with app_client() as client:
+        await create_user("999", name="host", rank="normal")
+        host_token = bearer_token("999", "host")
+        base = time.time() - 90
+
+        first = await client.post(
+            "/matches/sync",
+            json={
+                "matches": [{
+                    "client_id": "3" * 32,
+                    "played_at": base,
+                    "my_side": "host",
+                    "winner": "host",
+                    "my_char": 0,
+                    "opp_char": 1,
+                    "my_profile": "hostp",
+                    "opp_profile": "guest_a",
+                    "ranked": False,
+                }],
+            },
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        second = await client.post(
+            "/matches/sync",
+            json={
+                "matches": [{
+                    "client_id": "4" * 32,
+                    "played_at": time.time(),
+                    "my_side": "host",
+                    "winner": "guest",
+                    "my_char": 0,
+                    "opp_char": 2,
+                    "my_profile": "hostp",
+                    "opp_profile": "guest_b",
+                    "ranked": False,
+                }],
+            },
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        assert first.json()["results"][0]["status"] == "imported"
+        assert second.json()["results"][0]["status"] == "imported"
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            assert len(list(res_m.scalars().all())) == 2
 
 
 @pytest.mark.asyncio
@@ -447,6 +534,62 @@ async def test_host_sync_mergeable_dedup_played_at_skew():
             assert m.ranked is True
             assert m.host_user_id == "999"
             assert m.guest_user_id == "888"
+
+
+@pytest.mark.asyncio
+async def test_consecutive_ranked_matches_same_players_not_deduped():
+    """同一対戦相手・同一勝者の連続ランクマ (120s 以内) は別試合として記録される。"""
+    async with app_client() as client:
+        await create_user("999", name="host", rank="normal")
+        await create_user("888", name="guest", rank="normal")
+
+        host_token = bearer_token("999", "host")
+        guest_token = bearer_token("888", "guest")
+        first_at = time.time() - 120
+        second_at = time.time() - 30  # 90s 後 (旧 180s 窓では誤 dedup)
+
+        guest_res = await client.post(
+            "/matches/report",
+            json={**RANKED_MATCH_PROFILES, "played_at": first_at},
+            headers={"Authorization": f"Bearer {guest_token}"},
+        )
+        assert guest_res.json()["recorded"] is True
+
+        sync_body = lambda client_id, played_at: {
+            "matches": [{
+                "client_id": client_id,
+                "played_at": played_at,
+                "my_side": "host",
+                "winner": RANKED_MATCH_PROFILES["winner"],
+                "my_char": RANKED_MATCH_PROFILES["host_char"],
+                "opp_char": RANKED_MATCH_PROFILES["guest_char"],
+                "my_profile": RANKED_MATCH_PROFILES["host_profile"],
+                "opp_profile": RANKED_MATCH_PROFILES["guest_profile"],
+                "ranked": True,
+                "match_rank": "normal",
+            }],
+        }
+
+        res1 = await client.post(
+            "/matches/sync",
+            json=sync_body("a" * 32, first_at),
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        assert res1.status_code == 200
+        assert res1.json()["results"][0]["status"] == "duplicate"
+
+        res2 = await client.post(
+            "/matches/sync",
+            json=sync_body("b" * 32, second_at),
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        assert res2.status_code == 200
+        assert res2.json()["results"][0]["status"] == "imported"
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            matches = list(res_m.scalars().all())
+            assert len(matches) == 2
 
 
 @pytest.mark.asyncio

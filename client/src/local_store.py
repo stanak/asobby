@@ -404,7 +404,7 @@ class LocalStore:
         guest_profile: str,
         server_id: str,
         *,
-        window_sec: float = 180,
+        window_sec: float = 45,
     ) -> None:
         """API 報告成功後、同一対戦の未 push 行を server_id 付きで済みにする。"""
         if played_at <= 0 or not server_id:

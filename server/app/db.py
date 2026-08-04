@@ -9,7 +9,7 @@ import hashlib
 import ipaddress
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -27,6 +27,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# プロファイル一致による近傍 dedup の時刻窓 (秒)
+MATCH_DEDUP_WINDOW_SEC = 45
 
 
 class Base(DeclarativeBase):
@@ -616,7 +620,7 @@ async def find_near_match_by_profiles(
     winner: str,
     host_profile: str,
     guest_profile: str,
-    window_sec: int = 180,
+    window_sec: int = MATCH_DEDUP_WINDOW_SEC,
 ) -> Optional[Match]:
     """勝敗・両プロファイル・時刻 (±window_sec) が一致する match を 1 件返す。
 
@@ -650,13 +654,20 @@ async def find_mergeable_profile_match(
     guest_profile: str,
     *,
     within_sec: int = 600,
+    missing_side: Literal["host", "guest"],
 ) -> Optional[Match]:
     """played_at がズレた guest/sync 行をプロファイルで照合する (時刻非依存フォールバック)。
 
     ホストとゲストで KO 時刻が異なる・guest 報告が utcnow() になる等で
-    find_near_match_by_profiles が外れた場合の保険。source=guest/sync のみ対象。"""
+    find_near_match_by_profiles が外れた場合の保険。source=guest/sync のみ対象。
+    missing_side は今回の報告で埋めようとしている側 (未同定の側のみ照合)。"""
     if not host_profile or not guest_profile:
         return None
+    side_null = (
+        Match.host_user_id.is_(None)
+        if missing_side == "host"
+        else Match.guest_user_id.is_(None)
+    )
     cutoff = utcnow() - timedelta(seconds=within_sec)
     async with session() as s:
         res = await s.execute(
@@ -668,6 +679,7 @@ async def find_mergeable_profile_match(
                 & (Match.source.in_(("guest", "sync")))
                 & Match.played_at.is_not(None)
                 & (Match.played_at >= cutoff)
+                & side_null
             )
             .order_by(Match.played_at.desc())
             .limit(1)
@@ -752,6 +764,63 @@ async def promote_guest_match(
         return match
 
 
+def _ranked_streak_from_matches(
+    matches: list[Match], *, gap_minutes: int
+) -> int:
+    """played_at 降順の ranked 試合から、gap 超で区切った連続本数を数える。"""
+    gap_sec = gap_minutes * 60
+    count = 0
+    prev_ts: Optional[float] = None
+    for m in matches:
+        if m.played_at is None:
+            break
+        ts = m.played_at.timestamp()
+        if m.played_at.tzinfo is None:
+            ts = m.played_at.replace(tzinfo=timezone.utc).timestamp()
+        if prev_ts is not None and prev_ts - ts > gap_sec:
+            break
+        count += 1
+        prev_ts = ts
+    return count
+
+
+async def count_ranked_pair_streak_before(
+    user_a: str,
+    user_b: str,
+    *,
+    before: datetime,
+    match_rank: Optional[str] = None,
+    gap_minutes: int = 30,
+) -> int:
+    """ログイン済み 2 人の連続ランクマ (ホスト/クライアント入れ替え含む)。"""
+    if not user_a or not user_b or user_a == user_b:
+        return 0
+    pair = (
+        ((Match.host_user_id == user_a) & (Match.guest_user_id == user_b))
+        | ((Match.host_user_id == user_b) & (Match.guest_user_id == user_a))
+    )
+    clauses = [
+        pair,
+        Match.winner != "",
+        Match.ranked.is_(True),
+        Match.played_at.is_not(None),
+        Match.played_at < before,
+    ]
+    if match_rank:
+        clauses.append(Match.match_rank == match_rank)
+
+    async with session() as s:
+        res = await s.execute(
+            select(Match)
+            .where(*clauses)
+            .order_by(Match.played_at.desc())
+            .limit(10)
+        )
+        matches = list(res.scalars().all())
+
+    return _ranked_streak_from_matches(matches, gap_minutes=gap_minutes)
+
+
 async def count_ranked_streak_before(
     host_user_id: str,
     *,
@@ -763,14 +832,17 @@ async def count_ranked_streak_before(
     gap_minutes: int = 30,
 ) -> int:
     """anchor より前の同一対戦相手との連続ランクマ試合数 (30 分超の空白で区切る)。"""
+    profile_pair = (
+        ((Match.host_profile == host_profile) & (Match.guest_profile == guest_profile))
+        | ((Match.host_profile == guest_profile) & (Match.guest_profile == host_profile))
+    )
     clauses = [
-        Match.host_user_id == host_user_id,
         Match.winner != "",
         Match.ranked.is_(True),
         Match.played_at.is_not(None),
         Match.played_at < before,
-        Match.host_profile == host_profile,
-        Match.guest_profile == guest_profile,
+        profile_pair,
+        (Match.host_user_id == host_user_id) | (Match.guest_user_id == host_user_id),
     ]
     if guest_user_id:
         clauses.append(Match.guest_user_id == guest_user_id)
@@ -786,20 +858,7 @@ async def count_ranked_streak_before(
         )
         matches = list(res.scalars().all())
 
-    gap_sec = gap_minutes * 60
-    count = 0
-    prev_ts: Optional[float] = None
-    for m in matches:
-        if m.played_at is None:
-            break
-        ts = m.played_at.timestamp()
-        if m.played_at.tzinfo is None:
-            ts = m.played_at.replace(tzinfo=timezone.utc).timestamp()
-        if prev_ts is not None and prev_ts - ts > gap_sec:
-            break
-        count += 1
-        prev_ts = ts
-    return count
+    return _ranked_streak_from_matches(matches, gap_minutes=gap_minutes)
 
 
 async def find_guest_user_id_by_profiles(

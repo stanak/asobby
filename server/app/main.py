@@ -125,6 +125,42 @@ def _find_active_ranked_record(
     return None
 
 
+async def ranked_session_limit_reached(
+    host_user_id: str,
+    *,
+    guest_user_id: Optional[str],
+    host_profile: str,
+    guest_profile: str,
+    match_rank: Optional[str],
+    played_at: datetime,
+    session_games: int = 0,
+) -> bool:
+    """同一対戦相手との連続ランクマが 3 戦上限に達したか (入れ替え後も同一ペア)。"""
+    if guest_user_id and host_user_id:
+        streak = await db.count_ranked_pair_streak_before(
+            host_user_id,
+            guest_user_id,
+            before=played_at,
+            match_rank=match_rank,
+            gap_minutes=RANKED_SESSION_GAP_MINUTES,
+        )
+        return streak >= RANKED_SESSION_MAX_GAMES
+
+    if session_games >= RANKED_SESSION_MAX_GAMES:
+        return True
+
+    streak = await db.count_ranked_streak_before(
+        host_user_id,
+        host_profile=host_profile,
+        guest_profile=guest_profile,
+        guest_user_id=guest_user_id,
+        match_rank=match_rank,
+        before=played_at,
+        gap_minutes=RANKED_SESSION_GAP_MINUTES,
+    )
+    return streak >= RANKED_SESSION_MAX_GAMES
+
+
 async def resolve_ranked_for_host_session(
     host_user_id: str,
     *,
@@ -144,21 +180,23 @@ async def resolve_ranked_for_host_session(
         refresh_ranked_active(rec)
         if not rec.post.ranked_active:
             return False, None
-        if rec.session_games >= RANKED_SESSION_MAX_GAMES:
-            return False, None
-        return True, rec.post.rank
+        session_games = rec.session_games
+    else:
+        session_games = 0
 
-    streak = await db.count_ranked_streak_before(
+    if await ranked_session_limit_reached(
         host_user_id,
+        guest_user_id=guest_user_id,
         host_profile=host_profile,
         guest_profile=guest_profile,
-        guest_user_id=guest_user_id,
         match_rank=match_rank,
-        before=played_at,
-        gap_minutes=RANKED_SESSION_GAP_MINUTES,
-    )
-    if streak >= RANKED_SESSION_MAX_GAMES:
+        played_at=played_at,
+        session_games=session_games,
+    ):
         return False, None
+
+    if rec is not None:
+        return True, rec.post.rank
     return True, match_rank
 
 
@@ -1677,25 +1715,6 @@ async def import_tensokukan(request: Request) -> dict[str, Any]:
     }
 
 
-def _is_near_existing_with_id(
-    played_at: datetime,
-    existing: list[tuple[float, str]],
-    *,
-    window_sec: int = 180,
-) -> Optional[str]:
-    """existing [(ts, id), ...] 昇順) に ±window_sec 以内の時刻があればその match id を返す。"""
-    if not existing:
-        return None
-    ts = _dt_ts(played_at)
-    ts_list = [t for t, _ in existing]
-    lo = bisect.bisect_left(ts_list, ts - window_sec)
-    hi = bisect.bisect_right(ts_list, ts + window_sec)
-    for i in range(lo, hi):
-        if abs(ts_list[i] - ts) <= window_sec:
-            return existing[i][1]
-    return None
-
-
 def _sync_match_id(user_id: str, client_id: str) -> str:
     return hashlib.md5(f"sync:{user_id}:{client_id}".encode()).hexdigest()
 
@@ -1723,15 +1742,27 @@ async def _find_dedup_match(
     winner: str,
     host_profile: str,
     guest_profile: str,
+    *,
+    my_side: Literal["host", "guest", "client"],
 ) -> Optional[db.Match]:
-    """時刻±180s のプロファイル照合 → guest/sync 行の時刻非依存フォールバック。"""
+    """時刻±MATCH_DEDUP_WINDOW_SEC のプロファイル照合 → guest/sync 行の 600s フォールバック。"""
     near = await db.find_near_match_by_profiles(
-        played_at, winner, host_profile, guest_profile
+        played_at,
+        winner,
+        host_profile,
+        guest_profile,
+        window_sec=db.MATCH_DEDUP_WINDOW_SEC,
     )
     if near is not None:
         return near
+    missing_side: Literal["host", "guest"] = (
+        "host" if my_side == "host" else "guest"
+    )
     return await db.find_mergeable_profile_match(
-        winner, host_profile, guest_profile
+        winner,
+        host_profile,
+        guest_profile,
+        missing_side=missing_side,
     )
 
 
@@ -2039,8 +2070,6 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
     existing_ids = await db.filter_existing_match_ids(
         [_sync_match_id(user_id, m.client_id) for m in body.matches]
     )
-    near_existing = await db.fetch_user_match_times_with_ids(user_id)
-
     for item in body.matches:
         match_id = _sync_match_id(user_id, item.client_id)
         if match_id in existing_ids:
@@ -2060,15 +2089,6 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
             })
             continue
 
-        near_id = _is_near_existing_with_id(played_at, near_existing)
-        if near_id is not None:
-            results.append({
-                "client_id": item.client_id,
-                "server_id": near_id,
-                "status": "duplicate",
-            })
-            continue
-
         # user_id で照合できない相手側報告 (ゲスト未同定の host 報告など)
         # ともプロファイルで照合する
         if item.my_side == "host":
@@ -2076,7 +2096,7 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
         else:
             hp, gp = item.opp_profile, item.my_profile
         near_match = await _find_dedup_match(
-            played_at, item.winner, hp, gp
+            played_at, item.winner, hp, gp, my_side=item.my_side
         )
         if near_match is not None:
             # 既存行に自分の側が未同定で残っていれば紐付ける
@@ -2148,7 +2168,6 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
                 await _bump_session_games(user_id, guest_uid)
         to_insert.append(row)
         existing_ids.add(match_id)
-        bisect.insort(near_existing, (_dt_ts(played_at), match_id))
         results.append({
             "client_id": item.client_id,
             "server_id": match_id,
@@ -3100,7 +3119,11 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
 
     # ゲスト未同定の host 報告と重複しないようプロファイルでも照合する
     near = await _find_dedup_match(
-        played_at, body.winner, body.host_profile, body.guest_profile
+        played_at,
+        body.winner,
+        body.host_profile,
+        body.guest_profile,
+        my_side="guest",
     )
     if near is not None:
         await db.claim_match_side(near.id, "guest", uid)
@@ -3150,7 +3173,11 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
     near_for_gate = None
     if not rec.guest_user_id:
         near_for_gate = await _find_dedup_match(
-            played_at, body.winner, body.host_profile, body.guest_profile
+            played_at,
+            body.winner,
+            body.host_profile,
+            body.guest_profile,
+            my_side="host",
         )
         if near_for_gate is not None and near_for_gate.guest_user_id:
             rec.guest_user_id = near_for_gate.guest_user_id
@@ -3170,7 +3197,16 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
         return {"ok": True, "recorded": False}
 
     refresh_ranked_active(rec)
-    is_ranked = post.ranked_active and rec.session_games < RANKED_SESSION_MAX_GAMES
+    limit_reached = await ranked_session_limit_reached(
+        rec.owner_user_id,
+        guest_user_id=rec.guest_user_id or None,
+        host_profile=body.host_profile,
+        guest_profile=body.guest_profile,
+        match_rank=post.rank,
+        played_at=played_at,
+        session_games=rec.session_games,
+    )
+    is_ranked = post.ranked_active and not limit_reached
     match_rank = post.rank if is_ranked else None
 
     match_id: Optional[str] = None
@@ -3196,7 +3232,11 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
 
     if not promoted:
         near = await _find_dedup_match(
-            played_at, body.winner, body.host_profile, body.guest_profile
+            played_at,
+            body.winner,
+            body.host_profile,
+            body.guest_profile,
+            my_side="host",
         )
         if near is not None:
             if near.source in ("sync", "guest"):
