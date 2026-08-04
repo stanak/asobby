@@ -15,7 +15,7 @@
   gtag('js', new Date());
   gtag('config', 'G-RJSLH3FRBR');
 </script>
-<script src="/static/i18n.js?v=0.5.1.1"></script>
+<script src="/static/i18n.js?v=0.7.11"></script>
 <script src="/static/client-update.js"></script>
 <script src="/static/favicon-notify.js"></script>
 <script src="/static/favicon-badge.js"></script>
@@ -424,8 +424,16 @@
       <p data-i18n="guide.menu.resetPaths.desc">Autopunch / Giuroll / 天則の exe パス設定をクリアします。</p>
     </div>
     <div class="menu-item">
+      <h3 data-i18n="guide.menu.sessionScore.name">勝敗数通知</h3>
+      <p data-i18n="guide.menu.sessionScore.desc">同一相手との連続対戦で、ホスト-クライアント形式の勝敗数 (例: 2-1) をトースト通知します。「勝敗数通知の設定...」で毎戦通知か条件指定ができます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.replayRefusal.name">リプレイ保存を拒否</h3>
+      <p data-i18n="guide.menu.replayRefusal.desc">一定時間、または許可するまで相手からのリプレイ保存を拒否します。サーバーにも設定が同期されます（要 Discord ログイン）。</p>
+    </div>
+    <div class="menu-item">
       <h3 data-i18n="guide.menu.lang.name">言語 / Language</h3>
-      <p data-i18n="guide.menu.lang.desc">クライアント UI の表示言語（日本語 / English）を切り替えます。</p>
+      <p data-i18n="guide.menu.lang.desc">クライアント UI とトースト通知の表示言語（日本語 / English）を切り替えます。設定は PC 内に保存され、次回起動後も維持されます。</p>
     </div>
     <div class="menu-item">
       <h3 data-i18n="guide.menu.quit.name">終了</h3>
@@ -467,12 +475,20 @@
 
   <section class="panel">
     <h2 data-i18n="guide.sectionNotify">主な通知</h2>
+    <p data-i18n="guide.notifyLangLead">トースト通知の文言は、トレイメニュー「言語 / Language」で選んだ表示言語（日本語 / English）に従います。Web ロビー (asobby.com) の言語切替とは別設定です。</p>
     <ul>
       <li data-i18n="guide.notifyPostFailed">募集失敗 — サーバーから接続確認が取れません。ポート転送・Autopunch・ファイアウォールを確認してください。</li>
-      <li data-i18n="guide.notifyLogin">ログインが必要 — ランクマ募集や戦績同期の前に Discord ログインしてください。</li>
+      <li data-i18n="guide.notifyLogin">ログインが必要 — 募集の自動投稿などを行う前に Discord ログインしてください。</li>
+      <li data-i18n="guide.notifySessionExpired">セッション期限切れ — Discord ログインの有効期限が切れたとき。再ログインを促します。</li>
+      <li data-i18n="guide.notifyDiscordLogin">Discord ログイン — 成功・タイムアウト・失敗時に通知します。</li>
       <li data-i18n="guide.notifyCasual">カジュアル扱い — ランクマ募集でも、相手が未ログインまたはランク帯不一致（格上挑戦 OFF 時）だと戦績はカジュアルになります。</li>
+      <li data-i18n="guide.notifySessionScore">勝敗数 — 同一相手との連戦で、ホスト-クライアント形式 (例: 「勝敗数 2-1 (ホスト-クライアント)」) を通知します。</li>
+      <li data-i18n="guide.notifyHighPing">高 Ping 警告 — 接続中ゲストの Ping がしきい値以上のとき、ホスト PC にトースト通知します。</li>
+      <li data-i18n="guide.notifyRequest">リクエスト — ロビー閲覧者から Giuroll 使用依頼やカジュアルお誘いが届いたとき。ボタン付きトーストで承諾 / 拒否できます。</li>
+      <li data-i18n="guide.notifySync">戦績同期 — 手動同期の開始・完了・失敗を通知します。</li>
+      <li data-i18n="guide.notifyReplayRefusal">リプレイ保存拒否 — 拒否の開始・解除を通知します。</li>
+      <li data-i18n="guide.notifyMemoryAccess">メモリ読取不可 — 天則が管理者権限で動いているなど、検出はできたが戦績取得に必要なメモリが読めないときに通知します。</li>
       <li data-i18n="guide.notifyUpdate">更新あり — 新しい exe が公開されたとき。トレイからダウンロードできます。</li>
-      <li data-i18n="guide.notifyHighPing">高 Ping 警告 — 接続中ゲストの Ping がしきい値以上のとき、ホスト PC にトースト通知します（例: 「○○ さんからの Ping が 80ms です (警告: 60ms 以上)」）。</li>
     </ul>
   </section>
 </main>

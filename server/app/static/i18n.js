@@ -450,9 +450,15 @@
     "guide.menu.resetPaths.name": "ツールのパスをリセット",
     "guide.menu.resetPaths.desc":
       "Autopunch / Giuroll / 天則の exe パス設定をクリアします。",
+    "guide.menu.replayRefusal.name": "リプレイ保存を拒否",
+    "guide.menu.replayRefusal.desc":
+      "一定時間、または許可するまで相手からのリプレイ保存を拒否します。サーバーにも設定が同期されます（要 Discord ログイン）。",
+    "guide.menu.sessionScore.name": "勝敗数通知",
+    "guide.menu.sessionScore.desc":
+      "同一相手との連続対戦で、ホスト-クライアント形式の勝敗数 (例: 2-1) をトースト通知します。「勝敗数通知の設定...」で毎戦通知か条件指定ができます。",
     "guide.menu.lang.name": "言語 / Language",
     "guide.menu.lang.desc":
-      "クライアント UI の表示言語（日本語 / English）を切り替えます。",
+      "クライアント UI とトースト通知の表示言語（日本語 / English）を切り替えます。設定は PC 内に保存され、次回起動後も維持されます。",
     "guide.menu.quit.name": "終了",
     "guide.menu.quit.desc":
       "クライアントを終了します。募集中の投稿は閉じられます。",
@@ -493,6 +499,8 @@
     "guide.avReport":
       "Microsoft への誤検知報告: https://www.microsoft.com/en-us/wdsi/filesubmission から exe をアップロードし、「誤検知」と申告すると、今後の定義更新で改善されることがあります。",
     "guide.sectionNotify": "主な通知",
+    "guide.notifyLangLead":
+      "トースト通知の文言は、トレイメニュー「言語 / Language」で選んだ表示言語（日本語 / English）に従います。Web ロビー (asobby.com) の言語切替とは別設定です。",
     "guide.notifyPostFailed":
       "募集失敗 — サーバーから接続確認が取れません。ポート転送・Autopunch・ファイアウォールを確認してください。",
     "guide.notifyLogin":
@@ -503,6 +511,20 @@
       "更新あり — 新しい exe が公開されたとき。トレイからダウンロードできます。",
     "guide.notifyHighPing":
       "高 Ping 警告 — 接続中ゲストの Ping がしきい値以上のとき、ホスト PC にトースト通知します（例: 「○○ さんからの Ping が 80ms です (警告: 60ms 以上)」）。",
+    "guide.notifySessionScore":
+      "勝敗数 — 同一相手との連戦で、ホスト-クライアント形式 (例: 「勝敗数 2-1 (ホスト-クライアント)」) を通知します。",
+    "guide.notifyRequest":
+      "リクエスト — ロビー閲覧者から Giuroll 使用依頼やカジュアルお誘いが届いたとき。ボタン付きトーストで承諾 / 拒否できます。",
+    "guide.notifySync":
+      "戦績同期 — 手動同期の開始・完了・失敗を通知します（例: 「戦績を同期しました（取得 3 件 / 送信 1 件）」）。",
+    "guide.notifySessionExpired":
+      "セッション期限切れ — Discord ログインの有効期限が切れたとき。再ログインを促します。",
+    "guide.notifyDiscordLogin":
+      "Discord ログイン — 成功・タイムアウト・失敗時に通知します。",
+    "guide.notifyReplayRefusal":
+      "リプレイ保存拒否 — 拒否の開始・解除を通知します。",
+    "guide.notifyMemoryAccess":
+      "メモリ読取不可 — 天則が管理者権限で動いているなど、検出はできたが戦績取得に必要なメモリが読めないときに通知します。",
   };
 
   const en = {
@@ -925,9 +947,15 @@
     "guide.menu.resetPaths.name": "Reset tool paths",
     "guide.menu.resetPaths.desc":
       "Clears saved exe paths for Autopunch, Giuroll, and Hisoutensoku.",
+    "guide.menu.replayRefusal.name": "Refuse replay saving",
+    "guide.menu.replayRefusal.desc":
+      "Refuse opponent replay saving for a period or until you allow it again. Syncs to the server when logged in to Discord.",
+    "guide.menu.sessionScore.name": "Win-loss count notifications",
+    "guide.menu.sessionScore.desc":
+      "Toast the host-client win-loss score (e.g. 2-1) against the same opponent in a streak. Use “Win-loss count notification settings...” for every match or custom rules.",
     "guide.menu.lang.name": "Language / 言語",
     "guide.menu.lang.desc":
-      "Switch the client UI between Japanese and English.",
+      "Switch the client UI and toast notification language (Japanese / English). Saved on this PC and kept after restart.",
     "guide.menu.quit.name": "Quit",
     "guide.menu.quit.desc":
       "Exits the client and closes any active post.",
@@ -968,6 +996,8 @@
     "guide.avReport":
       "Report a false positive to Microsoft at https://www.microsoft.com/en-us/wdsi/filesubmission ; whitelisting may improve after definition updates.",
     "guide.sectionNotify": "Common notifications",
+    "guide.notifyLangLead":
+      "Toast text follows the language selected under Language / 言語 in the tray menu (Japanese or English). This is separate from the web lobby language on asobby.com.",
     "guide.notifyPostFailed":
       "Post failed — the server could not verify your host. Check port forwarding, Autopunch, and firewall.",
     "guide.notifyLogin":
@@ -978,6 +1008,20 @@
       "Update available — a new exe is published; download it from the tray menu.",
     "guide.notifyHighPing":
       "High ping warning — toast on your PC when the connected guest’s ping is at or above your threshold (e.g. “High ping from Alice: 80ms (warn threshold: 60ms+)”).",
+    "guide.notifySessionScore":
+      "Win-loss count — during a streak vs. the same opponent, shows host-client score (e.g. “Win-loss count 2-1 (host-client)”).",
+    "guide.notifyRequest":
+      "Requests — Giuroll requests or casual invites from lobby viewers. Interactive toasts let you accept or decline.",
+    "guide.notifySync":
+      "Stats sync — start, success, or failure of manual sync (e.g. “Stats synced (pulled 3 / pushed 1)”).",
+    "guide.notifySessionExpired":
+      "Session expired — when your Discord login expires; prompts you to sign in again.",
+    "guide.notifyDiscordLogin":
+      "Discord login — success, timeout, or failure.",
+    "guide.notifyReplayRefusal":
+      "Replay saving refusal — when you start or clear replay saving refusal.",
+    "guide.notifyMemoryAccess":
+      "Memory not readable — Hisoutensoku was detected but match data cannot be read (e.g. game running as administrator).",
   };
 
   const dicts = { ja, en };
