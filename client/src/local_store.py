@@ -92,6 +92,7 @@ class LocalStore:
         guest_profile: str,
         *,
         ranked: int = 0,
+        match_rank: str | None = None,
         played_at: float | None = None,
     ) -> str:
         """ローカル対戦を記録する。戻り値は生成した id (重複時は既存 id)。"""
@@ -114,8 +115,8 @@ class LocalStore:
                 INSERT INTO matches(
                   id, server_id, played_at, my_side, winner,
                   host_char, guest_char, host_profile, guest_profile,
-                  ranked, source, pushed
-                ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'local', 0)
+                  ranked, match_rank, source, pushed
+                ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', 0)
                 """,
                 (
                     local_id,
@@ -127,6 +128,7 @@ class LocalStore:
                     host_profile or "",
                     guest_profile or "",
                     ranked,
+                    match_rank,
                 ),
             )
         return local_id

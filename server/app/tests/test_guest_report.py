@@ -137,11 +137,9 @@ async def test_guest_report_duplicate():
             headers={"Authorization": f"Bearer {guest_token}"},
         )
         assert second.status_code == 200
-        assert second.json() == {
-            "ok": True,
-            "recorded": False,
-            "reason": "duplicate",
-        }
+        assert second.json()["recorded"] is False
+        assert second.json()["reason"] == "duplicate"
+        assert second.json().get("match_id")
 
         async with db.session() as s:
             res_m = await s.execute(select(db.Match))
@@ -173,8 +171,8 @@ async def test_host_first_guest_duplicate():
                 "winner": "host",
                 "host_char": 0,
                 "guest_char": 1,
-                "host_profile": "hp",
-                "guest_profile": "gp",
+                "host_profile": "hostp",
+                "guest_profile": "guestp",
             },
         )
         assert host_result.json()["recorded"] is True
@@ -185,11 +183,8 @@ async def test_host_first_guest_duplicate():
             json=GUEST_REPORT_BODY,
             headers={"Authorization": f"Bearer {guest_token}"},
         )
-        assert guest_res.json() == {
-            "ok": True,
-            "recorded": False,
-            "reason": "duplicate",
-        }
+        assert guest_res.json()["recorded"] is False
+        assert guest_res.json()["reason"] == "duplicate"
 
         async with db.session() as s:
             res_m = await s.execute(select(db.Match))
@@ -646,3 +641,82 @@ async def test_sync_promotes_guest_report_ranked():
             assert m.match_rank == "normal"
             assert m.host_user_id == "999"
             assert m.guest_user_id == "888"
+
+
+@pytest.mark.asyncio
+async def test_host_result_repeat_report_is_idempotent():
+    """同一対戦の /posts/result 再送で session_games が二重加算されない。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
+
+        host_token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+
+        body = {
+            "id": post["id"],
+            "owner_token": owner_token,
+            "winner": "host",
+            "host_char": 0,
+            "guest_char": 1,
+            "host_profile": "hp",
+            "guest_profile": "gp",
+        }
+        first = await client.post("/posts/result", json=body)
+        assert first.json()["recorded"] is True
+        assert first.json().get("duplicate") is not True
+        games_after_first = rec.session_games
+
+        second = await client.post("/posts/result", json=body)
+        assert second.json()["recorded"] is True
+        assert second.json().get("duplicate") is True
+        assert rec.session_games == games_after_first
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            assert len(list(res_m.scalars().all())) == 1
+
+
+@pytest.mark.asyncio
+async def test_guest_reports_two_hosts_not_blocked():
+    """30 秒以内でも別ホストとのゲスト報告は両方記録される。"""
+    async with app_client() as client:
+        await create_user("888", name="guest", rank="normal")
+        guest_token = bearer_token("888", "guest")
+
+        first = await client.post(
+            "/matches/report",
+            json={
+                "winner": "guest",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "host_a",
+                "guest_profile": "guestp",
+            },
+            headers={"Authorization": f"Bearer {guest_token}"},
+        )
+        second = await client.post(
+            "/matches/report",
+            json={
+                "winner": "host",
+                "host_char": 2,
+                "guest_char": 3,
+                "host_profile": "host_b",
+                "guest_profile": "guestp",
+            },
+            headers={"Authorization": f"Bearer {guest_token}"},
+        )
+        assert first.json()["recorded"] is True
+        assert second.json()["recorded"] is True
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            assert len(list(res_m.scalars().all())) == 2

@@ -255,6 +255,8 @@ class Controller:
         self._session_my_wins: int = 0
         self._session_my_losses: int = 0
         self._session_ranked_games: int = 0
+        self._ranked_active: bool = False
+        self._post_rank_band: str = ""
 
         # ローカル天則がネット対戦フロー中 (ロビー Ping を止める)
         self._local_net_active: bool = False
@@ -1239,9 +1241,19 @@ class Controller:
                         self.notify_sink(msg)
                         self.log_sink("info", msg)
                     guest_connected = resp.get("guest_connected")
+                    post_rank = str(resp.get("rank") or "")
+                    if post_rank:
+                        self._post_rank_band = post_rank
                     if not guest_connected:
                         self._notified_casual_fallback = False
-                    elif (
+                        self._ranked_active = False
+                        self._session_ranked_games = 0
+                    else:
+                        new_ranked_active = bool(resp.get("ranked_active"))
+                        if self._ranked_active and not new_ranked_active:
+                            self._session_ranked_games = 0
+                        self._ranked_active = new_ranked_active
+                    if (
                         self.my_post.post_type == "ranked"
                         and guest_connected
                         and not resp.get("ranked_active")
@@ -1464,13 +1476,16 @@ class Controller:
             my_side = "host" if st.net_side == "host" else "client"
             winner = "host" if st.lwin == 2 else "guest"
             ranked = 0
+            match_rank = None
             if (
                 st.net_side == "host"
                 and self.has_active_post()
                 and self.my_post.post_type == "ranked"
+                and self._ranked_active
                 and self._session_ranked_games < 3
             ):
                 ranked = 1
+                match_rank = self._post_rank_band or None
             payload = {
                 "my_side": my_side,
                 "winner": winner,
@@ -1479,6 +1494,7 @@ class Controller:
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
                 "ranked": ranked,
+                "match_rank": match_rank,
                 "played_at": played_at,
             }
             self._pending_local_match = payload
@@ -2086,6 +2102,7 @@ class Controller:
         self._sync_post_reachability_from_server(post)
         self._try_copy_host_info_from_server(post)
         self.my_post_sink(self.my_post)
+        self._post_rank_band = str(post.get("rank") or "")
 
         post_type = str(post.get("post_type", "casual"))
         type_label = post_type_label(post_type)

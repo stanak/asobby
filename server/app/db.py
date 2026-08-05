@@ -595,24 +595,33 @@ async def insert_match_result(
         return match.id
 
 
-async def find_recent_match_as_guest(
-    guest_user_id: str, within_sec: int = 30
-) -> Optional[Match]:
-    """guest_user_id 一致 & played_at が直近 within_sec 秒以内の match を 1 件返す。"""
-    cutoff = utcnow() - timedelta(seconds=within_sec)
+async def ip_guest_identification_ok(
+    user_id: str, guest_profile: str
+) -> bool:
+    """IP 同定した user が guest_profile として整合するか (別名プロファイル歴があれば拒否)。"""
+    if not guest_profile:
+        return True
     async with session() as s:
         res = await s.execute(
-            select(Match)
+            select(Match.id)
             .where(
-                (Match.guest_user_id == guest_user_id)
-                & (Match.winner != "")
-                & Match.played_at.is_not(None)
-                & (Match.played_at >= cutoff)
+                (Match.guest_user_id == user_id)
+                & (Match.guest_profile == guest_profile)
             )
-            .order_by(Match.played_at.desc())
             .limit(1)
         )
-        return res.scalar_one_or_none()
+        if res.scalar_one_or_none() is not None:
+            return True
+        res = await s.execute(
+            select(Match.id)
+            .where(
+                (Match.guest_user_id == user_id)
+                & (Match.guest_profile != "")
+                & (Match.guest_profile != guest_profile)
+            )
+            .limit(1)
+        )
+        return res.scalar_one_or_none() is None
 
 
 async def find_near_match_by_profiles(
@@ -637,6 +646,33 @@ async def find_near_match_by_profiles(
             .where(
                 (Match.winner == winner)
                 & (Match.host_profile == host_profile)
+                & (Match.guest_profile == guest_profile)
+                & Match.played_at.is_not(None)
+                & (Match.played_at >= lo)
+                & (Match.played_at <= hi)
+            )
+            .order_by(Match.played_at.desc())
+            .limit(1)
+        )
+        return res.scalar_one_or_none()
+
+
+async def find_near_match_profiles_only(
+    played_at: datetime,
+    host_profile: str,
+    guest_profile: str,
+    window_sec: int = MATCH_DEDUP_WINDOW_SEC,
+) -> Optional[Match]:
+    """勝敗を問わずプロファイルと時刻が近い match を返す (ゲスト補完報告用)。"""
+    if not host_profile or not guest_profile:
+        return None
+    lo = played_at - timedelta(seconds=window_sec)
+    hi = played_at + timedelta(seconds=window_sec)
+    async with session() as s:
+        res = await s.execute(
+            select(Match)
+            .where(
+                (Match.host_profile == host_profile)
                 & (Match.guest_profile == guest_profile)
                 & Match.played_at.is_not(None)
                 & (Match.played_at >= lo)
@@ -709,9 +745,15 @@ async def claim_match_side(match_id: str, side: str, user_id: str) -> bool:
 
 
 async def find_recent_guest_reported_match(
-    guest_user_id: str, within_sec: int = 180
+    guest_user_id: str,
+    *,
+    winner: str,
+    host_profile: str,
+    guest_profile: str,
+    played_at: Optional[datetime] = None,
+    within_sec: int = 180,
 ) -> Optional[Match]:
-    """直近のゲスト報告 (source=='guest') match を 1 件返す。"""
+    """直近のゲスト報告 (source=='guest') を返す。プロファイル一致優先、単一候補のみフォールバック。"""
     cutoff = utcnow() - timedelta(seconds=within_sec)
     async with session() as s:
         res = await s.execute(
@@ -719,14 +761,44 @@ async def find_recent_guest_reported_match(
             .where(
                 (Match.guest_user_id == guest_user_id)
                 & (Match.source == "guest")
-                & (Match.winner != "")
                 & Match.played_at.is_not(None)
                 & (Match.played_at >= cutoff)
             )
             .order_by(Match.played_at.desc())
-            .limit(1)
         )
-        return res.scalar_one_or_none()
+        candidates = list(res.scalars().all())
+
+    if not candidates:
+        return None
+
+    if winner:
+        winner_matches = [m for m in candidates if m.winner == winner]
+        if winner_matches:
+            candidates = winner_matches
+
+    if host_profile and guest_profile:
+        for match in candidates:
+            if (
+                match.host_profile == host_profile
+                and match.guest_profile == guest_profile
+            ):
+                return match
+        if played_at is not None:
+            lo = played_at - timedelta(seconds=MATCH_DEDUP_WINDOW_SEC)
+            hi = played_at + timedelta(seconds=MATCH_DEDUP_WINDOW_SEC)
+            for match in candidates:
+                if match.played_at is None:
+                    continue
+                pa = match.played_at
+                if pa.tzinfo is None:
+                    pa = pa.replace(tzinfo=timezone.utc)
+                if lo <= pa <= hi:
+                    return match
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
+    return candidates[0]
 
 
 async def promote_guest_match(
@@ -832,6 +904,15 @@ async def count_ranked_streak_before(
     gap_minutes: int = 30,
 ) -> int:
     """anchor より前の同一対戦相手との連続ランクマ試合数 (30 分超の空白で区切る)。"""
+    if guest_user_id:
+        return await count_ranked_pair_streak_before(
+            host_user_id,
+            guest_user_id,
+            before=before,
+            match_rank=match_rank,
+            gap_minutes=gap_minutes,
+        )
+
     profile_pair = (
         ((Match.host_profile == host_profile) & (Match.guest_profile == guest_profile))
         | ((Match.host_profile == guest_profile) & (Match.guest_profile == host_profile))
@@ -844,8 +925,6 @@ async def count_ranked_streak_before(
         profile_pair,
         (Match.host_user_id == host_user_id) | (Match.guest_user_id == host_user_id),
     ]
-    if guest_user_id:
-        clauses.append(Match.guest_user_id == guest_user_id)
     if match_rank:
         clauses.append(Match.match_rank == match_rank)
 
@@ -864,24 +943,37 @@ async def count_ranked_streak_before(
 async def find_guest_user_id_by_profiles(
     host_profile: str,
     guest_profile: str,
+    *,
+    within_sec: int = 3600,
 ) -> Optional[str]:
-    """プロファイル一致の直近 match から guest_user_id を推定する。"""
+    """プロファイル一致の直近 match から guest_user_id を推定する (向き反転・時間窓付き)。"""
     if not host_profile or not guest_profile:
         return None
+    cutoff = utcnow() - timedelta(seconds=within_sec)
+    profile_pair = (
+        ((Match.host_profile == host_profile) & (Match.guest_profile == guest_profile))
+        | ((Match.host_profile == guest_profile) & (Match.guest_profile == host_profile))
+    )
     async with session() as s:
         res = await s.execute(
-            select(Match.guest_user_id)
+            select(Match)
             .where(
-                Match.host_profile == host_profile,
-                Match.guest_profile == guest_profile,
-                Match.guest_user_id.is_not(None),
+                profile_pair,
                 Match.winner != "",
+                Match.played_at.is_not(None),
+                Match.played_at >= cutoff,
             )
             .order_by(Match.played_at.desc())
             .limit(1)
         )
-        uid = res.scalar_one_or_none()
-        return str(uid) if uid else None
+        match = res.scalar_one_or_none()
+        if match is None:
+            return None
+        if match.host_profile == host_profile and match.guest_profile == guest_profile:
+            return str(match.guest_user_id) if match.guest_user_id else None
+        if match.host_profile == guest_profile and match.guest_profile == host_profile:
+            return str(match.host_user_id) if match.host_user_id else None
+        return None
 
 
 async def fetch_user_matches(user_id: str, limit: int = 1000) -> list[Match]:
