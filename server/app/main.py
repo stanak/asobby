@@ -244,6 +244,7 @@ async def _assign_guest_from_ip(
         return
     rec.guest_user_id = user.id
     rec.guest_rank = user.rank
+    rec.post.guest_user_id = user.id
 
 
 async def _bump_session_games(host_user_id: str, guest_user_id: Optional[str]) -> None:
@@ -409,6 +410,7 @@ class Post:
     owner_avatar: str = ""
     guest_name: str = ""  # 対戦中ゲストが Discord ログイン済みなら表示名
     guest_avatar: str = ""
+    guest_user_id: str = ""  # 同定済みゲストの Discord ID (高 Ping 警告の本人確認用)
     guest_connected: bool = False  # プローブでゲスト検出中
     ranked_active: bool = False  # 現在のゲストとのセッションがランクマ扱いか
     ping_warn_enabled: bool = True  # 高 Ping 警告をホストへ送るか
@@ -474,7 +476,7 @@ def post_record_to_dict(rec: PostRecord) -> dict[str, Any]:
 def post_record_from_dict(data: dict[str, Any]) -> PostRecord:
     post_data = dict(data.get("post") or {})
     post_data.pop("challenge_upper", None)
-    return PostRecord(
+    rec = PostRecord(
         post=Post(**post_data),
         owner_token=str(data.get("owner_token", "")),
         creator_ip=str(data.get("creator_ip", "")),
@@ -488,6 +490,9 @@ def post_record_from_dict(data: dict[str, Any]) -> PostRecord:
         sent_log=dict(data.get("sent_log") or {}),
         last_hostcheck_at=float(data.get("last_hostcheck_at", 0) or 0),
     )
+    if not rec.post.guest_user_id and rec.guest_user_id:
+        rec.post.guest_user_id = rec.guest_user_id
+    return rec
 
 
 def now_ts() -> float:
@@ -1274,6 +1279,15 @@ def post_ping_warn_threshold(post: Post) -> int:
     if post.giuroll:
         return int(post.ping_warn_giuroll_ms or PING_WARN_GIUROLL_MS_DEFAULT)
     return int(post.ping_warn_ms or PING_WARN_MS_DEFAULT)
+
+
+def viewer_may_report_ping(rec: PostRecord, user_id: str, ip: str) -> bool:
+    """接続中ゲスト本人だけが ping-report できる。"""
+    if rec.guest_user_id:
+        return rec.guest_user_id == user_id
+    if rec.guest_ip:
+        return rec.guest_ip == ip
+    return False
 
 
 def cleanup_message_state_for_post(post_id: str) -> None:
@@ -2970,7 +2984,7 @@ async def report_high_ping(
     if not rec.post.guest_connected:
         raise HTTPException(status_code=409, detail="host has no connected guest")
 
-    if rec.guest_user_id and rec.guest_user_id != sess["id"]:
+    if not viewer_may_report_ping(rec, sess["id"], client_ip(request)):
         raise HTTPException(status_code=403, detail="only the connected guest may report ping")
 
     threshold = post_ping_warn_threshold(rec.post)
@@ -3678,6 +3692,7 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
             rec.session_games = 0
             post.guest_name = ""
             post.guest_avatar = ""
+            post.guest_user_id = ""
             post.guest_connected = False
             post.ranked_active = False
             await _persist_record(rec)
@@ -3703,9 +3718,11 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
     if user is not None:
         rec.guest_user_id = user.id
         rec.guest_rank = user.rank
+        post.guest_user_id = user.id
         post.guest_name = user.name
         post.guest_avatar = discord_avatar_url(user.id, user.avatar)
     else:
+        post.guest_user_id = ""
         post.guest_name = ""
         post.guest_avatar = ""
 

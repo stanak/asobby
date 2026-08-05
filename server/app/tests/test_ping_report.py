@@ -76,11 +76,20 @@ async def create_post(
     return body["post"], body["owner_token"]
 
 
-def connect_guest(post_id: str, *, guest_user_id: str = "viewer1", name: str = "viewer") -> None:
+def connect_guest(
+    post_id: str,
+    *,
+    guest_user_id: str = "viewer1",
+    name: str = "viewer",
+    guest_ip: str = "",
+) -> None:
     rec = main.RECORDS[post_id]
     rec.post.guest_connected = True
     rec.guest_user_id = guest_user_id
+    rec.post.guest_user_id = guest_user_id
     rec.post.guest_name = name
+    if guest_ip:
+        rec.guest_ip = guest_ip
 
 
 @pytest.fixture(autouse=True)
@@ -228,6 +237,90 @@ async def test_ping_report_only_connected_guest():
             headers={"Authorization": f"Bearer {other_token}"},
         )
         assert res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_ping_report_rejects_when_guest_unidentified_and_ip_mismatch():
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        await create_user("viewer1", name="viewer")
+        await create_user("viewer2", name="other")
+        post, _ = await create_post(client, ping_warn_ms=60)
+        connect_guest(
+            post["id"],
+            guest_user_id="",
+            name="",
+            guest_ip="203.0.113.50",
+        )
+
+        viewer_token = bearer_token("viewer2", "other")
+        res = await client.post(
+            f"/posts/{post['id']}/ping-report",
+            json={"rtt_ms": 80},
+            headers={
+                "Authorization": f"Bearer {viewer_token}",
+                "X-Forwarded-For": "203.0.113.99",
+            },
+        )
+        assert res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_ping_report_allows_guest_ip_match_when_user_unidentified():
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        await create_user("viewer1", name="viewer")
+        post, owner_token = await create_post(client, ping_warn_ms=60)
+        connect_guest(
+            post["id"],
+            guest_user_id="",
+            name="",
+            guest_ip="203.0.113.50",
+        )
+
+        viewer_token = bearer_token("viewer1", "viewer")
+        res = await client.post(
+            f"/posts/{post['id']}/ping-report",
+            json={"rtt_ms": 80},
+            headers={
+                "Authorization": f"Bearer {viewer_token}",
+                "X-Forwarded-For": "203.0.113.50",
+            },
+        )
+        assert res.status_code == 200
+
+        upd = await client.post(
+            "/posts/update",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "post_type": "casual",
+                "addr": post["addr"],
+                "ping_warn_ms": 60,
+                "ping_warn_giuroll_ms": 100,
+            },
+        )
+        warnings = upd.json().get("ping_warnings") or []
+        assert len(warnings) == 1
+        assert warnings[0]["from_name"] == "viewer"
+
+
+@pytest.mark.asyncio
+async def test_viewer_may_report_ping_helper():
+    post = main.Post()
+    rec = main.PostRecord(post=post, owner_token="t", creator_ip="")
+    rec.post.guest_connected = True
+    rec.guest_user_id = "guest1"
+    assert main.viewer_may_report_ping(rec, "guest1", "1.2.3.4") is True
+    assert main.viewer_may_report_ping(rec, "other", "1.2.3.4") is False
+
+    rec.guest_user_id = ""
+    rec.guest_ip = "203.0.113.50"
+    assert main.viewer_may_report_ping(rec, "any", "203.0.113.50") is True
+    assert main.viewer_may_report_ping(rec, "any", "203.0.113.99") is False
+
+    rec.guest_ip = ""
+    assert main.viewer_may_report_ping(rec, "any", "1.2.3.4") is False
 
 
 @pytest.mark.asyncio

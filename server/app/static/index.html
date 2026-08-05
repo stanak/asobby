@@ -1153,6 +1153,13 @@ function pingLevelClass(rttMs, threshold) {
   return "ping-good";
 }
 
+function shouldReportHighPingForPost(post) {
+  if (!post?.guest_connected || post.ping_warn_enabled === false) return false;
+  if (post.guest_user_id) return post.guest_user_id === myUserId;
+  // ゲスト未同定時はサーバー側で guest_ip と照合する
+  return true;
+}
+
 function buildPingCell(p) {
   const cell = document.createElement("td");
   cell.className = "ping-cell";
@@ -1288,10 +1295,7 @@ async function refreshHostPings() {
       pingByPostId.set(item.id, item.ok ? item.rtt_ms : null);
       if (item.ok && item.rtt_ms != null) {
         const post = posts.get(item.id);
-        if (
-          post?.guest_connected
-          && post.ping_warn_enabled !== false
-        ) {
+        if (shouldReportHighPingForPost(post)) {
           const threshold = pingWarnThresholdForPost(post);
           if (item.rtt_ms >= threshold) {
             void reportHighPing(item.id, item.rtt_ms);
