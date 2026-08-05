@@ -1589,6 +1589,8 @@ function showLoginRequired() {
   myRank = null;
   clientPingAvailable = false;
   localNetworkPermission = "unknown";
+  disconnectPostsSse();
+  posts.clear();
   if (pingTimer) {
     clearInterval(pingTimer);
     pingTimer = null;
@@ -1888,62 +1890,61 @@ function initLobbyChat() {
   });
 }
 
-let sseStarted = false;
+let postsEventSource = null;
+let sseReconnectTimer = null;
 let authPollTimer = null;
 
-async function checkAuth() {
+function applyPostsSnapshot(list) {
+  posts.clear();
+  for (const p of list) posts.set(p.id, p);
+  const ids = new Set(list.map((p) => p.id));
+  for (const id of pingByPostId.keys()) {
+    if (!ids.has(id)) pingByPostId.delete(id);
+  }
+  for (const id of pingReportedPosts) {
+    if (!ids.has(id)) pingReportedPosts.delete(id);
+  }
+  render();
+  void refreshHostPings();
+}
+
+async function syncPostsFromServer() {
+  if (!loggedIn) return;
   try {
-    const res = await fetch("/auth/me");
-    if (res.ok) {
-      if (authPollTimer) {
-        clearInterval(authPollTimer);
-        authPollTimer = null;
-      }
-      showLoggedIn(await res.json());
-      if (!sseStarted) {
-        sseStarted = true;
-        connect();  // 募集一覧 (SSE) はログイン済みのときだけ購読できる
-      }
-      return true;
-    }
+    const res = await fetch("/posts");
+    if (!res.ok) return;
+    applyPostsSnapshot(await res.json());
   } catch (_) {}
-  return false;
 }
 
-async function initAuth() {
-  if (await checkAuth()) return;
-  showLoginRequired();
-  // クライアント経由でログインが完了したらリロードなしで反映する
-  authPollTimer = setInterval(checkAuth, 10000);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible") return;
-    if (!loggedIn) {
-      checkAuth();
-      return;
-    }
-    void reloadFaviconSettings();
-  });
-}
-
-async function reloadFaviconSettings() {
-  if (!loggedIn || !window.AsobbyNotify) return;
-  try {
-    const settings = await AsobbyNotify.fetchUserSettings();
-    faviconNotifySettings = settings.favicon_notify;
-    updateFaviconBadge();
-  } catch {
-    /* keep current */
+function disconnectPostsSse() {
+  if (sseReconnectTimer) {
+    clearTimeout(sseReconnectTimer);
+    sseReconnectTimer = null;
+  }
+  if (postsEventSource) {
+    postsEventSource.close();
+    postsEventSource = null;
   }
 }
 
-function connect() {
+function schedulePostsSseReconnect(delayMs = 1500) {
+  if (!loggedIn || sseReconnectTimer) return;
+  sseReconnectTimer = setTimeout(() => {
+    sseReconnectTimer = null;
+    connectPostsSse();
+  }, delayMs);
+}
+
+function connectPostsSse() {
+  disconnectPostsSse();
+  if (!loggedIn) return;
+
   const es = new EventSource("/sse/posts");
+  postsEventSource = es;
 
   es.addEventListener("snapshot", (e) => {
-    posts.clear();
-    for (const p of JSON.parse(e.data)) posts.set(p.id, p);
-    render();
-    void refreshHostPings();
+    applyPostsSnapshot(JSON.parse(e.data));
   });
 
   es.addEventListener("upsert", (e) => {
@@ -1987,6 +1988,62 @@ function connect() {
   es.addEventListener("chat_message", (e) => {
     handleIncomingChatMessage(JSON.parse(e.data));
   });
+
+  es.onerror = () => {
+    es.close();
+    if (postsEventSource === es) postsEventSource = null;
+    schedulePostsSseReconnect();
+  };
+}
+
+async function onPageVisible() {
+  if (!loggedIn) {
+    checkAuth();
+    return;
+  }
+  void reloadFaviconSettings();
+  await syncPostsFromServer();
+  // バックグラウンド中の SSE 取りこぼし・ゾンビ接続を復旧する
+  connectPostsSse();
+}
+
+async function checkAuth() {
+  try {
+    const res = await fetch("/auth/me");
+    if (res.ok) {
+      if (authPollTimer) {
+        clearInterval(authPollTimer);
+        authPollTimer = null;
+      }
+      showLoggedIn(await res.json());
+      connectPostsSse();
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+async function initAuth() {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    void onPageVisible();
+  });
+
+  if (await checkAuth()) return;
+  showLoginRequired();
+  // クライアント経由でログインが完了したらリロードなしで反映する
+  authPollTimer = setInterval(checkAuth, 10000);
+}
+
+async function reloadFaviconSettings() {
+  if (!loggedIn || !window.AsobbyNotify) return;
+  try {
+    const settings = await AsobbyNotify.fetchUserSettings();
+    faviconNotifySettings = settings.favicon_notify;
+    updateFaviconBadge();
+  } catch {
+    /* keep current */
+  }
 }
 
 applyDocumentI18n();
