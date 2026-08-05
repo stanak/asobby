@@ -227,6 +227,34 @@ def _guest_ranked_session_rank(
     return None
 
 
+def _apply_guest_identity(rec: PostRecord, user: db.User) -> bool:
+    """同定済みゲストを PostRecord に反映する。状態が変わったら True。"""
+    post = rec.post
+    if (
+        rec.guest_user_id == user.id
+        and rec.guest_rank == user.rank
+        and post.guest_user_id == user.id
+    ):
+        return False
+    rec.guest_user_id = user.id
+    rec.guest_rank = user.rank
+    post.guest_user_id = user.id
+    post.guest_name = user.name
+    post.guest_avatar = discord_avatar_url(user.id, user.avatar)
+    return True
+
+
+async def _refresh_guest_identity_from_ip(rec: PostRecord) -> bool:
+    """guest_ip から Discord ユーザーを同定する (プローブ/heartbeat 用)。"""
+    ip = rec.guest_ip
+    if not ip or not db.is_configured():
+        return False
+    user = await db.find_user_by_ip(ip)
+    if user is None or user.id == rec.owner_user_id:
+        return False
+    return _apply_guest_identity(rec, user)
+
+
 async def _assign_guest_from_ip(
     rec: PostRecord,
     *,
@@ -242,9 +270,7 @@ async def _assign_guest_from_ip(
         user.id, guest_profile
     ):
         return
-    rec.guest_user_id = user.id
-    rec.guest_rank = user.rank
-    rec.post.guest_user_id = user.id
+    _apply_guest_identity(rec, user)
 
 
 async def _bump_session_games(host_user_id: str, guest_user_id: Optional[str]) -> None:
@@ -2884,8 +2910,11 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     p.net_status = body.net_status
     p.updated_at = now
     geoip.apply_country_from_addr(p, addr=p.addr)
-    if rec.guest_user_id:
-        refresh_ranked_active(rec)
+    if rec.guest_ip:
+        if not rec.guest_user_id:
+            await _refresh_guest_identity_from_ip(rec)
+        if rec.guest_user_id:
+            refresh_ranked_active(rec)
 
     messages = list(rec.pending_messages)
     rec.pending_messages.clear()
@@ -3701,30 +3730,22 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
 
     ip, _port = matched
     if ip == rec.guest_ip:
+        # 初回プローブ時は last_ip 未登録で同定できず、後から heartbeat で
+        # last_ip が付いても同一 IP では early return していた → 再試行する
+        if not rec.guest_user_id and await _refresh_guest_identity_from_ip(rec):
+            refresh_ranked_active(rec)
+            await _persist_record(rec)
+            await HUB.publish("upsert", asdict(post))
         return
 
     rec.guest_ip = ip
     rec.guest_user_id = ""
     rec.guest_rank = ""
     rec.session_games = 0
-    user = None
-    if db.is_configured():
-        user = await db.find_user_by_ip(ip)
-    if user is not None and user.id == rec.owner_user_id:
-        # 同一 IP (同一 NAT 内など) でホスト自身に同定された場合は
-        # 「自分対自分」を避けるため未同定として扱う
-        user = None
-
-    if user is not None:
-        rec.guest_user_id = user.id
-        rec.guest_rank = user.rank
-        post.guest_user_id = user.id
-        post.guest_name = user.name
-        post.guest_avatar = discord_avatar_url(user.id, user.avatar)
-    else:
-        post.guest_user_id = ""
-        post.guest_name = ""
-        post.guest_avatar = ""
+    post.guest_user_id = ""
+    post.guest_name = ""
+    post.guest_avatar = ""
+    await _refresh_guest_identity_from_ip(rec)
 
     post.guest_connected = True
     refresh_ranked_active(rec)

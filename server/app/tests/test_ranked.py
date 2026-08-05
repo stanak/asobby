@@ -469,6 +469,79 @@ async def test_sync_respects_ranked_session_limit():
 
 
 @pytest.mark.asyncio
+async def test_ranked_active_after_delayed_guest_identification_on_probe():
+    """初回プローブで last_ip 未登録→同定失敗後、last_ip 更新で再プローブ時にランクマ化。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
+        await create_user("888", name="guest", last_ip="", rank="normal")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        assert rec.post.guest_connected is True
+        assert rec.guest_ip == "5.6.7.8"
+        assert rec.guest_user_id == ""
+        assert rec.post.ranked_active is False
+
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
+
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        assert rec.guest_user_id == "888"
+        assert rec.post.ranked_active is True
+
+
+@pytest.mark.asyncio
+async def test_ranked_active_after_delayed_guest_identification_on_heartbeat():
+    """heartbeat (update) 中に last_ip が付いて同定→ranked_active が True になる。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
+        await create_user("888", name="guest", last_ip="", rank="normal")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        assert rec.post.ranked_active is False
+
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
+
+        update_body = {
+            "id": post["id"],
+            "owner_token": owner_token,
+            "post_type": "ranked",
+            "addr": "1.2.3.4:10800",
+            "comment": "",
+            "stream_url": "",
+            "giuroll": False,
+            "autopunch": False,
+            "match_status": "",
+            "net_status": main.NET_BATTLE,
+            "ping_warn_enabled": True,
+            "ping_warn_ms": 200,
+            "ping_warn_giuroll_ms": 300,
+        }
+        resp = await client.post("/posts/update", json=update_body)
+        assert resp.status_code == 200
+        assert resp.json()["ranked_active"] is True
+        assert rec.guest_user_id == "888"
+
+
+@pytest.mark.asyncio
 async def test_ranked_pair_limit_when_host_and_client_swap():
     """ホスト/クライアントを入れ替えても同一ペアの 3 戦上限を共有する。"""
     import time
