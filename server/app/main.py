@@ -211,6 +211,34 @@ async def resolve_ranked_for_host_session(
     return True, band_rank
 
 
+async def _resolve_host_result_ranked(
+    rec: PostRecord,
+    *,
+    host_profile: str,
+    guest_profile: str,
+    played_at: datetime,
+    is_ranked: bool,
+    match_rank: Optional[str],
+) -> tuple[bool, Optional[str]]:
+    """/posts/result 用: ranked_active が落ちていても同定済みならランクマ判定を復元。"""
+    if is_ranked or rec.post.post_type != "ranked":
+        return is_ranked, match_rank
+    guest_uid = rec.guest_user_id
+    if not guest_uid:
+        guest_uid = await db.find_guest_user_id_by_profiles(host_profile, guest_profile)
+    if not guest_uid:
+        return False, None
+    return await resolve_ranked_for_host_session(
+        rec.owner_user_id,
+        guest_user_id=guest_uid,
+        host_profile=host_profile,
+        guest_profile=guest_profile,
+        client_wants_ranked=True,
+        match_rank=rec.post.rank,
+        played_at=played_at,
+    )
+
+
 def _guest_ranked_session_rank(
     guest_user_id: str,
     guest_ip: str,
@@ -3432,6 +3460,26 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
     is_ranked = post.ranked_active and not limit_reached
     match_rank = post.rank if is_ranked else None
 
+    if not is_ranked and post.post_type == "ranked":
+        guest_uid = rec.guest_user_id
+        if not guest_uid:
+            guest_uid = await db.find_guest_user_id_by_profiles(
+                body.host_profile, body.guest_profile
+            )
+            if guest_uid:
+                rec.guest_user_id = guest_uid
+                guest_user = await db.get_user(guest_uid)
+                if guest_user is not None:
+                    rec.guest_rank = guest_user.rank
+    is_ranked, match_rank = await _resolve_host_result_ranked(
+        rec,
+        host_profile=body.host_profile,
+        guest_profile=body.guest_profile,
+        played_at=played_at,
+        is_ranked=is_ranked,
+        match_rank=match_rank,
+    )
+
     match_id: Optional[str] = None
     promoted = False
     newly_recorded = False
@@ -3444,6 +3492,14 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
             played_at=played_at,
         )
         if guest_match is not None:
+            promote_ranked, promote_match_rank = await _resolve_host_result_ranked(
+                rec,
+                host_profile=body.host_profile,
+                guest_profile=body.guest_profile,
+                played_at=played_at,
+                is_ranked=is_ranked,
+                match_rank=match_rank,
+            )
             await db.promote_guest_match(
                 guest_match.id,
                 host_user_id=rec.owner_user_id,
@@ -3453,10 +3509,12 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 guest_char=body.guest_char,
                 host_profile=body.host_profile,
                 guest_profile=body.guest_profile,
-                ranked=is_ranked,
-                match_rank=match_rank,
+                ranked=promote_ranked,
+                match_rank=promote_match_rank if promote_ranked else None,
                 played_at=played_at,
             )
+            is_ranked = promote_ranked
+            match_rank = promote_match_rank
             match_id = guest_match.id
             promoted = True
             newly_recorded = True
@@ -3471,6 +3529,14 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
         )
         if near is not None:
             if near.source in ("sync", "guest"):
+                promote_ranked, promote_match_rank = await _resolve_host_result_ranked(
+                    rec,
+                    host_profile=body.host_profile,
+                    guest_profile=body.guest_profile,
+                    played_at=played_at,
+                    is_ranked=is_ranked,
+                    match_rank=match_rank,
+                )
                 await db.promote_guest_match(
                     near.id,
                     host_user_id=rec.owner_user_id,
@@ -3480,10 +3546,12 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                     guest_char=body.guest_char,
                     host_profile=body.host_profile,
                     guest_profile=body.guest_profile,
-                    ranked=is_ranked,
-                    match_rank=match_rank,
+                    ranked=promote_ranked,
+                    match_rank=promote_match_rank if promote_ranked else None,
                     played_at=played_at,
                 )
+                is_ranked = promote_ranked
+                match_rank = promote_match_rank
                 if rec.guest_user_id:
                     await db.claim_match_side(near.id, "guest", rec.guest_user_id)
                 match_id = near.id
@@ -3867,15 +3935,13 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
             and rec.guest_ip
             and rec.post.net_status not in (NET_CHECKING, NET_BATTLE)
         ):
+            # 接続状態のみクリア。対戦結果報告用に guest 同定は保持する。
             rec.guest_ip = ""
-            rec.guest_user_id = ""
-            rec.guest_rank = ""
-            rec.session_games = 0
             post.guest_name = ""
             post.guest_avatar = ""
             post.guest_user_id = ""
             post.guest_connected = False
-            post.ranked_active = False
+            refresh_ranked_active(rec)
             await _persist_record(rec)
             await HUB.publish("upsert", asdict(post))
         return

@@ -743,6 +743,63 @@ async def test_ranked_reidentifies_after_wrong_rank_nat_collision():
 
 
 @pytest.mark.asyncio
+async def test_ranked_saved_after_guest_disconnect_probe():
+    """対戦中に同定済みゲストが 0x07 で切断表示されても結果はランクマ保存される。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="luna")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="luna")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        assert post["rank"] == "luna"
+
+        rec = main.RECORDS[post["id"]]
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        assert rec.guest_user_id == "888"
+        assert rec.post.ranked_active is True
+
+        rec.post.net_status = main.NET_ALIVE
+        await main.apply_guest_probe(rec, bytes([0x07]))
+        assert rec.guest_ip == ""
+        assert rec.post.guest_connected is False
+        assert rec.guest_user_id == "888"
+        assert rec.guest_rank == "luna"
+        assert rec.session_games == 0
+        assert rec.post.ranked_active is True
+
+        r = await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "winner": "host",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "hp",
+                "guest_profile": "gp",
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["recorded"] is True
+        assert data["ranked"] is True
+        assert data["match_rank"] == "luna"
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            matches = list(res_m.scalars().all())
+            assert len(matches) == 1
+            assert matches[0].ranked is True
+            assert matches[0].match_rank == "luna"
+
+
+@pytest.mark.asyncio
 async def test_matches_presence_links_guest_to_active_ranked_post():
     """対戦開始 presence で guest_user_id が付き ranked_active になる。"""
     async with app_client() as client:
