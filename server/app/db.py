@@ -429,6 +429,18 @@ async def find_user_by_ip(ip: str) -> Optional[User]:
         return res.scalar_one_or_none()
 
 
+async def find_user_by_ip_and_rank(ip: str, rank: str) -> Optional[User]:
+    """IP とランク帯の両方が一致するユーザーを返す (共有 NAT 向け)。"""
+    async with session() as s:
+        res = await s.execute(
+            select(User)
+            .where(User.last_ip == ip, User.rank == rank)
+            .order_by(User.last_seen_at.desc())
+            .limit(1)
+        )
+        return res.scalar_one_or_none()
+
+
 async def get_user_rank(user_id: str) -> tuple[str, float, float] | None:
     """ユーザーの (rank, ts_mu, ts_sigma) を返す。"""
     async with session() as s:

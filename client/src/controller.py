@@ -230,6 +230,7 @@ class Controller:
         self._stats_sync_running = False
 
         self._battle_start_ts = 0.0
+        self._battle_presence_announced = False
         self._replay_pending = False
         self._uploaded_replay_keys: set[tuple[str, int]] = set()
         self._replay_result_reported = False
@@ -1570,6 +1571,11 @@ class Controller:
                 self._result_reported = False
                 self._last_ko_fingerprint = ""
                 self._last_ko_played_at = 0.0
+                if self.is_logged_in() and not self._battle_presence_announced:
+                    self._battle_presence_announced = True
+                    asyncio.get_running_loop().create_task(
+                        self._announce_net_battle_presence()
+                    )
 
         if (
             is_net_battle
@@ -1594,6 +1600,7 @@ class Controller:
             battle_end_ts = now
             exe_path = st.exe_path
             self._battle_start_ts = 0.0
+            self._battle_presence_announced = False
             asyncio.create_task(
                 self._schedule_replay_upload(battle_start_ts, battle_end_ts, exe_path)
             )
@@ -2080,6 +2087,12 @@ class Controller:
     # -----------------
     # result / error handling
     # -----------------
+    async def _announce_net_battle_presence(self) -> None:
+        try:
+            await self.api.announce_net_battle()
+        except Exception as e:
+            self.log_sink("debug", f"Net battle presence failed: {e}")
+
     def _sync_post_reachability_from_server(self, data: dict) -> None:
         """サーバーが判定した AP 状態をローカルに反映する (404 再作成後も維持)。"""
         if "autopunch" in data:

@@ -542,6 +542,96 @@ async def test_ranked_active_after_delayed_guest_identification_on_heartbeat():
 
 
 @pytest.mark.asyncio
+async def test_ranked_active_when_guest_joins_during_connection_phase():
+    """キャラセレ/接続処理中 (NET_CHECKING) に入っても guest IP を取得してランクマ化。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+        assert rec.guest_ip == ""
+
+        rec.post.net_status = main.NET_CHECKING
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        assert rec.guest_ip == "5.6.7.8"
+        assert rec.guest_user_id == "888"
+        assert rec.post.ranked_active is True
+
+        targets = main.probe_target_records()
+        assert rec not in targets
+
+        r = await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "winner": "host",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "hp",
+                "guest_profile": "gp",
+            },
+        )
+        assert r.json()["recorded"] is True
+        assert r.json()["ranked"] is True
+
+
+@pytest.mark.asyncio
+async def test_ranked_active_after_update_probe_during_connection(monkeypatch):
+    """heartbeat update が NET_CHECKING 中に guest プローブして ranked_active を立てる。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+
+        def fake_probe(host, port, autopunch, **kwargs):
+            return make_0x08_reply("5.6.7.8")
+
+        monkeypatch.setattr(main, "probe_post_status", fake_probe)
+
+        resp = await client.post(
+            "/posts/update",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "post_type": "ranked",
+                "addr": "1.2.3.4:10800",
+                "comment": "",
+                "stream_url": "",
+                "giuroll": False,
+                "autopunch": False,
+                "match_status": "guest joined",
+                "net_status": main.NET_CHECKING,
+                "ping_warn_enabled": True,
+                "ping_warn_ms": 200,
+                "ping_warn_giuroll_ms": 300,
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["guest_connected"] is True
+        assert resp.json()["ranked_active"] is True
+        assert rec.guest_user_id == "888"
+
+
+@pytest.mark.asyncio
 async def test_ranked_pair_limit_when_host_and_client_swap():
     """ホスト/クライアントを入れ替えても同一ペアの 3 戦上限を共有する。"""
     import time
@@ -623,3 +713,63 @@ async def test_ranked_pair_limit_when_host_and_client_swap():
             assert sum(1 for m in matches if m.ranked) == 3
             assert all(m.ranked for m in matches[:3])
             assert matches[3].ranked is False
+
+
+@pytest.mark.asyncio
+async def test_ranked_reidentifies_after_wrong_rank_nat_collision():
+    """共有 NAT で異帯ユーザーがいる IP でも、同帯ゲストの last_ip 更新後にランクマ化する。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
+        await create_user("777", name="wrong", last_ip="5.6.7.8", rank="ex")
+        await create_user("888", name="guest", last_ip="", rank="normal")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        rec = main.RECORDS[res.json()["post"]["id"]]
+
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        assert rec.guest_user_id == ""
+        assert rec.post.ranked_active is False
+
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
+        await create_user("777", name="wrong", last_ip="", rank="ex")
+        assert await main._retry_guest_identity_from_ip(rec) is True
+        assert rec.guest_user_id == "888"
+        assert rec.post.ranked_active is True
+
+
+@pytest.mark.asyncio
+async def test_matches_presence_links_guest_to_active_ranked_post():
+    """対戦開始 presence で guest_user_id が付き ranked_active になる。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
+
+        host_token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        rec = main.RECORDS[res.json()["post"]["id"]]
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        rec.guest_user_id = ""
+        rec.guest_rank = ""
+        rec.post.guest_user_id = ""
+        rec.post.ranked_active = False
+
+        guest_token = bearer_token("888", "guest")
+        pres = await client.post(
+            "/matches/presence",
+            headers={
+                "Authorization": f"Bearer {guest_token}",
+                "X-Forwarded-For": "5.6.7.8",
+            },
+        )
+        assert pres.status_code == 200
+        assert rec.guest_user_id == "888"
+        assert rec.post.ranked_active is True

@@ -347,14 +347,41 @@ def test_probe_target_records_skips_connection_in_progress():
         owner_token="t2",
         creator_ip="1.2.3.5",
     )
+    busy_identified = main.PostRecord(
+        post=main.Post(
+            id="busy_id",
+            addr="203.0.113.3:10800",
+            net_status=main.NET_CHECKING,
+            guest_connected=True,
+        ),
+        owner_token="t3",
+        creator_ip="1.2.3.6",
+        guest_ip="203.0.113.50",
+    )
     main.RECORDS.clear()
     main.RECORDS["quiet"] = quiet
     main.RECORDS["busy"] = busy
+    main.RECORDS["busy_id"] = busy_identified
     try:
         targets = main.probe_target_records()
-        assert [rec.post.id for rec in targets] == ["quiet"]
+        assert [rec.post.id for rec in targets] == ["busy", "quiet"]
     finally:
         main.RECORDS.clear()
+
+
+def test_guest_probe_paused_without_guest_ip():
+    rec = main.PostRecord(
+        post=main.Post(
+            id="battle",
+            addr="203.0.113.2:10800",
+            net_status=main.NET_BATTLE,
+        ),
+        owner_token="t",
+        creator_ip="1.2.3.4",
+    )
+    assert main.guest_probe_paused(rec) is False
+    rec.guest_ip = "203.0.113.50"
+    assert main.guest_probe_paused(rec) is True
 
 
 def test_host_probe_kwargs_relaxed_for_giuroll():

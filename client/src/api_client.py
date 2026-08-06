@@ -220,6 +220,14 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    async def announce_net_battle(self) -> None:
+        """対戦開始時に last_ip 更新とホスト募集へのゲスト同定を促す。"""
+        r = await self.http.post(
+            f"{self.base}/matches/presence",
+            headers=self._request_headers(),
+        )
+        r.raise_for_status()
+
     async def fetch_my_matches(self, since: float = 0.0, limit: int = 500) -> dict:
         """自分の戦績一覧を取得する。"""
         r = await self.http.get(

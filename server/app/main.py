@@ -244,15 +244,83 @@ def _apply_guest_identity(rec: PostRecord, user: db.User) -> bool:
     return True
 
 
-async def _refresh_guest_identity_from_ip(rec: PostRecord) -> bool:
-    """guest_ip から Discord ユーザーを同定する (プローブ/heartbeat 用)。"""
+def _clear_guest_identity(rec: PostRecord) -> None:
+    rec.guest_user_id = ""
+    rec.guest_rank = ""
+    rec.post.guest_user_id = ""
+    rec.post.guest_name = ""
+    rec.post.guest_avatar = ""
+    rec.post.ranked_active = False
+
+
+async def _retry_guest_identity_from_ip(rec: PostRecord) -> bool:
+    """guest_ip から Discord ユーザーを同定/再同定する (heartbeat/presence 用)。
+
+    ランクマ募集では同帯ユーザーのみ受け付ける。共有 NAT で異帯ユーザーが
+    find_user_by_ip に引っかかっても ranked_active を誤って立てない。
+    """
     ip = rec.guest_ip
     if not ip or not db.is_configured():
         return False
-    user = await db.find_user_by_ip(ip)
+
+    user = (
+        await db.find_user_by_ip_and_rank(ip, rec.post.rank)
+        if rec.post.post_type == "ranked"
+        else await db.find_user_by_ip(ip)
+    )
     if user is None or user.id == rec.owner_user_id:
+        if rec.guest_user_id:
+            _clear_guest_identity(rec)
+            return True
         return False
-    return _apply_guest_identity(rec, user)
+
+    if rec.post.post_type == "ranked" and user.rank != rec.post.rank:
+        if rec.guest_user_id:
+            _clear_guest_identity(rec)
+            return True
+        return False
+
+    changed = _apply_guest_identity(rec, user)
+    if changed:
+        refresh_ranked_active(rec)
+    return changed
+
+
+async def _refresh_guest_identity_from_ip(rec: PostRecord) -> bool:
+    """guest_ip から Discord ユーザーを同定する (プローブ/heartbeat 用)。"""
+    return await _retry_guest_identity_from_ip(rec)
+
+
+async def _link_guest_to_active_posts(user: db.User, guest_ip: str) -> None:
+    """ゲスト client の presence/report で last_ip を反映し、接続中募集へ同定する。"""
+    ip = guest_ip.strip()
+    try:
+        ipaddress.IPv4Address(ip)
+    except (ipaddress.AddressValueError, ValueError):
+        ip = user.last_ip or ""
+
+    if ip:
+        await db.touch_user(user.id, ip)
+        refreshed = await db.get_user(user.id)
+        if refreshed is not None:
+            user = refreshed
+
+    for rec in list(RECORDS.values()):
+        if rec.owner_user_id == user.id:
+            continue
+        if rec.guest_ip and rec.guest_ip != ip:
+            continue
+        if not rec.guest_ip and ip:
+            rec.guest_ip = ip
+        if not rec.guest_ip:
+            continue
+        if rec.post.post_type == "ranked" and user.rank != rec.post.rank:
+            continue
+        if _apply_guest_identity(rec, user):
+            refresh_ranked_active(rec)
+            rec.post.guest_connected = True
+            await _persist_record(rec)
+            await HUB.publish("upsert", asdict(rec.post))
 
 
 async def _assign_guest_from_ip(
@@ -263,12 +331,37 @@ async def _assign_guest_from_ip(
     """echo IP から guest_user_id を同定 (プロファイル整合チェック付き)。"""
     if not rec.guest_ip or rec.guest_user_id:
         return
-    user = await db.find_user_by_ip(rec.guest_ip)
+    if rec.post.post_type == "ranked":
+        user = await db.find_user_by_ip_and_rank(rec.guest_ip, rec.post.rank)
+    else:
+        user = await db.find_user_by_ip(rec.guest_ip)
     if user is None or user.id == rec.owner_user_id:
+        return
+    if rec.post.post_type == "ranked" and user.rank != rec.post.rank:
         return
     if guest_profile and not await db.ip_guest_identification_ok(
         user.id, guest_profile
     ):
+        return
+    _apply_guest_identity(rec, user)
+
+
+async def _assign_guest_from_profiles(
+    rec: PostRecord,
+    *,
+    host_profile: str,
+    guest_profile: str,
+) -> None:
+    """直近戦績のプロファイル一致から guest_user_id を推定する (IP 同定の保険)。"""
+    if rec.guest_user_id or not host_profile or not guest_profile:
+        return
+    guest_uid = await db.find_guest_user_id_by_profiles(host_profile, guest_profile)
+    if not guest_uid or guest_uid == rec.owner_user_id:
+        return
+    user = await db.get_user(guest_uid)
+    if user is None:
+        return
+    if not await db.ip_guest_identification_ok(user.id, guest_profile):
         return
     _apply_guest_identity(rec, user)
 
@@ -2910,9 +3003,16 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     p.net_status = body.net_status
     p.updated_at = now
     geoip.apply_country_from_addr(p, addr=p.addr)
+    if (
+        not rec.guest_ip
+        and body.net_status in (NET_CHECKING, NET_BATTLE)
+    ):
+        await probe_guest_for_record(rec)
     if rec.guest_ip:
         if not rec.guest_user_id:
-            await _refresh_guest_identity_from_ip(rec)
+            await _retry_guest_identity_from_ip(rec)
+        elif rec.post.post_type == "ranked":
+            await _retry_guest_identity_from_ip(rec)
         if rec.guest_user_id:
             refresh_ranked_active(rec)
 
@@ -3191,6 +3291,18 @@ async def upload_replay(
     return {"ok": True, "stored": True, "filename": filename}
 
 
+@app.post("/matches/presence")
+async def net_battle_presence(request: Request) -> dict[str, Any]:
+    """対戦開始時にゲスト last_ip を更新し、接続中募集へ同定を反映する。"""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    guest_user = await db.get_user(sess["id"])
+    if guest_user is not None:
+        await _link_guest_to_active_posts(guest_user, client_ip(request))
+    return {"ok": True}
+
+
 @app.post("/matches/report")
 async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str, Any]:
     """ログイン済みゲストが自分のクライアントから対戦結果を補完報告する。"""
@@ -3202,6 +3314,10 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
 
     uid = sess["id"]
     played_at = _resolve_report_played_at(body.played_at)
+    guest_ip = client_ip(request)
+    guest_user = await db.get_user(uid)
+    if guest_user is not None:
+        await _link_guest_to_active_posts(guest_user, guest_ip)
 
     # ゲスト未同定の host 報告と重複しないようプロファイルでも照合する
     near = await _find_dedup_match(
@@ -3267,8 +3383,15 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
     host_ip, _, _ = post.addr.partition(":")
 
     # 接続時点で同定できなかったゲストを再試行する
-    # (対戦中にゲストがログインして last_ip が付いた場合など)
+    # (プローブを逃したセッションや last_ip 到着後の初回報告)
+    if not rec.guest_ip:
+        await probe_guest_for_record(rec)
     await _assign_guest_from_ip(rec, guest_profile=body.guest_profile)
+    await _assign_guest_from_profiles(
+        rec,
+        host_profile=body.host_profile,
+        guest_profile=body.guest_profile,
+    )
 
     near_for_gate = None
     if not rec.guest_user_id:
@@ -3656,6 +3779,18 @@ def host_connection_in_progress(
     return bool(getattr(post, "guest_connected", False) or getattr(rec, "guest_ip", ""))
 
 
+def guest_probe_paused(rec: PostRecord) -> bool:
+    """ゲスト echo プローブを止めるべきか。
+
+    guest_ip 未取得の間はキャラセレ/対戦中でも 1 回はプローブする。
+    接続直後に net_status が CHECKING へ進むと旧ロジックでは guest_ip が
+    永遠に空のままになり ranked_active が立たないことがあった。
+    """
+    if not rec.guest_ip:
+        return False
+    return host_connection_in_progress(rec)
+
+
 def probe_target_records() -> list[PostRecord]:
     out: list[PostRecord] = []
     for rec in RECORDS.values():
@@ -3663,7 +3798,7 @@ def probe_target_records() -> list[PostRecord]:
             continue
         if parse_probe_addr(rec.post) is None:
             continue
-        if host_connection_in_progress(rec):
+        if guest_probe_paused(rec):
             continue
         out.append(rec)
     out.sort(key=lambda rec: rec.post.id)
@@ -3700,6 +3835,23 @@ def probe_post_status(
         )
 
 
+async def probe_guest_for_record(rec: PostRecord) -> None:
+    """募集 1 件に対して echo プローブを 1 回実行する (heartbeat 用)。"""
+    if rec.guest_ip:
+        return
+    parsed = parse_probe_addr(rec.post)
+    if parsed is None:
+        return
+    host, port = parsed
+    reply = await asyncio.to_thread(
+        probe_post_status,
+        host,
+        port,
+        rec.post.autopunch,
+    )
+    await apply_guest_probe(rec, reply)
+
+
 async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
     """プローブ応答を PostRecord に反映し、必要なら SSE を更新する。"""
     if reply is None:
@@ -3732,7 +3884,7 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
     if ip == rec.guest_ip:
         # 初回プローブ時は last_ip 未登録で同定できず、後から heartbeat で
         # last_ip が付いても同一 IP では early return していた → 再試行する
-        if not rec.guest_user_id and await _refresh_guest_identity_from_ip(rec):
+        if await _retry_guest_identity_from_ip(rec):
             refresh_ranked_active(rec)
             await _persist_record(rec)
             await HUB.publish("upsert", asdict(post))
@@ -3745,7 +3897,7 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
     post.guest_user_id = ""
     post.guest_name = ""
     post.guest_avatar = ""
-    await _refresh_guest_identity_from_ip(rec)
+    await _retry_guest_identity_from_ip(rec)
 
     post.guest_connected = True
     refresh_ranked_active(rec)
