@@ -357,6 +357,7 @@ def test_probe_target_records_skips_connection_in_progress():
         owner_token="t3",
         creator_ip="1.2.3.6",
         guest_ip="203.0.113.50",
+        guest_user_id="guest1",
     )
     main.RECORDS.clear()
     main.RECORDS["quiet"] = quiet
@@ -381,6 +382,8 @@ def test_guest_probe_paused_without_guest_ip():
     )
     assert main.guest_probe_paused(rec) is False
     rec.guest_ip = "203.0.113.50"
+    assert main.guest_probe_paused(rec) is False
+    rec.guest_user_id = "u1"
     assert main.guest_probe_paused(rec) is True
 
 

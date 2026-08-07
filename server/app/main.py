@@ -108,21 +108,33 @@ def refresh_ranked_active(rec: PostRecord) -> None:
     )
 
 
-def _find_active_ranked_record(
-    host_user_id: str,
-    guest_user_id: Optional[str],
-) -> Optional[PostRecord]:
-    """ホストの進行中ランクマ募集 (同一ゲスト) を返す。"""
-    if not guest_user_id:
-        return None
+def _find_host_ranked_post(host_user_id: str) -> Optional[PostRecord]:
+    """ホストの進行中ランクマ募集を返す (複数あれば更新が最も新しいもの)。"""
+    best: Optional[PostRecord] = None
     for rec in RECORDS.values():
         if rec.owner_user_id != host_user_id:
             continue
         if rec.post.post_type != "ranked":
             continue
-        if rec.guest_user_id == guest_user_id:
-            return rec
-    return None
+        if best is None or rec.post.updated_at >= best.post.updated_at:
+            best = rec
+    return best
+
+
+def _find_active_ranked_record(
+    host_user_id: str,
+    guest_user_id: Optional[str],
+) -> Optional[PostRecord]:
+    """ホストの進行中ランクマ募集 (同一ゲスト) を返す。"""
+    if guest_user_id:
+        for rec in RECORDS.values():
+            if rec.owner_user_id != host_user_id:
+                continue
+            if rec.post.post_type != "ranked":
+                continue
+            if rec.guest_user_id == guest_user_id:
+                return rec
+    return _find_host_ranked_post(host_user_id)
 
 
 async def ranked_session_limit_reached(
@@ -171,31 +183,33 @@ async def resolve_ranked_for_host_session(
     match_rank: Optional[str],
     played_at: datetime,
 ) -> tuple[bool, Optional[str]]:
-    """ホスト側報告/sync の ranked 可否 (セッション 3 戦上限)。"""
+    """ホスト側報告/sync の ranked 可否 (セッション 3 戦上限)。
+
+    ライブの ranked_active ではなく DB 上の帯と募集帯の一致で判定する
+    (対戦終了後や last_ip 遅延で ranked_active が落ちていても復元できる)。
+    """
     if not client_wants_ranked:
         return False, None
+    if not guest_user_id:
+        return False, None
+
+    guest_info = await db.get_user_rank(guest_user_id)
+    host_info = await db.get_user_rank(host_user_id)
+    if guest_info is None or host_info is None:
+        return False, None
+    guest_rank, _, _ = guest_info
+    host_rank, _, _ = host_info
 
     rec = _find_active_ranked_record(host_user_id, guest_user_id)
     if rec is not None:
-        refresh_ranked_active(rec)
-        if not rec.post.ranked_active:
-            return False, None
-        session_games = rec.session_games
         band_rank = rec.post.rank
+        session_games = rec.session_games
     else:
+        band_rank = match_rank or host_rank
         session_games = 0
-        band_rank = match_rank
-        if not guest_user_id:
-            return False, None
-        guest_info = await db.get_user_rank(guest_user_id)
-        host_info = await db.get_user_rank(host_user_id)
-        if guest_info is None or host_info is None:
-            return False, None
-        guest_rank, _, _ = guest_info
-        host_rank, _, _ = host_info
-        if guest_rank != host_rank:
-            return False, None
-        band_rank = band_rank or host_rank
+
+    if guest_rank != band_rank:
+        return False, None
 
     if await ranked_session_limit_reached(
         host_user_id,
@@ -341,6 +355,16 @@ async def _link_guest_to_active_posts(user: db.User, guest_ip: str) -> None:
     for rec in list(RECORDS.values()):
         if rec.owner_user_id == user.id:
             continue
+        if not rec.guest_ip and ip:
+            # ランクマ対戦中のみ: echo プローブ前にゲスト presence で IP を先行登録
+            if (
+                rec.post.post_type == "ranked"
+                and user.rank == rec.post.rank
+                and rec.post.net_status in (NET_CHECKING, NET_BATTLE)
+            ):
+                rec.guest_ip = ip
+            else:
+                continue
         if not rec.guest_ip or rec.guest_ip != ip:
             continue
         if rec.post.post_type == "ranked" and user.rank != rec.post.rank:
@@ -393,6 +417,21 @@ async def _assign_guest_from_profiles(
     if not await db.ip_guest_identification_ok(user.id, guest_profile):
         return
     _apply_guest_identity(rec, user)
+
+
+async def _ensure_guest_identification(rec: PostRecord) -> None:
+    """guest_ip / guest_user_id / guest_rank を最新化する (結果報告前)。"""
+    if rec.post.post_type == "ranked":
+        await probe_guest_for_record(rec, force=True)
+    elif not rec.guest_ip:
+        await probe_guest_for_record(rec)
+    if rec.guest_ip:
+        await _retry_guest_identity_from_ip(rec)
+    if rec.guest_user_id and not rec.guest_rank:
+        guest_user = await db.get_user(rec.guest_user_id)
+        if guest_user is not None:
+            rec.guest_rank = guest_user.rank
+    refresh_ranked_active(rec)
 
 
 async def _bump_session_games(host_user_id: str, guest_user_id: Optional[str]) -> None:
@@ -2317,13 +2356,17 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
             is_ranked = item.ranked
             match_rank = item.match_rank
             if item.my_side == "host":
+                host_rec = _find_host_ranked_post(user_id)
+                wants_ranked = bool(
+                    item.ranked or (host_rec is not None and guest_uid)
+                )
                 is_ranked, match_rank = await resolve_ranked_for_host_session(
                     user_id,
                     guest_user_id=guest_uid,
                     host_profile=item.my_profile,
                     guest_profile=item.opp_profile,
-                    client_wants_ranked=item.ranked,
-                    match_rank=item.match_rank,
+                    client_wants_ranked=wants_ranked,
+                    match_rank=item.match_rank or (host_rec.post.rank if host_rec else None),
                     played_at=played_at,
                 )
             if (
@@ -2361,13 +2404,17 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
             guest_uid = await db.find_guest_user_id_by_profiles(
                 item.my_profile, item.opp_profile
             )
+            host_rec = _find_host_ranked_post(user_id)
+            wants_ranked = bool(
+                item.ranked or (host_rec is not None and guest_uid)
+            )
             is_ranked, match_rank = await resolve_ranked_for_host_session(
                 user_id,
                 guest_user_id=guest_uid,
                 host_profile=item.my_profile,
                 guest_profile=item.opp_profile,
-                client_wants_ranked=item.ranked,
-                match_rank=item.match_rank,
+                client_wants_ranked=wants_ranked,
+                match_rank=item.match_rank or (host_rec.post.rank if host_rec else None),
                 played_at=played_at,
             )
             row["ranked"] = is_ranked
@@ -3417,8 +3464,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
 
     # 接続時点で同定できなかったゲストを再試行する
     # (プローブを逃したセッションや last_ip 到着後の初回報告)
-    if not rec.guest_ip:
-        await probe_guest_for_record(rec)
+    await _ensure_guest_identification(rec)
     await _assign_guest_from_ip(rec, guest_profile=body.guest_profile)
     await _assign_guest_from_profiles(
         rec,
@@ -3855,11 +3901,11 @@ def host_connection_in_progress(
 def guest_probe_paused(rec: PostRecord) -> bool:
     """ゲスト echo プローブを止めるべきか。
 
-    guest_ip 未取得の間はキャラセレ/対戦中でも 1 回はプローブする。
-    接続直後に net_status が CHECKING へ進むと旧ロジックでは guest_ip が
-    永遠に空のままになり ranked_active が立たないことがあった。
+    guest_ip 未取得、または guest 未同定の間はキャラセレ/対戦中でもプローブする。
     """
     if not rec.guest_ip:
+        return False
+    if not rec.guest_user_id:
         return False
     return host_connection_in_progress(rec)
 

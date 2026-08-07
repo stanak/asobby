@@ -830,3 +830,79 @@ async def test_matches_presence_links_guest_to_active_ranked_post():
         assert pres.status_code == 200
         assert rec.guest_user_id == "888"
         assert rec.post.ranked_active is True
+
+
+@pytest.mark.asyncio
+async def test_ranked_presence_bootstraps_guest_ip_during_checking():
+    """ランクマ対戦中の presence が echo 前に guest_ip を登録し同定できる。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
+
+        host_token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        rec = main.RECORDS[res.json()["post"]["id"]]
+        rec.post.net_status = main.NET_CHECKING
+        assert rec.guest_ip == ""
+
+        guest_token = bearer_token("888", "guest")
+        pres = await client.post(
+            "/matches/presence",
+            headers={
+                "Authorization": f"Bearer {guest_token}",
+                "X-Forwarded-For": "5.6.7.8",
+            },
+        )
+        assert pres.status_code == 200
+        assert rec.guest_ip == "5.6.7.8"
+        assert rec.guest_user_id == "888"
+        assert rec.post.ranked_active is True
+
+
+@pytest.mark.asyncio
+async def test_ranked_result_saved_when_live_ranked_active_false():
+    """対戦終了後 ranked_active が落ちていても guest 同定済みならランクマ保存。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="luna")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="luna")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        rec.guest_rank = ""
+        rec.post.ranked_active = False
+
+        rec.post.net_status = main.NET_ALIVE
+        await main.apply_guest_probe(rec, bytes([0x07]))
+        assert rec.guest_user_id == "888"
+        assert rec.post.ranked_active is False
+
+        r = await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "winner": "host",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "hp",
+                "guest_profile": "gp",
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["recorded"] is True
+        assert data["ranked"] is True
+        assert data["match_rank"] == "luna"
