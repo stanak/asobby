@@ -953,3 +953,190 @@ async def test_ranked_result_keeps_presence_identity_when_ip_lookup_lags():
             },
         )
         assert r.json()["ranked"] is True
+
+
+@pytest.mark.asyncio
+async def test_guest_name_cleared_when_leaving_battle_on_heartbeat():
+    """対戦終了 (NET_ALIVE) の heartbeat で USER 欄用 guest_name が消える。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="luna")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="luna")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        assert rec.guest_user_id == "888"
+        assert rec.post.guest_name == "guest"
+        assert rec.post.guest_connected is True
+        rec.post.net_status = main.NET_BATTLE
+
+        update_body = {
+            "id": post["id"],
+            "owner_token": owner_token,
+            "post_type": "ranked",
+            "addr": "1.2.3.4:10800",
+            "comment": "",
+            "stream_url": "",
+            "giuroll": False,
+            "autopunch": False,
+            "match_status": "hp(?) vs gp(?)",
+            "net_status": main.NET_ALIVE,
+            "ping_warn_enabled": True,
+            "ping_warn_ms": 200,
+            "ping_warn_giuroll_ms": 300,
+        }
+        resp = await client.post("/posts/update", json=update_body)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["guest_name"] in ("", None)
+        assert data["guest_connected"] is False
+        assert rec.guest_user_id == "888"
+        assert rec.post.ranked_active is True
+        assert rec.guest_ip == ""
+        assert rec in main.probe_target_records()
+
+
+@pytest.mark.asyncio
+async def test_ranked_result_uses_reporting_post_band_not_stale_post():
+    """異帯の stale ランクマ募集があっても、報告中 post の帯で ranked 判定する。"""
+    import secrets
+    import time
+
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="luna")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="luna")
+
+        now = time.time()
+        stale_id = "a" * 32
+        stale_post = main.Post(
+            id=stale_id,
+            post_type="ranked",
+            rank="normal",
+            addr="1.2.3.4:10800",
+            updated_at=now + 100,
+            created_at=now,
+            owner_name="host",
+        )
+        main.RECORDS[stale_id] = main.PostRecord(
+            post=stale_post,
+            owner_token=secrets.token_hex(16),
+            creator_ip="1.2.3.4",
+            owner_user_id="999",
+            guest_user_id="888",
+            guest_rank="luna",
+        )
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        assert post["rank"] == "luna"
+
+        rec = main.RECORDS[post["id"]]
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        assert rec.guest_user_id == "888"
+        assert rec.post.ranked_active is True
+
+        r = await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "winner": "host",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "hp",
+                "guest_profile": "gp",
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["recorded"] is True
+        assert data["ranked"] is True
+        assert data["match_rank"] == "luna"
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            matches = list(res_m.scalars().all())
+            assert len(matches) == 1
+            assert matches[0].ranked is True
+            assert matches[0].match_rank == "luna"
+
+
+@pytest.mark.asyncio
+async def test_host_dedup_upgrades_casual_to_ranked():
+    """先に casual で保存された同一対戦を、後続 host 報告で ranked に昇格する。"""
+    from datetime import timezone
+
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+
+        played_at = db.utcnow()
+        match_id = await db.insert_match_result(
+            host_user_id="999",
+            guest_user_id="888",
+            host_ip="1.2.3.4",
+            guest_ip="5.6.7.8",
+            winner="host",
+            host_char=0,
+            guest_char=1,
+            host_profile="hp",
+            guest_profile="gp",
+            ranked=False,
+            match_rank=None,
+            source="host",
+            played_at=played_at,
+        )
+
+        ts = played_at.timestamp()
+        if played_at.tzinfo is None:
+            ts = played_at.replace(tzinfo=timezone.utc).timestamp()
+        second = await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "winner": "host",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "hp",
+                "guest_profile": "gp",
+                "played_at": ts,
+            },
+        )
+        assert second.status_code == 200
+        data = second.json()
+        assert data["recorded"] is True
+        assert data["ranked"] is True
+
+        async with db.session() as s:
+            m = await s.get(db.Match, match_id)
+            assert m is not None
+            assert m.ranked is True
+            assert m.match_rank == "normal"
+            res_m = await s.execute(select(db.Match))
+            assert len(list(res_m.scalars().all())) == 1
