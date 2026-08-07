@@ -300,6 +300,8 @@ async def _retry_guest_identity_from_ip(rec: PostRecord) -> bool:
 
     ランクマ募集では同帯ユーザーのみ受け付ける。共有 NAT で異帯ユーザーが
     find_user_by_ip に引っかかっても ranked_active を誤って立てない。
+
+    IP 照合に失敗しても、presence 等で確定済みの guest_user_id は消さない。
     """
     ip = rec.guest_ip
     if not ip or not db.is_configured():
@@ -310,16 +312,15 @@ async def _retry_guest_identity_from_ip(rec: PostRecord) -> bool:
         if rec.post.post_type == "ranked"
         else await db.find_user_by_ip(ip)
     )
-    if user is None or user.id == rec.owner_user_id:
+    if user is None:
+        return False
+    if user.id == rec.owner_user_id:
         if rec.guest_user_id:
             _clear_guest_identity(rec)
             return True
         return False
 
     if rec.post.post_type == "ranked" and user.rank != rec.post.rank:
-        if rec.guest_user_id:
-            _clear_guest_identity(rec)
-            return True
         return False
 
     changed = _apply_guest_identity(rec, user)
@@ -392,8 +393,10 @@ async def _assign_guest_from_ip(
         return
     if rec.post.post_type == "ranked" and user.rank != rec.post.rank:
         return
-    if guest_profile and not await db.ip_guest_identification_ok(
-        user.id, guest_profile
+    if (
+        rec.post.post_type != "ranked"
+        and guest_profile
+        and not await db.ip_guest_identification_ok(user.id, guest_profile)
     ):
         return
     _apply_guest_identity(rec, user)
@@ -421,12 +424,13 @@ async def _assign_guest_from_profiles(
 
 async def _ensure_guest_identification(rec: PostRecord) -> None:
     """guest_ip / guest_user_id / guest_rank を最新化する (結果報告前)。"""
-    if rec.post.post_type == "ranked":
-        await probe_guest_for_record(rec, force=True)
-    elif not rec.guest_ip:
-        await probe_guest_for_record(rec)
-    if rec.guest_ip:
-        await _retry_guest_identity_from_ip(rec)
+    if not rec.guest_user_id:
+        if rec.post.post_type == "ranked":
+            await probe_guest_for_record(rec, force=bool(rec.guest_ip))
+        elif not rec.guest_ip:
+            await probe_guest_for_record(rec)
+        if rec.guest_ip:
+            await _retry_guest_identity_from_ip(rec)
     if rec.guest_user_id and not rec.guest_rank:
         guest_user = await db.get_user(rec.guest_user_id)
         if guest_user is not None:
@@ -3088,11 +3092,8 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
         not rec.guest_ip and body.net_status in (NET_CHECKING, NET_BATTLE)
     ):
         await probe_guest_for_record(rec, force=entering_battle)
-    if rec.guest_ip:
-        if not rec.guest_user_id:
-            await _retry_guest_identity_from_ip(rec)
-        elif rec.post.post_type == "ranked":
-            await _retry_guest_identity_from_ip(rec)
+    if rec.guest_ip and not rec.guest_user_id:
+        await _retry_guest_identity_from_ip(rec)
         if rec.guest_user_id:
             refresh_ranked_active(rec)
 
@@ -3999,14 +4000,15 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
 
     ip, _port = matched
     if ip == rec.guest_ip:
-        # 初回プローブ時は last_ip 未登録で同定できず、後から heartbeat で
-        # last_ip が付いても同一 IP では early return していた → 再試行する
-        if await _retry_guest_identity_from_ip(rec):
+        if not rec.guest_user_id and await _retry_guest_identity_from_ip(rec):
             refresh_ranked_active(rec)
             await _persist_record(rec)
             await HUB.publish("upsert", asdict(post))
         return
 
+    prev_uid = rec.guest_user_id
+    prev_rank = rec.guest_rank
+    prev_session = rec.session_games
     rec.guest_ip = ip
     rec.guest_user_id = ""
     rec.guest_rank = ""
@@ -4014,7 +4016,17 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
     post.guest_user_id = ""
     post.guest_name = ""
     post.guest_avatar = ""
-    await _retry_guest_identity_from_ip(rec)
+    if not await _retry_guest_identity_from_ip(rec) and prev_uid:
+        guest = await db.get_user(prev_uid)
+        if guest is not None and (
+            rec.post.post_type != "ranked" or guest.rank == rec.post.rank
+        ):
+            rec.guest_user_id = prev_uid
+            rec.guest_rank = prev_rank or guest.rank
+            rec.session_games = prev_session
+            post.guest_user_id = prev_uid
+            post.guest_name = guest.name
+            post.guest_avatar = discord_avatar_url(guest.id, guest.avatar)
 
     post.guest_connected = True
     refresh_ranked_active(rec)

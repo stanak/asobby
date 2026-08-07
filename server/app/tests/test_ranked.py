@@ -906,3 +906,50 @@ async def test_ranked_result_saved_when_live_ranked_active_false():
         assert data["recorded"] is True
         assert data["ranked"] is True
         assert data["match_rank"] == "luna"
+
+
+@pytest.mark.asyncio
+async def test_ranked_result_keeps_presence_identity_when_ip_lookup_lags():
+    """presence 同定後に IP 照合が失敗しても guest_user_id を消さずランクマ保存する。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
+        await create_user("888", name="guest", last_ip="", rank="normal")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+        rec.post.net_status = main.NET_CHECKING
+
+        guest_token = bearer_token("888", "guest")
+        await client.post(
+            "/matches/presence",
+            headers={
+                "Authorization": f"Bearer {guest_token}",
+                "X-Forwarded-For": "5.6.7.8",
+            },
+        )
+        assert rec.guest_user_id == "888"
+
+        await create_user("888", name="guest", last_ip="", rank="normal")
+        assert await main._retry_guest_identity_from_ip(rec) is False
+        assert rec.guest_user_id == "888"
+
+        r = await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "winner": "host",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "hp",
+                "guest_profile": "gp",
+            },
+        )
+        assert r.json()["ranked"] is True
