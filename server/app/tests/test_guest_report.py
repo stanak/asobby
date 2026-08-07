@@ -234,8 +234,8 @@ async def test_guest_first_host_promotes():
                 "winner": "host",
                 "host_char": 2,
                 "guest_char": 3,
-                "host_profile": "hp2",
-                "guest_profile": "gp2",
+                "host_profile": "hostp",
+                "guest_profile": "guestp",
             },
         )
         assert host_result.status_code == 200

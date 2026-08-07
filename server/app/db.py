@@ -795,22 +795,9 @@ async def find_recent_guest_reported_match(
                 and match.guest_profile == guest_profile
             ):
                 return match
-        if played_at is not None:
-            lo = played_at - timedelta(seconds=MATCH_DEDUP_WINDOW_SEC)
-            hi = played_at + timedelta(seconds=MATCH_DEDUP_WINDOW_SEC)
-            for match in candidates:
-                if match.played_at is None:
-                    continue
-                pa = match.played_at
-                if pa.tzinfo is None:
-                    pa = pa.replace(tzinfo=timezone.utc)
-                if lo <= pa <= hi:
-                    return match
-        if len(candidates) == 1:
-            return candidates[0]
         return None
 
-    return candidates[0]
+    return candidates[0] if len(candidates) == 1 else None
 
 
 async def promote_guest_match(

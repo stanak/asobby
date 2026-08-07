@@ -320,7 +320,12 @@ async def _refresh_guest_identity_from_ip(rec: PostRecord) -> bool:
 
 
 async def _link_guest_to_active_posts(user: db.User, guest_ip: str) -> None:
-    """ゲスト client の presence/report で last_ip を反映し、接続中募集へ同定する。"""
+    """ゲスト client の presence/report で last_ip を反映し、echo 同定済み募集へ同定を補完する。
+
+    guest_ip 未設定の募集へ IP を書き込まない。無関係な対戦の presence が
+    別ホストの募集を汚染するのを防ぐ (echo プローブで guest_ip が確定してから
+    presence で user_id を補完する)。
+    """
     ip = guest_ip.strip()
     try:
         ipaddress.IPv4Address(ip)
@@ -336,11 +341,7 @@ async def _link_guest_to_active_posts(user: db.User, guest_ip: str) -> None:
     for rec in list(RECORDS.values()):
         if rec.owner_user_id == user.id:
             continue
-        if rec.guest_ip and rec.guest_ip != ip:
-            continue
-        if not rec.guest_ip and ip:
-            rec.guest_ip = ip
-        if not rec.guest_ip:
+        if not rec.guest_ip or rec.guest_ip != ip:
             continue
         if rec.post.post_type == "ranked" and user.rank != rec.post.rank:
             continue
@@ -3028,14 +3029,18 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     p.stream_url = body.stream_url
     p.giuroll = body.giuroll
     p.match_status = body.match_status
+    old_net_status = p.net_status
     p.net_status = body.net_status
     p.updated_at = now
     geoip.apply_country_from_addr(p, addr=p.addr)
-    if (
-        not rec.guest_ip
-        and body.net_status in (NET_CHECKING, NET_BATTLE)
+    entering_battle = (
+        body.net_status in (NET_CHECKING, NET_BATTLE)
+        and old_net_status not in (NET_CHECKING, NET_BATTLE)
+    )
+    if entering_battle or (
+        not rec.guest_ip and body.net_status in (NET_CHECKING, NET_BATTLE)
     ):
-        await probe_guest_for_record(rec)
+        await probe_guest_for_record(rec, force=entering_battle)
     if rec.guest_ip:
         if not rec.guest_user_id:
             await _retry_guest_identity_from_ip(rec)
@@ -3903,9 +3908,9 @@ def probe_post_status(
         )
 
 
-async def probe_guest_for_record(rec: PostRecord) -> None:
+async def probe_guest_for_record(rec: PostRecord, *, force: bool = False) -> None:
     """募集 1 件に対して echo プローブを 1 回実行する (heartbeat 用)。"""
-    if rec.guest_ip:
+    if rec.guest_ip and not force:
         return
     parsed = parse_probe_addr(rec.post)
     if parsed is None:
