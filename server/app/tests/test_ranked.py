@@ -469,6 +469,46 @@ async def test_sync_respects_ranked_session_limit():
 
 
 @pytest.mark.asyncio
+async def test_old_ranked_streak_does_not_carry_over():
+    """数日前の 3 連戦は新しいセッションに引き継がれない (anchor gap 判定)。
+
+    v0.7.23 まで、直近の過去試合と今回試合の間隔が gap 判定に含まれず、
+    何日前の連戦でも session_limit が誤発動していた。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    async with app_client() as client:  # noqa: F841 (engine 初期化に必要)
+        now = datetime.now(timezone.utc)
+        old_base = now - timedelta(days=4)
+        for i in range(3):
+            await db.insert_match_result(
+                host_user_id="999",
+                guest_user_id="888",
+                host_ip="1.2.3.4",
+                guest_ip="5.6.7.8",
+                winner="host",
+                ranked=True,
+                match_rank="luna",
+                played_at=old_base + timedelta(minutes=5 * i),
+            )
+
+        # 4 日後の新しい試合: 過去の連戦はセッション継続とみなさない
+        streak = await db.count_ranked_pair_streak_before(
+            "999", "888", before=now, match_rank="luna"
+        )
+        assert streak == 0
+
+        # 過去連戦の直後 (10 分後) ならセッション継続中なので 3
+        streak_then = await db.count_ranked_pair_streak_before(
+            "999",
+            "888",
+            before=old_base + timedelta(minutes=20),
+            match_rank="luna",
+        )
+        assert streak_then == 3
+
+
+@pytest.mark.asyncio
 async def test_ranked_active_after_delayed_guest_identification_on_probe():
     """初回プローブで last_ip 未登録→同定失敗後、last_ip 更新で再プローブ時にランクマ化。"""
     async with app_client() as client:

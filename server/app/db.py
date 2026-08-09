@@ -836,12 +836,21 @@ async def promote_guest_match(
 
 
 def _ranked_streak_from_matches(
-    matches: list[Match], *, gap_minutes: int
+    matches: list[Match], *, gap_minutes: int, before: Optional[datetime] = None
 ) -> int:
-    """played_at 降順の ranked 試合から、gap 超で区切った連続本数を数える。"""
+    """played_at 降順の ranked 試合から、gap 超で区切った連続本数を数える。
+
+    before (今回の試合時刻) を anchor として、直近の過去試合との間隔も
+    gap 判定に含める。これがないと何日も前の連戦が「継続中のセッション」
+    として誤カウントされる。
+    """
     gap_sec = gap_minutes * 60
     count = 0
     prev_ts: Optional[float] = None
+    if before is not None:
+        if before.tzinfo is None:
+            before = before.replace(tzinfo=timezone.utc)
+        prev_ts = before.timestamp()
     for m in matches:
         if m.played_at is None:
             break
@@ -889,7 +898,9 @@ async def count_ranked_pair_streak_before(
         )
         matches = list(res.scalars().all())
 
-    return _ranked_streak_from_matches(matches, gap_minutes=gap_minutes)
+    return _ranked_streak_from_matches(
+        matches, gap_minutes=gap_minutes, before=before
+    )
 
 
 async def count_ranked_streak_before(
@@ -936,7 +947,9 @@ async def count_ranked_streak_before(
         )
         matches = list(res.scalars().all())
 
-    return _ranked_streak_from_matches(matches, gap_minutes=gap_minutes)
+    return _ranked_streak_from_matches(
+        matches, gap_minutes=gap_minutes, before=before
+    )
 
 
 async def find_guest_user_id_by_profiles(
