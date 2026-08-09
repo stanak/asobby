@@ -1466,6 +1466,15 @@ async def _hydrate_records_from_redis() -> None:
             continue
         RECORDS[rec.post.id] = rec
         restored += 1
+        # 対戦中の再起動では「対戦開始」のエッジ検知 (entering_battle) が
+        # 失われるため、ゲスト未同定なら強制プローブを再実行して復元する
+        if (
+            rec.post.net_status in (NET_CHECKING, NET_BATTLE)
+            and not rec.guest_ip
+        ):
+            asyncio.get_running_loop().create_task(
+                probe_guest_for_record(rec, force=True)
+            )
     if restored:
         print(f"post_redis: restored {restored} post(s)")
 
@@ -2385,6 +2394,16 @@ async def _find_dedup_match(
     near = await db.find_near_match_by_profiles(
         played_at,
         winner,
+        host_profile,
+        guest_profile,
+        window_sec=db.MATCH_DEDUP_WINDOW_SEC,
+    )
+    if near is not None:
+        return near
+    # 双方の勝敗判定が食い違っても同一対戦なら重複させない
+    # (±window 内に同ペアの別対戦は存在し得ない)
+    near = await db.find_near_match_profiles_only(
+        played_at,
         host_profile,
         guest_profile,
         window_sec=db.MATCH_DEDUP_WINDOW_SEC,
@@ -3486,6 +3505,19 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
 
 @app.post("/posts/update")
 async def update_post(body: UpdatePostIn) -> dict[str, Any]:
+    try:
+        return await _update_post_inner(body)
+    except HTTPException as exc:
+        if exc.status_code in (403, 404):
+            # クライアントが失効した投稿を更新し続けているケースの痕跡
+            _diag_log(
+                f"update_reject: post={body.id} status={exc.status_code} "
+                f"net_status={body.net_status}"
+            )
+        raise
+
+
+async def _update_post_inner(body: UpdatePostIn) -> dict[str, Any]:
     if not is_allowed_stream_url(body.stream_url):
         raise HTTPException(
             status_code=422,
@@ -4008,6 +4040,23 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
 
 @app.post("/posts/result")
 async def report_result(body: ReportResultIn) -> dict[str, Any]:
+    try:
+        return await _report_result_inner(body)
+    except HTTPException as exc:
+        # 404 (投稿消失) / 403 (token 不一致) も痕跡を残す
+        _diag_log(
+            f"result_reject: post={body.id} status={exc.status_code} "
+            f"winner={body.winner} prof={body.host_profile}/{body.guest_profile}"
+        )
+        raise
+    except Exception as exc:
+        _diag_log(
+            f"result_error: post={body.id} err={type(exc).__name__}: {exc}"
+        )
+        raise
+
+
+async def _report_result_inner(body: ReportResultIn) -> dict[str, Any]:
     rec = get_record_or_raise(body.id, body.owner_token)
     if not db.is_configured():
         return {"ok": True, "recorded": False}
@@ -4652,6 +4701,9 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
     prev_uid = rec.guest_user_id
     prev_rank = rec.guest_rank
     prev_session = rec.session_games
+    # presence で確定済みの同定のみ IP 変化 (NAT 再バインド等) 後も復元候補にする。
+    # IP 推論由来の同定を復元すると誤同定 (傍観者 C) が残留する。
+    prev_confirmed = rec.guest_identity_confirmed
     rec.guest_ip = ip
     rec.guest_user_id = ""
     rec.guest_rank = ""
@@ -4660,7 +4712,7 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
     post.guest_user_id = ""
     post.guest_name = ""
     post.guest_avatar = ""
-    if not await _retry_guest_identity_from_ip(rec) and prev_uid:
+    if not await _retry_guest_identity_from_ip(rec) and prev_uid and prev_confirmed:
         guest = await db.get_user(prev_uid)
         if guest is not None and (
             rec.post.post_type != "ranked" or guest.rank == rec.post.rank

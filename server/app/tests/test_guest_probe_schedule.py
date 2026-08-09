@@ -20,6 +20,8 @@ class FakeRecord:
     post: FakePost
     owner_token: str = "tok"
     owner_user_id: str = "u1"
+    guest_ip: str = ""
+    guest_user_id: str = ""
 
 
 def test_parse_probe_addr_valid():
