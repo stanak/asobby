@@ -146,6 +146,7 @@ async def ranked_session_limit_reached(
     match_rank: Optional[str],
     played_at: datetime,
     session_games: int = 0,
+    diag: Optional[dict] = None,
 ) -> bool:
     """同一対戦相手との連続ランクマが 3 戦上限に達したか (入れ替え後も同一ペア)。"""
     if guest_user_id and host_user_id:
@@ -156,6 +157,8 @@ async def ranked_session_limit_reached(
             match_rank=match_rank,
             gap_minutes=RANKED_SESSION_GAP_MINUTES,
         )
+        if diag is not None:
+            diag["streak"] = streak
         return streak >= RANKED_SESSION_MAX_GAMES
 
     if session_games >= RANKED_SESSION_MAX_GAMES:
@@ -170,6 +173,8 @@ async def ranked_session_limit_reached(
         before=played_at,
         gap_minutes=RANKED_SESSION_GAP_MINUTES,
     )
+    if diag is not None:
+        diag["streak"] = streak
     return streak >= RANKED_SESSION_MAX_GAMES
 
 
@@ -183,6 +188,7 @@ async def resolve_ranked_for_host_session(
     match_rank: Optional[str],
     played_at: datetime,
     reporting_rec: PostRecord | None = None,
+    diag: Optional[dict] = None,
 ) -> tuple[bool, Optional[str]]:
     """ホスト側報告/sync の ranked 可否 (セッション 3 戦上限)。
 
@@ -190,13 +196,19 @@ async def resolve_ranked_for_host_session(
     (対戦終了後や last_ip 遅延で ranked_active が落ちていても復元できる)。
     """
     if not client_wants_ranked:
+        if diag is not None:
+            diag["reason"] = "not_wants_ranked"
         return False, None
     if not guest_user_id:
+        if diag is not None:
+            diag["reason"] = "no_guest_user_id"
         return False, None
 
     guest_info = await db.get_user_rank(guest_user_id)
     host_info = await db.get_user_rank(host_user_id)
     if guest_info is None or host_info is None:
+        if diag is not None:
+            diag["reason"] = "user_rank_missing"
         return False, None
     guest_rank, _, _ = guest_info
     host_rank, _, _ = host_info
@@ -214,9 +226,14 @@ async def resolve_ranked_for_host_session(
             session_games = 0
 
     if guest_rank != band_rank:
+        if diag is not None:
+            diag["reason"] = (
+                f"band_mismatch(host={host_rank}, guest={guest_rank}, band={band_rank})"
+            )
         return False, None
 
-    if await ranked_session_limit_reached(
+    limit_diag: dict = {}
+    limit_reached = await ranked_session_limit_reached(
         host_user_id,
         guest_user_id=guest_user_id,
         host_profile=host_profile,
@@ -224,9 +241,21 @@ async def resolve_ranked_for_host_session(
         match_rank=band_rank,
         played_at=played_at,
         session_games=session_games,
-    ):
+        diag=limit_diag,
+    )
+    if limit_reached:
+        if diag is not None:
+            streak = limit_diag.get("streak")
+            if streak is not None:
+                diag["reason"] = f"session_limit(streak={streak})"
+            else:
+                diag["reason"] = f"session_limit(session_games={session_games})"
+            if streak is not None:
+                diag["streak"] = streak
         return False, None
 
+    if diag is not None:
+        diag["reason"] = "ok"
     return True, band_rank
 
 
@@ -238,14 +267,19 @@ async def _resolve_host_result_ranked(
     played_at: datetime,
     is_ranked: bool,
     match_rank: Optional[str],
+    diag: Optional[dict] = None,
 ) -> tuple[bool, Optional[str]]:
     """/posts/result 用: ranked_active が落ちていても同定済みならランクマ判定を復元。"""
     if is_ranked or rec.post.post_type != "ranked":
+        if not is_ranked and rec.post.post_type != "ranked" and diag is not None:
+            diag["reason"] = "not_ranked_post"
         return is_ranked, match_rank
     guest_uid = rec.guest_user_id
     if not guest_uid:
         guest_uid = await db.find_guest_user_id_by_profiles(host_profile, guest_profile)
     if not guest_uid:
+        if diag is not None:
+            diag["reason"] = "no_guest_uid"
         return False, None
     return await resolve_ranked_for_host_session(
         rec.owner_user_id,
@@ -256,6 +290,7 @@ async def _resolve_host_result_ranked(
         match_rank=rec.post.rank,
         played_at=played_at,
         reporting_rec=rec,
+        diag=diag,
     )
 
 
@@ -461,7 +496,7 @@ async def _ensure_guest_identification(rec: PostRecord) -> None:
             await probe_guest_for_record(rec)
         if rec.guest_ip:
             await _retry_guest_identity_from_ip(rec)
-    if rec.guest_user_id and not rec.guest_rank:
+    if rec.guest_user_id:
         guest_user = await db.get_user(rec.guest_user_id)
         if guest_user is not None:
             rec.guest_rank = guest_user.rank
@@ -3138,6 +3173,14 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     p.net_status = body.net_status
     p.updated_at = now
     geoip.apply_country_from_addr(p, addr=p.addr)
+    if rec.owner_user_id:
+        host_rank, host_rating = await host_rank_for_post(rec.owner_user_id)
+        if p.rank != host_rank:
+            p.rank = host_rank
+            p.rating = host_rating
+            refresh_ranked_active(rec)
+        elif p.rank == "ph":
+            p.rating = host_rating
     entering_battle = (
         body.net_status in (NET_CHECKING, NET_BATTLE)
         and old_net_status not in (NET_CHECKING, NET_BATTLE)
@@ -3557,9 +3600,22 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
         )
     )
     if not can_record:
-        return {"ok": True, "recorded": False}
+        return {"ok": True, "recorded": False, "reason": "no_guest_info"}
 
+    diag: dict[str, Any] = {}
     refresh_ranked_active(rec)
+    if not post.ranked_active:
+        if post.post_type != "ranked":
+            diag["live_reason"] = "not_ranked_post"
+        elif not rec.guest_user_id:
+            diag["live_reason"] = "no_guest_user_id"
+        elif not rec.guest_rank:
+            diag["live_reason"] = "guest_rank_empty"
+        elif rec.guest_rank != post.rank:
+            diag["live_reason"] = (
+                f"band_mismatch(guest_rank={rec.guest_rank}, post_rank={post.rank})"
+            )
+
     limit_reached = await ranked_session_limit_reached(
         rec.owner_user_id,
         guest_user_id=rec.guest_user_id or None,
@@ -3568,7 +3624,14 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
         match_rank=post.rank,
         played_at=played_at,
         session_games=rec.session_games,
+        diag=diag,
     )
+    if limit_reached and post.ranked_active:
+        streak = diag.get("streak")
+        if streak is not None:
+            diag["live_reason"] = f"session_limit(streak={streak})"
+        else:
+            diag["live_reason"] = f"session_limit(session_games={rec.session_games})"
     is_ranked = post.ranked_active and not limit_reached
     match_rank = post.rank if is_ranked else None
 
@@ -3590,11 +3653,13 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
         played_at=played_at,
         is_ranked=is_ranked,
         match_rank=match_rank,
+        diag=diag,
     )
 
     match_id: Optional[str] = None
     promoted = False
     newly_recorded = False
+    dedup_casual = False
     if rec.guest_user_id:
         guest_match = await db.find_recent_guest_reported_match(
             rec.guest_user_id,
@@ -3611,6 +3676,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 played_at=played_at,
                 is_ranked=is_ranked,
                 match_rank=match_rank,
+                diag=diag,
             )
             await db.promote_guest_match(
                 guest_match.id,
@@ -3648,6 +3714,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                     played_at=played_at,
                     is_ranked=is_ranked,
                     match_rank=match_rank,
+                    diag=diag,
                 )
                 await db.promote_guest_match(
                     near.id,
@@ -3678,6 +3745,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                         played_at=played_at,
                         is_ranked=is_ranked,
                         match_rank=match_rank,
+                        diag=diag,
                     )
                     if promote_ranked:
                         await db.promote_guest_match(
@@ -3696,6 +3764,8 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                         is_ranked = promote_ranked
                         match_rank = promote_match_rank
                         newly_recorded = True
+                    else:
+                        dedup_casual = True
                 if rec.guest_user_id:
                     await db.claim_match_side(near.id, "guest", rec.guest_user_id)
                 match_id = near.id
@@ -3719,6 +3789,14 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
         )
         newly_recorded = True
 
+    if is_ranked:
+        ranked_reason: Optional[str] = "ok"
+    elif dedup_casual:
+        resolve_reason = diag.get("reason") or diag.get("live_reason") or "unknown"
+        ranked_reason = f"dedup_casual: {resolve_reason}"
+    else:
+        ranked_reason = diag.get("reason") or diag.get("live_reason")
+
     if newly_recorded:
         rec.session_games += 1
 
@@ -3741,6 +3819,13 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 )
 
     await _persist_record(rec)
+    result_path = "promote" if promoted else "insert"
+    print(
+        f"ranked_diag: post={post.id} guest={rec.guest_user_id or '-'} "
+        f"guest_rank={rec.guest_rank or '-'} post_rank={post.rank} "
+        f"post_type={post.post_type} ranked={is_ranked} match_rank={match_rank} "
+        f"reason={ranked_reason} path={result_path}"
+    )
     return {
         "ok": True,
         "recorded": True,
@@ -3748,6 +3833,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
         "match_id": match_id,
         "match_rank": match_rank,
         "duplicate": promoted and not newly_recorded,
+        "ranked_reason": ranked_reason,
     }
 
 

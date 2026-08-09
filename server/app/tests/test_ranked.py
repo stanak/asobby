@@ -1140,3 +1140,152 @@ async def test_host_dedup_upgrades_casual_to_ranked():
             assert m.match_rank == "normal"
             res_m = await s.execute(select(db.Match))
             assert len(list(res_m.scalars().all())) == 1
+
+
+@pytest.mark.asyncio
+async def test_post_rank_syncs_with_host_db_rank_on_heartbeat():
+    """heartbeat で post.rank がホスト DB ランクと同期される。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+        assert rec.post.rank == "normal"
+
+        async with db.session() as s:
+            host = await s.get(db.User, "999")
+            host.rank = "luna"
+            await s.commit()
+
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="luna")
+
+        update_body = {
+            "id": post["id"],
+            "owner_token": owner_token,
+            "post_type": "ranked",
+            "addr": "1.2.3.4:10800",
+            "comment": "",
+            "stream_url": "",
+            "giuroll": False,
+            "autopunch": False,
+            "match_status": "",
+            "net_status": main.NET_BATTLE,
+            "ping_warn_enabled": True,
+            "ping_warn_ms": 200,
+            "ping_warn_giuroll_ms": 300,
+        }
+        resp = await client.post("/posts/update", json=update_body)
+        assert resp.status_code == 200
+        assert rec.post.rank == "luna"
+
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        assert rec.guest_user_id == "888"
+        assert rec.post.ranked_active is True
+
+        r = await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "winner": "host",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "hp",
+                "guest_profile": "gp",
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ranked"] is True
+        assert data["match_rank"] == "luna"
+
+
+@pytest.mark.asyncio
+async def test_result_refreshes_stale_guest_rank():
+    """結果報告時に stale な guest_rank が DB から再取得される。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="luna")
+        await create_user("888", name="guest", last_ip="5.6.7.8", rank="luna")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        assert rec.guest_user_id == "888"
+
+        rec.guest_rank = "normal"
+        rec.post.ranked_active = False
+
+        r = await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "winner": "host",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "hp",
+                "guest_profile": "gp",
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ranked"] is True
+        assert data["match_rank"] == "luna"
+
+
+@pytest.mark.asyncio
+async def test_ranked_reason_reports_band_mismatch():
+    """band 不一致時に ranked_reason に band_mismatch が含まれる。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4", rank="luna")
+        await create_user("777", name="hardguest", last_ip="5.6.7.8", rank="hard")
+
+        token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+
+        rec.guest_user_id = "777"
+        rec.guest_rank = "hard"
+        rec.guest_ip = "5.6.7.8"
+        rec.post.guest_user_id = "777"
+        main.refresh_ranked_active(rec)
+        assert rec.post.ranked_active is False
+
+        r = await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "winner": "host",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "hp",
+                "guest_profile": "gp",
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ranked"] is False
+        assert "band_mismatch" in (data.get("ranked_reason") or "")
