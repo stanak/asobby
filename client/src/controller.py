@@ -223,6 +223,7 @@ class Controller:
         self._notified_update_tag: str = ""
         self._notified_announcement_id: str = ""
         self._notified_reachability_lost: bool = False
+        self._notified_paused_recruit: bool = False
 
         # Discord ログイン（任意）。設定に保存済みのセッションを復元する。
         auth = self.config_mgr.get_section("auth")
@@ -1716,6 +1717,8 @@ class Controller:
         recruiting_stable = self._stable_for(
             "recruiting", RECRUIT_STABLE_SEC, seen=is_recruiting
         )
+        if not is_recruiting:
+            self._notified_paused_recruit = False
         if recruiting_stable and not paused:
             payload = self._build_payload(
                 addr=self._current_addr(my_ip, st.port),
@@ -1758,6 +1761,12 @@ class Controller:
         # 投稿停止中: サーバー create はしないが、到達性はローカルで確認する
         # -----------------
         if paused and recruiting_stable and my_ip and st.port:
+            # 一時停止のまま募集していることに気付けるよう 1 回だけ知らせる
+            if not self._notified_paused_recruit:
+                self._notified_paused_recruit = True
+                msg = t("notify.paused_while_recruiting")
+                self.notify_sink(msg)
+                self.log_sink("info", msg)
             addr = self._current_addr(my_ip, st.port)
             if addr:
                 if (

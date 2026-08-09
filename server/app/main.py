@@ -2781,6 +2781,14 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
                     )
                     if is_ranked:
                         await _bump_session_games(user_id, guest_uid)
+                    # ホスト側の結果報告 (/posts/result) を経ずに sync が
+                    # ゲスト行を昇格させた = ホストに投稿が無かった可能性が高い
+                    _diag_log(
+                        f"sync_promote_diag: host={user_id} guest={guest_uid or '-'} "
+                        f"match={near_match.id} ranked={is_ranked} "
+                        f"active_ranked_post={'yes' if host_rec is not None else 'no'} "
+                        f"client_ranked={item.ranked} played_at={played_at:%H:%M:%S}"
+                    )
                 elif (
                     item.my_side == "host"
                     and near_match.host_user_id == user_id
@@ -3419,9 +3427,17 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=429, detail="too many active posts")
 
     check_addr = probe_addr_for_hostcheck(body.addr, fallback_host=ip)
-    direct_reachable, autopunch_effective, reachability_uncertain = await verify_hostable_or_raise(
-        check_addr, autopunch=body.autopunch, giuroll=body.giuroll
-    )
+    try:
+        direct_reachable, autopunch_effective, reachability_uncertain = await verify_hostable_or_raise(
+            check_addr, autopunch=body.autopunch, giuroll=body.giuroll
+        )
+    except HTTPException as exc:
+        _diag_log(
+            f"create_diag: user={owner_user_id or '-'} name={owner_name} "
+            f"type={body.post_type} addr={check_addr} result=hostcheck_fail "
+            f"status={exc.status_code} autopunch={body.autopunch} giuroll={body.giuroll}"
+        )
+        raise
 
     LAST_CREATE_AT[ip] = now
 
@@ -3460,6 +3476,11 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
 
     await _persist_record(rec)
     await HUB.publish("upsert", asdict(post))
+    _diag_log(
+        f"create_diag: user={owner_user_id or '-'} name={owner_name} "
+        f"type={post.post_type} addr={post.addr} result=ok post={post.id} "
+        f"direct={direct_reachable} ap={autopunch_effective}"
+    )
     return {"post": asdict(post), "owner_token": rec.owner_token}
 
 
@@ -4030,6 +4051,12 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
         )
     )
     if not can_record:
+        _diag_log(
+            f"ranked_diag: post={post.id} guest=- guest_rank=- "
+            f"post_rank={post.rank} post_type={post.post_type} ranked=False "
+            f"match_rank=None reason=no_guest_info path=skip "
+            f"match_id=- played_at={played_at:%H:%M:%S}"
+        )
         return {"ok": True, "recorded": False, "reason": "no_guest_info"}
 
     diag: dict[str, Any] = {}
