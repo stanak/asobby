@@ -113,8 +113,9 @@ def show_info_toast(
     title: str = "asobby",
     important: bool = False,
     log: Optional[Callable[[str], None]] = None,
+    on_click: Optional[Callable[[], None]] = None,
 ) -> bool:
-    """Windows トーストを表示する。"""
+    """Windows トーストを表示する。on_click 指定時はトースト本体クリックで発火。"""
     if not INTERACTIVE_AVAILABLE:
         if log:
             log(
@@ -136,6 +137,14 @@ def show_info_toast(
                 log(t("toast.error.os_failed", detail=repr(args)))
 
         toast.on_failed = on_failed
+        if on_click is not None:
+            def activated(_args) -> None:
+                try:
+                    on_click()
+                except Exception:
+                    pass
+
+            toast.on_activated = activated
         _get_toaster().show_toast(toast)
         _live_toasts.append(toast)
         del _live_toasts[:-_LIVE_TOASTS_MAX]

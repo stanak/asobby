@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>asobby - 管理</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" data-asobby="1">
+<meta name="robots" content="noindex">
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1c2129;
+    --border: #2c3440;
+    --text: #d8dee9;
+    --muted: #7b8794;
+    --accent: #6ab0f3;
+    --ok: #57c07d;
+    --err: #e06c75;
+    --warn: #e5c07b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 16px 20px 8px; }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: 1px; }
+  header nav { margin-left: auto; }
+  header nav a { color: var(--accent); text-decoration: none; }
+  main { max-width: 640px; margin: 0 auto; padding: 8px 20px 40px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .panel h2 { margin: 0 0 12px; font-size: 16px; }
+  textarea {
+    width: 100%;
+    min-height: 90px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    font: inherit;
+    resize: vertical;
+  }
+  select, button {
+    font: inherit;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+    cursor: pointer;
+  }
+  select { background: var(--bg); color: var(--text); }
+  button.primary { background: var(--accent); color: #10131a; border: none; font-weight: 600; }
+  button.danger { background: transparent; color: var(--err); border-color: var(--err); }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  .muted { color: var(--muted); font-size: 13px; }
+  #status { margin-top: 10px; font-size: 14px; }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--err); }
+  .preview {
+    margin-top: 14px;
+    border-radius: 8px;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    display: none;
+  }
+  .preview.info { display: block; background: rgba(106, 176, 243, 0.12); border-color: var(--accent); }
+  .preview.warn { display: block; background: rgba(229, 192, 123, 0.12); border-color: var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>asobby 管理</h1>
+  <nav><a href="/">← ロビーへ戻る</a></nav>
+</header>
+<main>
+  <div class="panel" id="gate" style="display:none">
+    <h2>権限がありません</h2>
+    <p class="muted">このページは管理者のみ使用できます。ロビーで Discord ログイン済みか確認してください。</p>
+  </div>
+
+  <div class="panel" id="editor" style="display:none">
+    <h2>お知らせバナー</h2>
+    <p class="muted">ロビー上部に表示されます。空にして保存すると削除されます。</p>
+    <textarea id="text" maxlength="500" placeholder="例: 8/20 にサーバーメンテナンスを行います"></textarea>
+    <div class="row">
+      <label>種類:
+        <select id="level">
+          <option value="info">お知らせ (青)</option>
+          <option value="warn">重要 (黄)</option>
+        </select>
+      </label>
+      <button class="primary" id="save">保存</button>
+      <button class="danger" id="clear">削除</button>
+    </div>
+    <div id="status"></div>
+    <div id="preview" class="preview"></div>
+    <p class="muted" id="meta"></p>
+  </div>
+</main>
+<script>
+(async () => {
+  const $ = (id) => document.getElementById(id);
+
+  async function fetchJson(url, opts) {
+    const res = await fetch(url, { credentials: "same-origin", ...opts });
+    if (!res.ok) throw new Error(String(res.status));
+    return res.json();
+  }
+
+  function render(ann) {
+    const preview = $("preview");
+    if (ann && ann.text) {
+      preview.className = "preview " + (ann.level || "info");
+      preview.textContent = ann.text;
+      const dt = ann.updated_at ? new Date(ann.updated_at * 1000).toLocaleString() : "";
+      $("meta").textContent = dt ? `最終更新: ${dt} (${ann.updated_by || "?"})` : "";
+      $("text").value = ann.text;
+      $("level").value = ann.level || "info";
+    } else {
+      preview.className = "preview";
+      preview.textContent = "";
+      $("meta").textContent = "現在お知らせは設定されていません";
+    }
+  }
+
+  function setStatus(msg, ok) {
+    const el = $("status");
+    el.textContent = msg;
+    el.className = ok ? "ok" : "err";
+  }
+
+  let me = null;
+  try {
+    me = await fetchJson("/auth/me");
+  } catch (e) { /* not logged in */ }
+  if (!me || !me.is_admin) {
+    $("gate").style.display = "block";
+    return;
+  }
+  $("editor").style.display = "block";
+
+  try {
+    const cur = await fetchJson("/announcement");
+    render(cur.announcement);
+  } catch (e) { /* ignore */ }
+
+  async function post(text, level) {
+    try {
+      const res = await fetchJson("/admin/announcement", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, level }),
+      });
+      render(res.announcement);
+      setStatus(text ? "保存しました" : "削除しました", true);
+    } catch (e) {
+      setStatus("失敗しました (" + e.message + ")", false);
+    }
+  }
+
+  $("save").addEventListener("click", () => post($("text").value.trim(), $("level").value));
+  $("clear").addEventListener("click", () => { $("text").value = ""; post("", "info"); });
+})();
+</script>
+</body>
+</html>

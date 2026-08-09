@@ -77,10 +77,28 @@ _PRESENCE_LOCK = threading.Lock()
 RANKED_EVAL_MIN_GAMES = 30
 # 昇降格判定に使う直近ランクマ対戦数
 RANKED_EVAL_WINDOW = 30
-# 1 セッション (ゲスト接続) でランクマ扱いになるのは最初の 3 戦まで
+# 1 セッション (同一ペア) でランクマ扱いになるのは最初の 5 戦まで
 RANKED_SESSION_MAX_GAMES = 5
 # この分数以上空くと別セッション (sync 遅延時の streak 判定)
 RANKED_SESSION_GAP_MINUTES = 30
+
+# 管理者 (お知らせ管理などを許可する Discord ユーザー ID、カンマ区切り)
+ADMIN_USER_IDS: set[str] = {
+    s.strip()
+    for s in os.environ.get("ASOBBY_ADMIN_USER_IDS", "").split(",")
+    if s.strip()
+}
+
+# クライアント最低バージョンゲート。
+# ASOBBY_MIN_CLIENT_VERSION 未設定ならゲート無効。
+# ASOBBY_MIN_CLIENT_ENFORCE_AT (ISO 8601, 例 "2026-09-01T00:00:00+09:00") を過ぎると
+# 旧クライアントの募集作成を 426 で拒否する。未設定なら警告のみで拒否しない。
+MIN_CLIENT_VERSION = os.environ.get("ASOBBY_MIN_CLIENT_VERSION", "").strip()
+MIN_CLIENT_ENFORCE_AT = os.environ.get("ASOBBY_MIN_CLIENT_ENFORCE_AT", "").strip()
+
+
+def is_admin_user(user_id: str) -> bool:
+    return bool(user_id) and user_id in ADMIN_USER_IDS
 
 # 昇降格ルール (rank -> promote_at, demote_at, promote_to, demote_to)
 # promote_at / demote_at は None なら該当方向の判定なし
@@ -1595,6 +1613,7 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(geoip.init_geoip)
     await _hydrate_records_from_redis()
     await _hydrate_chat_from_redis()
+    await asyncio.to_thread(_hydrate_announcement)
     SERVER_STARTED_AT = time.time()
     await client_release.get_latest_release()
     cleanup_task = asyncio.create_task(cleanup_loop())
@@ -1660,6 +1679,64 @@ def client_ip(request: Request) -> str:
 
 def client_version_from_request(request: Request) -> str:
     return (request.headers.get("X-Asobby-Client-Version") or "").strip()[:32]
+
+
+def _min_client_enforce_active() -> bool:
+    """旧クライアント拒否期限を過ぎているか。期限未設定なら拒否しない。"""
+    if not MIN_CLIENT_ENFORCE_AT:
+        return False
+    try:
+        enforce_at = datetime.fromisoformat(MIN_CLIENT_ENFORCE_AT)
+    except ValueError:
+        return False
+    if enforce_at.tzinfo is None:
+        enforce_at = enforce_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= enforce_at
+
+
+async def enforce_min_client_version(request: Request) -> None:
+    """最低バージョン未満のクライアントの操作を 426 で拒否する (期限後のみ)。
+
+    バージョンヘッダーなし = 対応前の旧クライアントとして扱う。
+    """
+    if not MIN_CLIENT_VERSION or not _min_client_enforce_active():
+        return
+    client_ver = client_version_from_request(request)
+    if client_ver and not client_release.is_older(client_ver, MIN_CLIENT_VERSION):
+        return
+    latest = await client_release.get_latest_release()
+    download = ""
+    if latest:
+        download = latest.get("html_url") or latest.get("download_url") or ""
+    raise HTTPException(
+        status_code=426,
+        detail={
+            "reason": "client_outdated",
+            "min_version": MIN_CLIENT_VERSION,
+            "download_url": download,
+        },
+    )
+
+
+# ----------------------------
+# お知らせ (管理者が設定する重要告知)
+# ----------------------------
+ANNOUNCEMENT: dict[str, Any] | None = None
+
+
+def _hydrate_announcement() -> None:
+    global ANNOUNCEMENT
+    try:
+        ANNOUNCEMENT = post_redis.load_announcement()
+    except Exception as e:
+        print(f"announcement load error: {e}")
+
+
+def _persist_announcement() -> None:
+    try:
+        post_redis.save_announcement(ANNOUNCEMENT)
+    except Exception as e:
+        print(f"announcement save error: {e}")
 
 
 def sorted_public_posts() -> list[dict[str, Any]]:
@@ -3134,7 +3211,50 @@ async def auth_me(request: Request) -> dict[str, Any]:
         "settings": settings,
         "favicon_badges": badges,
         "has_other_posts": badges["ranked"] or badges["casual"],
+        "is_admin": is_admin_user(sess["id"]),
     }
+
+
+class AnnouncementIn(BaseModel):
+    text: str = Field(default="", max_length=500)
+    level: Literal["info", "warn"] = "info"
+
+
+@app.get("/announcement")
+async def get_announcement() -> dict[str, Any]:
+    """現在のお知らせ (なければ null)。Web バナー・クライアント通知用。"""
+    return {"announcement": ANNOUNCEMENT}
+
+
+@app.post("/admin/announcement")
+async def set_announcement(body: AnnouncementIn, request: Request) -> dict[str, Any]:
+    """管理者がお知らせを設定・解除する (text 空で解除)。"""
+    global ANNOUNCEMENT
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="login required")
+    if not is_admin_user(sess["id"]):
+        raise HTTPException(status_code=403, detail="admin only")
+
+    text = body.text.strip()
+    if not text:
+        ANNOUNCEMENT = None
+    else:
+        ANNOUNCEMENT = {
+            "id": uuid4().hex,
+            "text": text,
+            "level": body.level,
+            "updated_at": now_ts(),
+            "updated_by": sess.get("name") or sess["id"],
+        }
+    await asyncio.to_thread(_persist_announcement)
+    return {"ok": True, "announcement": ANNOUNCEMENT}
+
+
+@app.get("/admin")
+async def admin_page() -> FileResponse:
+    """管理ページ (お知らせ管理)。権限チェックは API 側で行う。"""
+    return FileResponse(STATIC_DIR / "admin.html")
 
 
 @app.get("/user/settings")
@@ -3256,6 +3376,7 @@ async def list_posts(request: Request) -> list[dict[str, Any]]:
 
 @app.post("/posts")
 async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
+    await enforce_min_client_version(request)
     if not is_allowed_stream_url(body.stream_url):
         raise HTTPException(
             status_code=422,

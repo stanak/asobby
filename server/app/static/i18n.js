@@ -531,6 +531,9 @@
     "guide.menu.sessionScore.name": "勝敗数通知",
     "guide.menu.sessionScore.desc":
       "同一相手との連続対戦で、ホスト-クライアント形式の勝敗数 (例: 2-1) をトースト通知します。「勝敗数通知の設定...」で毎戦通知か条件指定ができます。",
+    "guide.menu.hotkeys.name": "ショートカットキー (Ctrl+Alt+T/L/R)",
+    "guide.menu.hotkeys.desc":
+      "よく使う操作をゲーム中でもキーボードから切り替えられます（v1.0 以降）。Ctrl+Alt+T = 募集タイプ切替、Ctrl+Alt+L = ロビー自動投稿の一時停止/再開、Ctrl+Alt+R = リプレイ保存拒否の切替。切替結果はトーストで通知されます。他のアプリと競合する場合はこの項目で OFF にできます。",
     "guide.menu.lang.name": "言語 / Language",
     "guide.menu.lang.desc":
       "クライアント UI とトースト通知の表示言語（日本語 / English）を切り替えます。設定は PC 内に保存され、次回起動後も維持されます。",
@@ -1102,6 +1105,9 @@
     "guide.menu.sessionScore.name": "Win-loss count notifications",
     "guide.menu.sessionScore.desc":
       "Toast the host-client win-loss score (e.g. 2-1) against the same opponent in a streak. Use “Win-loss count notification settings...” for every match or custom rules.",
+    "guide.menu.hotkeys.name": "Hotkeys (Ctrl+Alt+T/L/R)",
+    "guide.menu.hotkeys.desc":
+      "Toggle common actions from the keyboard even during a game (v1.0+). Ctrl+Alt+T = switch post type, Ctrl+Alt+L = pause/resume lobby auto-posting, Ctrl+Alt+R = toggle replay-save refusal. Each toggle shows a toast. Turn this item OFF if the keys conflict with another app.",
     "guide.menu.lang.name": "Language / 言語",
     "guide.menu.lang.desc":
       "Switch the client UI and toast notification language (Japanese / English). Saved on this PC and kept after restart.",

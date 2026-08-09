@@ -13,12 +13,14 @@ from pystray import Menu, MenuItem
 
 import toast
 from controller import Controller, PAUSE_UNTIL_RESUME
+from hotkeys import HotkeyManager
 from replay_refusal import REPLAY_REFUSAL_PERMANENT
 from icon_art import render_icon
 from tray_icon import TrayIcon
 from i18n import (
     SUPPORTED_LANGS,
     get_lang,
+    post_type_label,
     post_type_options,
     set_lang,
     t,
@@ -74,6 +76,7 @@ class TrayApp:
 
         self._icon_cache: dict[tuple[str, bool, bool], Image.Image] = {}
         self._pause_tick_after_id: str | None = None
+        self.hotkeys: HotkeyManager | None = None
 
     # -----------------
     # Controller sinks
@@ -81,12 +84,19 @@ class TrayApp:
     def emit_log(self, level: str, text: str) -> None:
         self._append_log(level, text)
 
-    def emit_notify(self, text: str, *, important: bool = False) -> None:
+    def emit_notify(
+        self,
+        text: str,
+        *,
+        important: bool = False,
+        on_click=None,
+    ) -> None:
         shown = toast.show_info_toast(
             text,
             title="asobby",
             important=important,
             log=lambda m: self._append_log("warn", m),
+            on_click=on_click,
         )
         if not shown:
             self._append_log("warn", t("log.toast_tray_fallback"))
@@ -407,6 +417,7 @@ class TrayApp:
             self.icon.update_menu()
 
     def _quit(self) -> None:
+        self._stop_hotkeys()
         fut = asyncio.run_coroutine_threadsafe(self.controller.close(), self.loop)
         try:
             fut.result(timeout=5)
@@ -564,6 +575,75 @@ class TrayApp:
             return t("tray.replay_refusal_active", remaining=remaining)
         return t("tray.replay_refusal")
 
+    # -----------------
+    # global hotkeys
+    # -----------------
+    def _hotkey_toggle_post_type(self) -> None:
+        current = self.controller.my_post.post_type or "casual"
+        new_type = "ranked" if current == "casual" else "casual"
+        self.controller.set_active_post_type(new_type)
+        self.emit_notify(t("notify.hotkey_post_type", type=post_type_label(new_type)))
+        if self.icon:
+            self.icon.update_menu()
+
+    def _hotkey_toggle_pause(self) -> None:
+        # pause/resume は controller 側でトースト通知される
+        if self.controller.is_detect_paused():
+            self.controller.resume_auto_detect()
+        else:
+            self.controller.pause_auto_detect(PAUSE_UNTIL_RESUME)
+        if self.icon:
+            self.icon.update_menu()
+
+    def _hotkey_toggle_replay_refusal(self) -> None:
+        # 設定/解除は controller 側でトースト通知される
+        if self.controller.is_replay_refusal_active():
+            self.controller.clear_replay_refusal()
+        else:
+            self.controller.set_replay_refusal(REPLAY_REFUSAL_PERMANENT)
+        if self.icon:
+            self.icon.update_menu()
+
+    def _start_hotkeys(self) -> None:
+        if self.hotkeys is not None and self.hotkeys.running:
+            return
+        mgr = HotkeyManager(log=lambda level, msg: self._append_log(level, msg))
+        c = self.controller
+        mgr.add(
+            "post_type",
+            c.hotkey_combo("post_type", "ctrl+alt+t"),
+            self._hotkey_toggle_post_type,
+        )
+        mgr.add(
+            "pause",
+            c.hotkey_combo("pause", "ctrl+alt+l"),
+            self._hotkey_toggle_pause,
+        )
+        mgr.add(
+            "replay_refusal",
+            c.hotkey_combo("replay_refusal", "ctrl+alt+r"),
+            self._hotkey_toggle_replay_refusal,
+        )
+        mgr.start()
+        self.hotkeys = mgr
+        for _name, combo in mgr.failed_combos:
+            self.emit_notify(t("notify.hotkey_register_failed", combo=combo))
+
+    def _stop_hotkeys(self) -> None:
+        if self.hotkeys is not None:
+            self.hotkeys.stop()
+            self.hotkeys = None
+
+    def _toggle_hotkeys(self) -> None:
+        enabled = not self.controller.hotkeys_enabled()
+        self.controller.set_hotkeys_enabled(enabled)
+        if enabled:
+            self._start_hotkeys()
+        else:
+            self._stop_hotkeys()
+        if self.icon:
+            self.icon.update_menu()
+
     def _toggle_copy_addr(self) -> None:
         self.controller.set_copy_addr_enabled(
             not self.controller.copy_addr_enabled()
@@ -709,6 +789,11 @@ class TrayApp:
                 t("tray.session_score_settings"),
                 lambda: self._open_session_score_settings(),
             ),
+            MenuItem(
+                t("tray.hotkeys"),
+                lambda: self._toggle_hotkeys(),
+                checked=lambda item: self.controller.hotkeys_enabled(),
+            ),
             Menu.SEPARATOR,
             self._section_header("tray.section.tools"),
             MenuItem(
@@ -777,6 +862,8 @@ class TrayApp:
         self._append_log("info", f"asobby agent v{__version__} started")
         self._append_log("info", f"Lobby page: {self.controller.lobby_url()}")
         self.icon.run_detached()
+        if self.controller.hotkeys_enabled():
+            self._start_hotkeys()
         # 「黙って常駐するのが怖い」対策: 起動直後にトレイ常駐を明示的に知らせる
         self.tk_root.after(
             1500, lambda: self.emit_notify(t("tray.startup_notice"))

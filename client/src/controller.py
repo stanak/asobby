@@ -42,6 +42,7 @@ ActionType = Literal["create", "update", "close", "result", "guest_result"]
 HEARTBEAT_SEC = 5  # サーバー側 TTL (20s) の 1/4
 GUEST_PRESENCE_INTERVAL_SEC = 20.0  # ゲスト側の対戦中自己申告 (同定+セッション状態受信)
 RANKED_SESSION_MAX_GAMES = 5  # 同一相手との連続ランクマ上限 (サーバー側と揃える)
+RELEASES_URL = "https://github.com/stanak/asobby/releases/latest"
 CREATE_RETRY_COOLDOWN_SEC = 10
 MYIP_REFRESH_INTERVAL_SEC = 60.0
 UPDATE_CHECK_INTERVAL_SEC = 6 * 3600
@@ -218,6 +219,7 @@ class Controller:
         except OSError as e:
             self.log_sink("warn", f"Local lobby API unavailable: {e}")
         self._notified_update_tag: str = ""
+        self._notified_announcement_id: str = ""
 
         # Discord ログイン（任意）。設定に保存済みのセッションを復元する。
         auth = self.config_mgr.get_section("auth")
@@ -596,6 +598,21 @@ class Controller:
     def set_active_stream(self, text: str) -> None:
         self.config_mgr.set_post_default("stream_url", text)
         self.update_my_post(stream_url=text)
+
+    def hotkeys_enabled(self) -> bool:
+        return bool(self.config_mgr.get_value("options", "hotkeys_enabled", True))
+
+    def set_hotkeys_enabled(self, enabled: bool) -> None:
+        self.config_mgr.set_value("options", "hotkeys_enabled", bool(enabled))
+        self.log_sink(
+            "info",
+            t("log.hotkeys_toggle", state=t("common.on" if enabled else "common.off")),
+        )
+
+    def hotkey_combo(self, name: str, default: str) -> str:
+        """設定ファイルで組み合わせを変更可能 (例: "hotkeys": {"post_type": "ctrl+alt+t"})。"""
+        v = self.config_mgr.get_value("hotkeys", name, default)
+        return str(v or default)
 
     def copy_addr_enabled(self) -> bool:
         return bool(self.config_mgr.get_value("options", "copy_addr_on_host", False))
@@ -1123,7 +1140,8 @@ class Controller:
                 self.update_available = (latest_tag, release_url)
                 if self._notified_update_tag != latest_tag:
                     self.notify_sink(
-                        t("notify.update_available", tag=latest_tag)
+                        t("notify.update_available", tag=latest_tag),
+                        on_click=self.open_update_page,
                     )
                     self._notified_update_tag = latest_tag
                 self.log_sink(
@@ -1133,10 +1151,39 @@ class Controller:
         except Exception:
             pass
 
+    def open_update_page(self) -> None:
+        """新バージョンのダウンロードページをブラウザで開く。"""
+        url = RELEASES_URL
+        if self.update_available:
+            url = self.update_available[1] or RELEASES_URL
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            self.log_sink("error", f"Open update page failed: {e}")
+
+    async def _check_announcement(self) -> None:
+        """サーバーのお知らせを取得し、新着なら一度だけ通知する。"""
+        try:
+            data = await self.api.fetch_announcement()
+        except Exception:
+            return
+        ann = (data or {}).get("announcement")
+        if not isinstance(ann, dict) or not ann.get("text"):
+            return
+        ann_id = str(ann.get("id") or "")
+        if not ann_id or ann_id == self._notified_announcement_id:
+            return
+        self._notified_announcement_id = ann_id
+        self.notify_sink(
+            t("notify.announcement", text=str(ann.get("text"))),
+            important=ann.get("level") == "warn",
+        )
+
     async def update_check_loop(self) -> None:
-        """起動直後と、以後6時間ごとに更新を確認する。"""
+        """起動直後と、以後6時間ごとに更新とお知らせを確認する。"""
         while not self._stop.is_set():
             await self._check_update()
+            await self._check_announcement()
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=UPDATE_CHECK_INTERVAL_SEC)
             except asyncio.TimeoutError:
@@ -2256,6 +2303,15 @@ class Controller:
                 self._notify_post_unreachable(
                     detail=self._post_failure_detail(e),
                 )
+            elif code == 426:
+                # サーバーの最低バージョンゲート: 更新しないと募集できない
+                self._next_create_ts = time.time() + 300  # 通知連発を避ける
+                self.notify_sink(
+                    t("notify.client_outdated"),
+                    important=True,
+                    on_click=self.open_update_page,
+                )
+                self.log_sink("error", "Client version rejected by server (426).")
             elif code == 429:
                 self.log_sink("warn", "Rate limited by server. Retrying soon.")
             else:

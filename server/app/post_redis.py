@@ -25,6 +25,8 @@ CHAT_COOLDOWN_PREFIX = "asobby:lobby:chat:cooldown:"
 PRESENCE_ZSET_KEY = "asobby:presence"
 PRESENCE_TTL_SEC = 90
 
+ANNOUNCEMENT_KEY = "asobby:announcement"
+
 _LOCAL_LOCK = threading.Lock()
 
 
@@ -485,6 +487,56 @@ def replace_chat_messages(
         return
     if _local_store_enabled():
         _local_write_chat_file(normalized, kept)
+
+
+def _local_announcement_path() -> Path:
+    return _store_dir() / "announcement.json"
+
+
+def save_announcement(data: dict[str, Any] | None) -> None:
+    """お知らせを保存する。None なら削除。"""
+    if is_redis_configured():
+        redis = _client()
+        if data is None:
+            redis.delete(ANNOUNCEMENT_KEY)
+        else:
+            payload = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+            redis.set(ANNOUNCEMENT_KEY, payload)
+        return
+    if _local_store_enabled():
+        with _LOCAL_LOCK:
+            path = _local_announcement_path()
+            if data is None:
+                path.unlink(missing_ok=True)
+            else:
+                _ensure_local_dirs()
+                payload = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+                _atomic_write_text(path, payload)
+
+
+def load_announcement() -> dict[str, Any] | None:
+    """保存済みのお知らせを返す (なければ None)。"""
+    if is_redis_configured():
+        redis = _client()
+        raw = redis.get(ANNOUNCEMENT_KEY)
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else None
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+    if _local_store_enabled():
+        with _LOCAL_LOCK:
+            path = _local_announcement_path()
+            if not path.is_file():
+                return None
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return data if isinstance(data, dict) else None
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                return None
+    return None
 
 
 def presence_touch(visitor_id: str, *, now: float | None = None) -> int:

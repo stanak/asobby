@@ -220,6 +220,14 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    async def fetch_announcement(self) -> dict:
+        """サーバーのお知らせ (管理者設定の重要告知) を取得する。"""
+        r = await self.http.get(
+            f"{self.base}/announcement", headers=self._request_headers()
+        )
+        r.raise_for_status()
+        return r.json()
+
     async def announce_net_battle(
         self,
         host_profile: str = "",

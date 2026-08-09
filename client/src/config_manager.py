@@ -38,6 +38,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "session_score_notify_mode": "all",
         "session_score_notify_rules": [],
         "replay_refusal_until": 0,
+        "hotkeys_enabled": True,
+    },
+    "hotkeys": {
+        "post_type": "ctrl+alt+t",
+        "pause": "ctrl+alt+l",
+        "replay_refusal": "ctrl+alt+r",
     },
 }
 
