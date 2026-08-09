@@ -241,9 +241,9 @@ async def test_hydrate_idle_post_dropped_when_stale(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_hydrate_chat_from_redis(monkeypatch):
-    _clear = lambda: [main.LOBBY_CHATS[lang].clear() for lang in main.LOBBY_CHAT_LANGS]
-    _clear()
+async def test_hydrate_chat_from_redis_merges_legacy_channels(monkeypatch):
+    """旧 JP/EN チャンネルは ts 順にマージされて単一チャンネルへ移行する。"""
+    main.LOBBY_CHAT.clear()
     now = time.time()
     messages = {
         "ja": [{"id": "a", "text": "one", "lang": "ja", "ts": now}],
@@ -256,11 +256,17 @@ async def test_hydrate_chat_from_redis(monkeypatch):
         "load_all_chat_messages",
         lambda **kwargs: {k: list(v) for k, v in messages.items()},
     )
+    replaced: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        post_redis,
+        "replace_chat_messages",
+        lambda lang, msgs, **kwargs: replaced.append((lang, len(msgs))),
+    )
 
     await main._hydrate_chat_from_redis()
     snap = main.lobby_chat_snapshot()
-    assert len(snap["ja"]) == 1
-    assert snap["ja"][0]["id"] == "a"
-    assert len(snap["en"]) == 1
-    assert snap["en"][0]["id"] == "b"
-    _clear()
+    assert [m["id"] for m in snap] == ["a", "b"]
+    # 移行同期: 単一チャンネルへ全件、旧 en チャンネルは空に
+    assert (main.LOBBY_CHAT_STORE_LANG, 2) in replaced
+    assert ("en", 0) in replaced
+    main.LOBBY_CHAT.clear()

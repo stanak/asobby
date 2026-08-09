@@ -15,7 +15,7 @@
   gtag('js', new Date());
   gtag('config', 'G-RJSLH3FRBR');
 </script>
-<script src="/static/i18n.js?v=0.7.27"></script>
+<script src="/static/i18n.js?v=0.8.0"></script>
 <script src="/static/client-update.js"></script>
 <script src="/static/favicon-notify.js"></script>
 <script src="/static/favicon-badge.js"></script>
@@ -396,6 +396,7 @@
     <a href="#setup" data-i18n="guide.sectionSetup">はじめてのセットアップ</a>
     <a href="#tray" data-i18n="guide.sectionTray">トレイメニューの見方</a>
     <a href="#menu" data-i18n="guide.sectionMenu">メニュー項目リファレンス</a>
+    <a href="#web-lobby" data-i18n="guide.sectionWebLobby">Web ロビーの使い方</a>
     <a href="#ranked" data-i18n="guide.sectionRanked">ランクマの仕様</a>
     <a href="#stats" data-i18n="guide.sectionStats">戦績の管理</a>
     <a href="#high-ping" data-i18n="guide.sectionHighPing">高 Ping 警告</a>
@@ -572,7 +573,7 @@
     </div>
     <div class="menu-item">
       <h3 data-i18n="guide.menu.hotkeys.name">ショートカットキー (Ctrl+Alt+T/L/R)</h3>
-      <p data-i18n="guide.menu.hotkeys.desc">よく使う操作をゲーム中でもキーボードから切り替えられます（v1.0 以降）。Ctrl+Alt+T = 募集タイプ切替、Ctrl+Alt+L = ロビー自動投稿の一時停止/再開、Ctrl+Alt+R = リプレイ保存拒否の切替。切替結果はトーストで通知されます。他のアプリと競合する場合はこの項目で OFF にできます。</p>
+      <p data-i18n="guide.menu.hotkeys.desc">よく使う操作をゲーム中でもキーボードから切り替えられます（v0.8.0 以降）。Ctrl+Alt+T = 募集タイプ切替、Ctrl+Alt+L = ロビー自動投稿の一時停止/再開、Ctrl+Alt+R = リプレイ保存拒否の切替。切替結果はトーストで通知されます。他のアプリと競合する場合はこの項目で OFF にできます。</p>
     </div>
 
     <h3 class="menu-group-title" data-i18n="guide.menuGroup.tools">─── ツール ───</h3>
@@ -601,6 +602,21 @@
     <div class="menu-item">
       <h3 data-i18n="guide.menu.quit.name">終了</h3>
       <p data-i18n="guide.menu.quit.desc">クライアントを終了します。募集中の投稿は閉じられます。</p>
+    </div>
+  </section>
+
+  <section class="panel" id="web-lobby">
+    <h2 data-i18n="guide.sectionWebLobby">Web ロビーの使い方</h2>
+    <p data-i18n="guide.webLobbyIntro">Web ロビー (asobby.com) では、募集一覧の閲覧に加えて、ホストへの定型メッセージ送信とロビーチャットが使えます（要 Discord ログイン）。</p>
+    <div class="menu-item">
+      <h3 data-i18n="guide.webLobby.send.name">「✉ 送る ▾」ボタン（ホストへの定型メッセージ）</h3>
+      <p data-i18n="guide.webLobby.send.desc1">募集行の右端にある「✉ 送る ▾」を押すと選択肢が開き、ホストのクライアントへトースト通知でメッセージを届けられます。ホストが承諾 / 拒否すると、その結果があなたのロビー画面に通知されます。</p>
+      <p data-i18n="guide.webLobby.send.desc2">選択肢は募集の状態に応じて変わります: 「Giuroll をお願いする」はホストが Giuroll 未使用のときだけ、「カジュアル対戦に誘う」はランクマ募集のときだけ表示されます。送れる選択肢がない募集（Giuroll 使用中のカジュアル募集など）にはボタン自体が表示されません。</p>
+      <p data-i18n="guide.webLobby.send.desc3">同じ募集には 1 分に 1 回まで送信できます（送信後はボタンが「待機中」になります）。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.webLobby.chat.name">ロビーチャット</h3>
+      <p data-i18n="guide.webLobby.chat.desc">画面下部のチャットは全員共通の 1 チャンネルです（言語問わずどうぞ）。@名前 で相手をメンションでき、メンションされた相手にはバッジで知らされます。感想戦や募集の相談にも使えます。</p>
     </div>
   </section>
 

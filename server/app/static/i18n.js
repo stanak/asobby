@@ -122,8 +122,6 @@
     "lobby.rankDescLuna": "上級者以上",
 
     "lobby.chatTitle": "ロビーチャット(感想戦などにもどうぞ)",
-    "lobby.chatTabJa": "JP",
-    "lobby.chatTabEn": "EN",
     "lobby.chatPlaceholder": "メッセージを入力 (@でメンション)",
     "lobby.chatSend": "送信",
     "lobby.chatHide": "ロビーチャットを隠す",
@@ -355,7 +353,7 @@
     "guide.mock.toolGiuroll": "giuroll を設定 / 起動",
     "guide.mock.toolSoku": "天則 (soku) を設定 / 起動",
     "guide.mock.lang": "言語 / Language",
-    "guide.mock.version": "バージョン v0.7.x",
+    "guide.mock.version": "バージョン v0.8.x",
     "guide.mock.quit": "終了",
     "guide.mock.note1":
       "一番上の行は現在の状態表示です。グレーの行は情報表示で、クリックしても何も起きません。",
@@ -371,6 +369,19 @@
       "接続できない場合（ポート未開放・Autopunch 未設定など）は募集されず、トースト通知で「募集に失敗しました: ポート開放または autopunch を確認してください」と知らせます。",
     "guide.basicLogin":
       "asobby の利用（募集の自動投稿・Web ロビー・戦績・チャットなど）には、トレイメニューから Discord ログインが必要です。",
+    "guide.sectionWebLobby": "Web ロビーの使い方",
+    "guide.webLobbyIntro":
+      "Web ロビー (asobby.com) では、募集一覧の閲覧に加えて、ホストへの定型メッセージ送信とロビーチャットが使えます（要 Discord ログイン）。",
+    "guide.webLobby.send.name": "「✉ 送る ▾」ボタン（ホストへの定型メッセージ）",
+    "guide.webLobby.send.desc1":
+      "募集行の右端にある「✉ 送る ▾」を押すと選択肢が開き、ホストのクライアントへトースト通知でメッセージを届けられます。ホストが承諾 / 拒否すると、その結果があなたのロビー画面に通知されます。",
+    "guide.webLobby.send.desc2":
+      "選択肢は募集の状態に応じて変わります: 「Giuroll をお願いする」はホストが Giuroll 未使用のときだけ、「カジュアル対戦に誘う」はランクマ募集のときだけ表示されます。送れる選択肢がない募集（Giuroll 使用中のカジュアル募集など）にはボタン自体が表示されません。",
+    "guide.webLobby.send.desc3":
+      "同じ募集には 1 分に 1 回まで送信できます（送信後はボタンが「待機中」になります）。",
+    "guide.webLobby.chat.name": "ロビーチャット",
+    "guide.webLobby.chat.desc":
+      "画面下部のチャットは全員共通の 1 チャンネルです（言語問わずどうぞ）。@名前 で相手をメンションでき、メンションされた相手にはバッジで知らされます。感想戦や募集の相談にも使えます。",
     "guide.sectionRanked": "ランクマの仕様",
     "guide.rankedIntro":
       "ランクマ募集で、同じランク帯の Discord ログイン済み相手と対戦すると、条件を満たす対戦はランクマとして記録されます。",
@@ -533,7 +544,7 @@
       "同一相手との連続対戦で、ホスト-クライアント形式の勝敗数 (例: 2-1) をトースト通知します。「勝敗数通知の設定...」で毎戦通知か条件指定ができます。",
     "guide.menu.hotkeys.name": "ショートカットキー (Ctrl+Alt+T/L/R)",
     "guide.menu.hotkeys.desc":
-      "よく使う操作をゲーム中でもキーボードから切り替えられます（v1.0 以降）。Ctrl+Alt+T = 募集タイプ切替、Ctrl+Alt+L = ロビー自動投稿の一時停止/再開、Ctrl+Alt+R = リプレイ保存拒否の切替。切替結果はトーストで通知されます。他のアプリと競合する場合はこの項目で OFF にできます。",
+      "よく使う操作をゲーム中でもキーボードから切り替えられます（v0.8.0 以降）。Ctrl+Alt+T = 募集タイプ切替、Ctrl+Alt+L = ロビー自動投稿の一時停止/再開、Ctrl+Alt+R = リプレイ保存拒否の切替。切替結果はトーストで通知されます。他のアプリと競合する場合はこの項目で OFF にできます。",
     "guide.menu.lang.name": "言語 / Language",
     "guide.menu.lang.desc":
       "クライアント UI とトースト通知の表示言語（日本語 / English）を切り替えます。設定は PC 内に保存され、次回起動後も維持されます。",
@@ -697,8 +708,6 @@
     "lobby.rankDescLuna": "Advanced and up",
 
     "lobby.chatTitle": "Lobby chat (post-match chat welcome)",
-    "lobby.chatTabJa": "JP",
-    "lobby.chatTabEn": "EN",
     "lobby.chatPlaceholder": "Type a message (@ to mention)",
     "lobby.chatSend": "Send",
     "lobby.chatHide": "Hide lobby chat",
@@ -929,7 +938,7 @@
     "guide.mock.toolGiuroll": "set / launch giuroll",
     "guide.mock.toolSoku": "set / launch soku (th123)",
     "guide.mock.lang": "Language / 言語",
-    "guide.mock.version": "Version v0.7.x",
+    "guide.mock.version": "Version v0.8.x",
     "guide.mock.quit": "Quit",
     "guide.mock.note1":
       "The top line shows the current status. Gray lines are information only — clicking them does nothing.",
@@ -945,6 +954,19 @@
       "If you are not reachable (no port forwarding, Autopunch not set up, etc.), nothing is posted and a toast says: “Failed to post: check port forwarding or autopunch”.",
     "guide.basicLogin":
       "Discord login from the tray menu is required to use asobby (auto-posting, web lobby, stats, chat, and more).",
+    "guide.sectionWebLobby": "Using the web lobby",
+    "guide.webLobbyIntro":
+      "On the web lobby (asobby.com) you can browse posts, send preset messages to hosts, and use the lobby chat (Discord login required).",
+    "guide.webLobby.send.name": "The \"✉ Send ▾\" button (preset messages to hosts)",
+    "guide.webLobby.send.desc1":
+      "Click \"✉ Send ▾\" at the right end of a post row to open the options and deliver a message to the host's client as a toast notification. When the host accepts or declines, the result is shown on your lobby page.",
+    "guide.webLobby.send.desc2":
+      "The options depend on the post: \"Request Giuroll\" appears only when the host is not using Giuroll, and \"Invite to casual match\" appears only for ranked posts. If a post has no sendable options (e.g. a casual post already using Giuroll), the button is not shown at all.",
+    "guide.webLobby.send.desc3":
+      "You can message the same post once per minute (the button shows \"Wait\" after sending).",
+    "guide.webLobby.chat.name": "Lobby chat",
+    "guide.webLobby.chat.desc":
+      "The chat at the bottom is a single shared channel for everyone (any language welcome). Mention someone with @name and they will see a badge. Great for post-match talk or coordinating matches.",
     "guide.sectionRanked": "Ranked rules",
     "guide.rankedIntro":
       "On ranked posts, qualifying matches against a logged-in opponent in the same rank band are recorded as ranked.",
@@ -1107,7 +1129,7 @@
       "Toast the host-client win-loss score (e.g. 2-1) against the same opponent in a streak. Use “Win-loss count notification settings...” for every match or custom rules.",
     "guide.menu.hotkeys.name": "Hotkeys (Ctrl+Alt+T/L/R)",
     "guide.menu.hotkeys.desc":
-      "Toggle common actions from the keyboard even during a game (v1.0+). Ctrl+Alt+T = switch post type, Ctrl+Alt+L = pause/resume lobby auto-posting, Ctrl+Alt+R = toggle replay-save refusal. Each toggle shows a toast. Turn this item OFF if the keys conflict with another app.",
+      "Toggle common actions from the keyboard even during a game (v0.8.0+). Ctrl+Alt+T = switch post type, Ctrl+Alt+L = pause/resume lobby auto-posting, Ctrl+Alt+R = toggle replay-save refusal. Each toggle shows a toast. Turn this item OFF if the keys conflict with another app.",
     "guide.menu.lang.name": "Language / 言語",
     "guide.menu.lang.desc":
       "Switch the client UI and toast notification language (Japanese / English). Saved on this PC and kept after restart.",

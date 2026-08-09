@@ -8,7 +8,7 @@
 <link rel="icon" href="/static/favicon-64.png" type="image/png" sizes="64x64">
 <link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-<script src="/static/i18n.js?v=0.7.27"></script>
+<script src="/static/i18n.js?v=0.8.0"></script>
 <script src="/static/client-update.js"></script>
 <script src="/static/favicon-notify.js"></script>
 <script src="/static/favicon-badge.js"></script>
@@ -362,6 +362,25 @@
   button.msg-btn.wait {
     color: var(--muted);
   }
+  /* ドロップダウンであることを示す矢印 (送信済/待機中には出さない) */
+  button.msg-btn::after {
+    content: "▾";
+    margin-left: 4px;
+    font-size: 10px;
+    opacity: 0.8;
+  }
+  button.msg-btn.sent::after,
+  button.msg-btn.wait::after {
+    content: "";
+    margin-left: 0;
+  }
+  button.msg-btn.open {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  button.msg-btn.open::after {
+    content: "▴";
+  }
   .msg-cell {
     position: relative;
     white-space: nowrap;
@@ -485,30 +504,6 @@
     color: var(--muted);
   }
   .lobby-chat-header-spacer { flex: 1; }
-  .lobby-chat-tabs {
-    display: flex;
-    gap: 4px;
-    margin-right: 8px;
-  }
-  .lobby-chat-tab {
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--muted);
-    border-radius: 6px;
-    padding: 2px 10px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .lobby-chat-tab.active {
-    color: var(--text);
-    border-color: var(--accent);
-    background: rgba(88, 166, 255, 0.12);
-  }
-  .lobby-chat-tab .chat-tab-badge {
-    margin-left: 4px;
-    color: var(--accent);
-    font-weight: 700;
-  }
   #lobby-chat-hide-btn {
     position: relative;
     background: transparent;
@@ -810,10 +805,6 @@
   <div id="lobby-chat-panel" hidden>
     <div class="lobby-chat-header">
       <span data-i18n="lobby.chatTitle">ロビーチャット(感想戦などにもどうぞ)</span>
-      <div class="lobby-chat-tabs" role="tablist" aria-label="Lobby chat language">
-        <button type="button" class="lobby-chat-tab active" data-chat-lang="ja" data-i18n="lobby.chatTabJa">JP</button>
-        <button type="button" class="lobby-chat-tab" data-chat-lang="en" data-i18n="lobby.chatTabEn">EN</button>
-      </div>
       <span class="lobby-chat-header-spacer"></span>
       <button type="button" id="lobby-chat-hide-btn" data-i18n="lobby.chatHide">ロビーチャットを隠す</button>
     </div>
@@ -857,18 +848,14 @@ const messageCooldowns = new Map();
 const CHAT_MAX_TEXT = 500;
 const CHAT_MAX_LINES = 8;
 const CHAT_OPEN_STORAGE_KEY = "asobby-lobby-chat-open";
-const CHAT_LANG_STORAGE_KEY = "asobby-lobby-chat-lang";
 const LOCAL_API_BASE = "http://127.0.0.1:49152";
 const PING_REFRESH_MS = 15000;
 const PING_HEALTH_TIMEOUT_MS = 1200;
-let chatMessagesByLang = { ja: [], en: [] };
-let activeChatLang = "ja";
+let chatMessages = [];
 let chatOpen = true;
-let chatUnreadByLang = { ja: 0, en: 0 };
 let chatUnreadMentions = 0;
 let chatInitialized = false;
 let chatSending = false;
-let chatTabBtns = [];
 let clientPingAvailable = false;
 let localNetworkPermission = "unknown";
 let pingByPostId = new Map();
@@ -887,8 +874,6 @@ const lobbyChatInputEl = document.getElementById("lobby-chat-input");
 const lobbyChatSendEl = document.getElementById("lobby-chat-send");
 const lobbyChatErrorEl = document.getElementById("lobby-chat-error");
 const lobbyChatSuggestEl = document.getElementById("lobby-chat-suggest");
-const lobbyChatTabEls = () =>
-  Array.from(document.querySelectorAll(".lobby-chat-tab"));
 
 const REQ_TYPE_KEYS = {
   giuroll_request: "msg.typeGiurollRequest",
@@ -1066,11 +1051,32 @@ async function sendMessage(postId, type, statusEl, btn) {
   }
 }
 
+function messageOptionsForPost(p) {
+  return [
+    {
+      type: "giuroll_request",
+      label: t("msg.askGiuroll"),
+      show: !p.giuroll,
+    },
+    {
+      type: "casual_invite",
+      label: t("msg.inviteCasual"),
+      show: (p.post_type || "casual") === "ranked",
+    },
+  ].filter((opt) => opt.show);
+}
+
 function buildMessageCell(p) {
   const cell = document.createElement("td");
   cell.className = "msg-cell";
 
   if (p.net_status === NET_BATTLE) {
+    return cell;
+  }
+
+  // 送れる定型メッセージがない募集にはボタン自体を出さない
+  const options = messageOptionsForPost(p);
+  if (!options.length) {
     return cell;
   }
 
@@ -1094,6 +1100,9 @@ function buildMessageCell(p) {
   btn.textContent = onCooldown ? t("msg.waiting") : t("msg.send");
   btn.disabled = onCooldown;
   if (onCooldown) btn.classList.add("wait");
+  btn.setAttribute("aria-haspopup", "menu");
+  btn.setAttribute("aria-expanded", openPopoverId === p.id ? "true" : "false");
+  if (openPopoverId === p.id) btn.classList.add("open");
 
   const statusEl = document.createElement("span");
   statusEl.className = "msg-status";
@@ -1116,21 +1125,7 @@ function buildMessageCell(p) {
     const pop = document.createElement("div");
     pop.className = "msg-popover";
 
-    const options = [
-      {
-        type: "giuroll_request",
-        label: t("msg.askGiuroll"),
-        show: !p.giuroll,
-      },
-      {
-        type: "casual_invite",
-        label: t("msg.inviteCasual"),
-        show: (p.post_type || "casual") === "ranked",
-      },
-    ];
-
     for (const opt of options) {
-      if (!opt.show) continue;
       const ob = document.createElement("button");
       ob.type = "button";
       ob.textContent = opt.label;
@@ -1671,30 +1666,19 @@ function isChatMentioned(msg) {
   return msg.mentions.some((m) => m.user_id === myUserId);
 }
 
-function normalizeChatLang(lang) {
-  return lang === "en" ? "en" : "ja";
-}
-
-function activeChatMessages() {
-  return chatMessagesByLang[activeChatLang] || [];
-}
-
-function upsertChatMessage(msg, lang) {
+function upsertChatMessage(msg) {
   if (!msg || !msg.id) return;
-  const channel = normalizeChatLang(lang || msg.lang);
-  const list = chatMessagesByLang[channel];
-  const idx = list.findIndex((m) => m.id === msg.id);
+  const idx = chatMessages.findIndex((m) => m.id === msg.id);
   if (idx >= 0) {
-    list[idx] = msg;
+    chatMessages[idx] = msg;
   } else {
-    list.push(msg);
+    chatMessages.push(msg);
   }
-  list.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  chatMessages.sort((a, b) => (a.ts || 0) - (b.ts || 0));
 }
 
 function renderChatList() {
   lobbyChatMessagesEl.replaceChildren();
-  const chatMessages = activeChatMessages();
   if (!chatMessages.length) {
     const empty = document.createElement("div");
     empty.className = "chat-empty";
@@ -1751,28 +1735,11 @@ function setChatToggleBadge(btn, count) {
 }
 
 function updateChatMentionBadge() {
-  chatUnreadMentions =
-    (chatUnreadByLang.ja || 0) + (chatUnreadByLang.en || 0);
   setChatToggleBadge(lobbyChatHideBtnEl, chatUnreadMentions);
   setChatToggleBadge(lobbyChatShowBtnEl, chatUnreadMentions);
-  updateChatTabBadges();
-}
-
-function updateChatTabBadges() {
-  for (const btn of chatTabBtns) {
-    const lang = normalizeChatLang(btn.dataset.chatLang);
-    const count = chatUnreadByLang[lang] || 0;
-    btn.querySelector(".chat-tab-badge")?.remove();
-    if (count <= 0) continue;
-    const badge = document.createElement("span");
-    badge.className = "chat-tab-badge";
-    badge.textContent = count > 99 ? "99+" : String(count);
-    btn.appendChild(badge);
-  }
 }
 
 function clearChatMentionBadge() {
-  chatUnreadByLang = { ja: 0, en: 0 };
   chatUnreadMentions = 0;
   updateChatMentionBadge();
 }
@@ -1793,37 +1760,14 @@ function setChatPanelOpen(open, persist) {
 }
 
 function handleIncomingChatMessage(msg) {
-  const lang = normalizeChatLang(msg.lang);
-  upsertChatMessage(msg, lang);
-  if (chatOpen && lang === activeChatLang) {
-    renderChatList();
-    scrollChatToBottom();
-  }
-  if (
-    msg.user_id !== myUserId &&
-    isChatMentioned(msg) &&
-    (!chatOpen || lang !== activeChatLang)
-  ) {
-    chatUnreadByLang[lang] = (chatUnreadByLang[lang] || 0) + 1;
-    updateChatMentionBadge();
-  }
-}
-
-function setActiveChatLang(lang, persist) {
-  activeChatLang = normalizeChatLang(lang);
-  if (persist !== false) {
-    localStorage.setItem(CHAT_LANG_STORAGE_KEY, activeChatLang);
-  }
-  for (const btn of chatTabBtns) {
-    const isActive = normalizeChatLang(btn.dataset.chatLang) === activeChatLang;
-    btn.classList.toggle("active", isActive);
-    btn.setAttribute("aria-selected", isActive ? "true" : "false");
-  }
-  chatUnreadByLang[activeChatLang] = 0;
-  updateChatMentionBadge();
+  upsertChatMessage(msg);
   if (chatOpen) {
     renderChatList();
     scrollChatToBottom();
+  }
+  if (msg.user_id !== myUserId && isChatMentioned(msg) && !chatOpen) {
+    chatUnreadMentions += 1;
+    updateChatMentionBadge();
   }
 }
 
@@ -1845,7 +1789,7 @@ async function sendChatMessage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
-      body: JSON.stringify({ text, lang: activeChatLang }),
+      body: JSON.stringify({ text }),
     });
     if (res.ok) {
       lobbyChatInputEl.value = "";
@@ -1872,15 +1816,6 @@ async function sendChatMessage() {
 function initLobbyChat() {
   if (chatInitialized) return;
   chatInitialized = true;
-
-  chatTabBtns = lobbyChatTabEls();
-  const storedLang = localStorage.getItem(CHAT_LANG_STORAGE_KEY);
-  setActiveChatLang(storedLang || getLang(), false);
-  for (const btn of chatTabBtns) {
-    btn.addEventListener("click", () => {
-      setActiveChatLang(btn.dataset.chatLang);
-    });
-  }
 
   const stored = localStorage.getItem(CHAT_OPEN_STORAGE_KEY);
   setChatPanelOpen(stored !== "0", false);
@@ -2002,12 +1937,13 @@ function connectPostsSse() {
   es.addEventListener("chat_snapshot", (e) => {
     const snap = JSON.parse(e.data);
     if (Array.isArray(snap)) {
-      chatMessagesByLang = { ja: snap, en: [] };
+      chatMessages = snap;
     } else {
-      chatMessagesByLang = {
-        ja: Array.isArray(snap.ja) ? snap.ja : [],
-        en: Array.isArray(snap.en) ? snap.en : [],
-      };
+      // 旧サーバー互換: {ja: [...], en: [...]} 形式はマージする
+      chatMessages = Object.values(snap)
+        .filter(Array.isArray)
+        .flat()
+        .sort((a, b) => (a.ts || 0) - (b.ts || 0));
     }
     if (chatOpen) {
       renderChatList();

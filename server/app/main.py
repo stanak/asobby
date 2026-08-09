@@ -1401,10 +1401,10 @@ def format_sse(event: str, data: Any) -> str:
 # App / state
 # ----------------------------
 HUB = SSEHub()
-LOBBY_CHAT_LANGS = ("ja", "en")
-LOBBY_CHATS: dict[str, deque[dict[str, Any]]] = {
-    lang: deque(maxlen=LOBBY_CHAT_MAX_MESSAGES) for lang in LOBBY_CHAT_LANGS
-}
+# ロビーチャットは単一チャンネル (v0.8.0 で JP/EN を一本化)。
+# 永続化キーは互換のため "ja" チャンネルを使い続ける。
+LOBBY_CHAT_STORE_LANG = "ja"
+LOBBY_CHAT: deque[dict[str, Any]] = deque(maxlen=LOBBY_CHAT_MAX_MESSAGES)
 RECORDS: Dict[str, PostRecord] = {}
 LAST_CREATE_AT: Dict[str, float] = {}
 SERVER_STARTED_AT: float = 0.0
@@ -1462,6 +1462,7 @@ async def _hydrate_records_from_redis() -> None:
 
 
 async def _hydrate_chat_from_redis() -> None:
+    """旧 JP/EN 両チャンネルをマージして単一チャンネルへ移行復元する。"""
     if not post_redis.is_configured():
         return
     try:
@@ -1473,50 +1474,54 @@ async def _hydrate_chat_from_redis() -> None:
     except Exception as e:
         print(f"post_redis chat load error: {e}")
         return
-    total = 0
-    for lang in LOBBY_CHAT_LANGS:
-        LOBBY_CHATS[lang].clear()
-        for msg in by_lang.get(lang, []):
-            LOBBY_CHATS[lang].append(msg)
-            total += 1
-    if total:
-        print(f"post_redis: restored {total} chat message(s)")
+    merged: list[dict[str, Any]] = []
+    for msgs in by_lang.values():
+        merged.extend(msgs)
+    merged.sort(key=lambda m: float(m.get("ts", 0)))
+    LOBBY_CHAT.clear()
+    for msg in merged[-LOBBY_CHAT_MAX_MESSAGES:]:
+        LOBBY_CHAT.append(msg)
+    if LOBBY_CHAT:
+        print(f"post_redis: restored {len(LOBBY_CHAT)} chat message(s)")
+        # 旧 en チャンネルを空にし、以後は単一チャンネルで保存する
+        await _sync_chat_to_redis()
 
 
 async def _sync_chat_to_redis() -> None:
     if not post_redis.is_configured():
         return
     try:
-        for lang in LOBBY_CHAT_LANGS:
-            await asyncio.to_thread(
-                post_redis.replace_chat_messages,
-                lang,
-                list(LOBBY_CHATS[lang]),
-                max_messages=LOBBY_CHAT_MAX_MESSAGES,
-                max_age_sec=LOBBY_CHAT_MAX_AGE_SEC,
-            )
+        await asyncio.to_thread(
+            post_redis.replace_chat_messages,
+            LOBBY_CHAT_STORE_LANG,
+            list(LOBBY_CHAT),
+            max_messages=LOBBY_CHAT_MAX_MESSAGES,
+            max_age_sec=LOBBY_CHAT_MAX_AGE_SEC,
+        )
+        await asyncio.to_thread(
+            post_redis.replace_chat_messages,
+            "en",
+            [],
+            max_messages=LOBBY_CHAT_MAX_MESSAGES,
+            max_age_sec=LOBBY_CHAT_MAX_AGE_SEC,
+        )
     except Exception as e:
         print(f"post_redis chat save error: {e}")
-
-
-def _normalize_chat_lang(lang: str | None) -> str:
-    return post_redis.normalize_chat_lang(lang)
 
 
 def _trim_lobby_chat_by_age() -> bool:
     cutoff = time.time() - LOBBY_CHAT_MAX_AGE_SEC
     changed = False
-    for lang in LOBBY_CHAT_LANGS:
-        chat = LOBBY_CHATS[lang]
-        while chat and float(chat[0].get("ts", 0)) < cutoff:
-            chat.popleft()
-            changed = True
+    while LOBBY_CHAT and float(LOBBY_CHAT[0].get("ts", 0)) < cutoff:
+        LOBBY_CHAT.popleft()
+        changed = True
     return changed
 
 
-def lobby_chat_snapshot() -> dict[str, list[dict[str, Any]]]:
+def lobby_chat_snapshot() -> list[dict[str, Any]]:
+    """チャット全メッセージ (単一チャンネル)。旧ページはフラット配列も解釈できる。"""
     _trim_lobby_chat_by_age()
-    return {lang: list(LOBBY_CHATS[lang]) for lang in LOBBY_CHAT_LANGS}
+    return list(LOBBY_CHAT)
 
 
 def _normalize_chat_text(text: str) -> str:
@@ -4326,12 +4331,13 @@ async def post_lobby_chat(body: ChatMessageIn, request: Request) -> dict[str, An
                 headers={"Retry-After": str(retry_after)},
             )
 
-    lang = _normalize_chat_lang(body.lang)
     mentions: list[dict[str, str]] = []
     if db.is_configured():
         for user in await db.users_mentioned_in_text(text):
             mentions.append({"user_id": user.id, "name": user.name})
 
+    # チャンネルは単一化済み。lang フィールドは旧ページ互換のために残す
+    # (body.lang は無視して常に単一チャンネルへ)。
     msg = {
         "id": uuid4().hex,
         "user_id": uid,
@@ -4339,10 +4345,10 @@ async def post_lobby_chat(body: ChatMessageIn, request: Request) -> dict[str, An
         "avatar": sess.get("avatar") or "",
         "text": text,
         "mentions": mentions,
-        "lang": lang,
+        "lang": LOBBY_CHAT_STORE_LANG,
         "ts": now,
     }
-    LOBBY_CHATS[lang].append(msg)
+    LOBBY_CHAT.append(msg)
     if post_redis.is_configured():
         await asyncio.to_thread(
             post_redis.append_chat_message,
