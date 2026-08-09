@@ -46,3 +46,4 @@ matches.db
 
 # GeoIP (MaxMind GeoLite2, download at runtime)
 GeoLite2-Country.mmdb
+.test-venv/
