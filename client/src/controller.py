@@ -40,6 +40,8 @@ from local_api import start_local_api_server, set_ping_probe_guard, LOCAL_API_PO
 ActionType = Literal["create", "update", "close", "result", "guest_result"]
 
 HEARTBEAT_SEC = 5  # サーバー側 TTL (20s) の 1/4
+# 募集検知の安定待ち。誤検知防止のデバウンスだが、長いほど掲載が遅れる
+RECRUIT_STABLE_SEC = 1.0
 GUEST_PRESENCE_INTERVAL_SEC = 20.0  # ゲスト側の対戦中自己申告 (同定+セッション状態受信)
 RANKED_SESSION_MAX_GAMES = 5  # 同一相手との連続ランクマ上限 (サーバー側と揃える)
 RELEASES_URL = "https://github.com/stanak/asobby/releases/latest"
@@ -220,6 +222,7 @@ class Controller:
             self.log_sink("warn", f"Local lobby API unavailable: {e}")
         self._notified_update_tag: str = ""
         self._notified_announcement_id: str = ""
+        self._notified_reachability_lost: bool = False
 
         # Discord ログイン（任意）。設定に保存済みのセッションを復元する。
         auth = self.config_mgr.get_section("auth")
@@ -698,6 +701,7 @@ class Controller:
         self._last_ko_fingerprint = ""
         self._pending_local_match = None
         self._notified_casual_fallback = False
+        self._notified_reachability_lost = False
         self.pending_requests.clear()
         self.my_post = replace(
             self.my_post,
@@ -1261,6 +1265,7 @@ class Controller:
                         self.my_post.id, self.owner_token, act.payload
                     )
                     self._sync_post_reachability_from_server(resp)
+                    self._handle_reachability_lost(resp)
                     # Giuroll / AP 到達性が後から変わったときだけ再コピー (内容一致ならスキップ)
                     self._try_copy_host_info_from_server(resp)
                     for msg in resp.get("messages") or []:
@@ -1708,7 +1713,9 @@ class Controller:
         # 1) recruiting -> create / update
         # -----------------
         # 一時停止中もカウンタは更新する (再開時にホスト継続中なら即投稿される)
-        recruiting_stable = self._stable_for("recruiting", 3.0, seen=is_recruiting)
+        recruiting_stable = self._stable_for(
+            "recruiting", RECRUIT_STABLE_SEC, seen=is_recruiting
+        )
         if recruiting_stable and not paused:
             payload = self._build_payload(
                 addr=self._current_addr(my_ip, st.port),
@@ -2222,6 +2229,20 @@ class Controller:
             self.update_my_post(autopunch=bool(data["autopunch"]))
         if "direct_reachable" in data:
             self.update_my_post(direct_reachable=bool(data["direct_reachable"]))
+
+    def _handle_reachability_lost(self, data: dict) -> None:
+        """募集中にサーバーの到達確認が連続失敗したらホストへ警告する。"""
+        lost = bool(data.get("reachability_lost"))
+        if lost and not self._notified_reachability_lost:
+            self._notified_reachability_lost = True
+            msg = t("notify.reachability_lost")
+            self.notify_sink(msg, important=True)
+            self.log_sink("warn", msg)
+        elif not lost and self._notified_reachability_lost:
+            self._notified_reachability_lost = False
+            msg = t("notify.reachability_recovered")
+            self.notify_sink(msg)
+            self.log_sink("info", msg)
 
     def _on_create_result(self, result: dict, *, giuroll: bool) -> None:
         self._create_pending = False

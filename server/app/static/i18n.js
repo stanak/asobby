@@ -81,6 +81,9 @@
     "common.badgeAp": "AP",
     "common.badgeUncertainTitle":
       "NATタイプの問題で凸れない可能性があります",
+    "common.badgeUnreachable": "⚠ 凸れない?",
+    "common.unreachableTitle":
+      "募集中の到達確認に連続で失敗しています。現在このホストには凸れない可能性があります（ポート開放や AutoPunch が切れた等）",
     "common.sortAsc": " ▲",
     "common.sortDesc": " ▼",
 
@@ -379,6 +382,9 @@
       "選択肢は募集の状態に応じて変わります: 「Giuroll をお願いする」はホストが Giuroll 未使用のときだけ、「カジュアル対戦に誘う」はランクマ募集のときだけ表示されます。送れる選択肢がない募集（Giuroll 使用中のカジュアル募集など）にはボタン自体が表示されません。",
     "guide.webLobby.send.desc3":
       "同じ募集には 1 分に 1 回まで送信できます（送信後はボタンが「待機中」になります）。",
+    "guide.webLobby.unreachable.name": "「⚠ 凸れない?」バッジ",
+    "guide.webLobby.unreachable.desc":
+      "募集中もサーバーがホストへの到達確認を続けており、連続で失敗すると行が薄くなり「⚠ 凸れない?」バッジが付きます（ポート開放や AutoPunch が切れた等）。到達が回復すると自動で元に戻ります。",
     "guide.webLobby.chat.name": "ロビーチャット",
     "guide.webLobby.chat.desc":
       "画面下部のチャットは全員共通の 1 チャンネルです（言語問わずどうぞ）。@名前 で相手をメンションでき、メンションされた相手にはバッジで知らされます。感想戦や募集の相談にも使えます。",
@@ -667,6 +673,9 @@
     "common.badgeAp": "AP",
     "common.badgeUncertainTitle":
       "Connection may fail due to NAT type",
+    "common.badgeUnreachable": "⚠ Unreachable?",
+    "common.unreachableTitle":
+      "Repeated reachability checks are failing. This host may not be joinable right now (port forwarding or AutoPunch may have stopped)",
     "common.sortAsc": " ▲",
     "common.sortDesc": " ▼",
 
@@ -964,6 +973,9 @@
       "The options depend on the post: \"Request Giuroll\" appears only when the host is not using Giuroll, and \"Invite to casual match\" appears only for ranked posts. If a post has no sendable options (e.g. a casual post already using Giuroll), the button is not shown at all.",
     "guide.webLobby.send.desc3":
       "You can message the same post once per minute (the button shows \"Wait\" after sending).",
+    "guide.webLobby.unreachable.name": "\u201c⚠ Unreachable?\u201d badge",
+    "guide.webLobby.unreachable.desc":
+      "The server keeps checking host reachability while a post is up. If checks fail repeatedly, the row is dimmed and a \u201c⚠ Unreachable?\u201d badge appears (e.g. port forwarding or AutoPunch stopped). It clears automatically once the host is reachable again.",
     "guide.webLobby.chat.name": "Lobby chat",
     "guide.webLobby.chat.desc":
       "The chat at the bottom is a single shared channel for everyone (any language welcome). Mention someone with @name and they will see a badge. Great for post-match talk or coordinating matches.",

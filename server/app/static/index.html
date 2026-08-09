@@ -8,7 +8,7 @@
 <link rel="icon" href="/static/favicon-64.png" type="image/png" sizes="64x64">
 <link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-<script src="/static/i18n.js?v=0.8.0"></script>
+<script src="/static/i18n.js?v=0.8.1"></script>
 <script src="/static/client-update.js"></script>
 <script src="/static/favicon-notify.js"></script>
 <script src="/static/favicon-badge.js"></script>
@@ -151,6 +151,13 @@
     color: var(--muted);
   }
   tr.battle td { color: var(--battle); }
+  /* 募集中の再検証に連続失敗したホスト (現在凸れない可能性) */
+  tr.unreachable td { opacity: 0.55; }
+  .badge.warn {
+    color: #e5c07b;
+    border-color: #e5c07b;
+    opacity: 1;
+  }
   a.stream { color: var(--accent); text-decoration: none; }
   a.stream:hover { text-decoration: underline; }
   button.copy {
@@ -1365,6 +1372,7 @@ async function reportHighPing(postId, rttMs) {
 function buildRow(p) {
   const tr = document.createElement("tr");
   if (p.net_status === NET_BATTLE) tr.classList.add("battle");
+  if (p.reachability_lost) tr.classList.add("unreachable");
 
   tr.appendChild(td(p.match_status || ""));
 
@@ -1409,6 +1417,13 @@ function buildRow(p) {
   if (p.giuroll) requireCell.appendChild(badge(t("common.badgeGiu")));
   if (p.autopunch && !p.direct_reachable) {
     requireCell.appendChild(badge(t("common.badgeAp")));
+  }
+  if (p.reachability_lost) {
+    const warn = badge(t("common.badgeUnreachable"), {
+      title: t("common.unreachableTitle"),
+    });
+    warn.classList.add("warn");
+    requireCell.appendChild(warn);
   }
   tr.appendChild(requireCell);
 

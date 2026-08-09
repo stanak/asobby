@@ -61,7 +61,8 @@ async def app_client() -> AsyncIterator[AsyncClient]:
 
 
 @pytest.mark.asyncio
-async def test_verify_always_runs_ap_but_direct_strict_wins(monkeypatch):
+async def test_verify_direct_strict_wins_without_waiting_for_ap(monkeypatch):
+    """direct strict が通れば AP チェックの完了を待たずに確定する。"""
     calls: list[str] = []
 
     def fake_direct(host: str, port: int, **kwargs):
@@ -81,7 +82,8 @@ async def test_verify_always_runs_ap_but_direct_strict_wins(monkeypatch):
     )
     assert direct is True
     assert autopunch is False
-    assert calls == ["direct", "direct", "autopunch"]
+    # direct は lenient + strict の 2 回。AP は並行実行 (キャンセルされ得る)
+    assert calls.count("direct") == 2
 
 
 @pytest.mark.asyncio
@@ -680,3 +682,135 @@ def test_compute_reachability_uncertain_ap_only():
         autopunch=True,
         ap_verified=False,
     )
+
+
+def _update_payload(post_id: str, owner_token: str, addr: str) -> dict:
+    return {
+        "id": post_id,
+        "owner_token": owner_token,
+        "post_type": "casual",
+        "addr": addr,
+        "giuroll": False,
+        "autopunch": False,
+        "comment": "",
+        "stream_url": "",
+        "match_status": "",
+        "net_status": 3,
+        "ping_warn_enabled": False,
+        "ping_warn_ms": 150,
+        "ping_warn_giuroll_ms": 100,
+    }
+
+
+@pytest.mark.asyncio
+async def test_reachability_lost_after_consecutive_failures_and_recovers(monkeypatch):
+    """募集中の再検証に連続失敗すると reachability_lost が立ち、成功で解除される。"""
+    async def ok_verify(*a, **k):
+        return True, False, False
+
+    async def fail_verify(*a, **k):
+        raise main.HTTPException(
+            status_code=409, detail={"message": "host not reachable"}
+        )
+
+    monkeypatch.setattr(main, "verify_hostable_or_raise", ok_verify)
+
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        token = bearer_token("host1", "host")
+        create = await client.post(
+            "/posts",
+            json={"post_type": "casual", "addr": "203.0.113.1:10800", "giuroll": False},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create.status_code == 200
+        body = create.json()
+        post_id = body["post"]["id"]
+        owner_token = body["owner_token"]
+        rec = main.RECORDS[post_id]
+
+        monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+        # 起動直後グレースを無効化し、毎回再検証させる
+        main.SERVER_STARTED_AT = 1.0
+
+        monkeypatch.setattr(main, "verify_hostable_or_raise", fail_verify)
+        payload = _update_payload(post_id, owner_token, "203.0.113.1:10800")
+
+        # 1 回目の失敗ではまだマークされない
+        rec.last_hostcheck_at = 0.0
+        res = await client.post("/posts/update", json=payload)
+        assert res.status_code == 200
+        assert res.json()["reachability_lost"] is False
+        assert rec.hostcheck_fail_streak == 1
+
+        # 2 回目の連続失敗でマーク
+        rec.last_hostcheck_at = 0.0
+        res = await client.post("/posts/update", json=payload)
+        assert res.status_code == 200
+        assert res.json()["reachability_lost"] is True
+        assert rec.post.reachability_lost is True
+
+        # 一覧 (SSE スナップショット相当) にもフラグが載る
+        listed = await client.get(
+            "/posts", headers={"Authorization": f"Bearer {token}"}
+        )
+        target = next(p for p in listed.json() if p["id"] == post_id)
+        assert target["reachability_lost"] is True
+
+        # 再検証成功で解除される
+        monkeypatch.setattr(main, "verify_hostable_or_raise", ok_verify)
+        rec.last_hostcheck_at = 0.0
+        res = await client.post("/posts/update", json=payload)
+        assert res.status_code == 200
+        assert res.json()["reachability_lost"] is False
+        assert rec.post.reachability_lost is False
+        assert rec.hostcheck_fail_streak == 0
+
+
+@pytest.mark.asyncio
+async def test_reachability_failure_streak_resets_on_success(monkeypatch):
+    """失敗 → 成功 → 失敗では連続 2 回にならずマークされない。"""
+
+    async def fail_verify(*a, **k):
+        raise main.HTTPException(
+            status_code=409, detail={"message": "host not reachable"}
+        )
+
+    async def ok_verify(*a, **k):
+        return True, False, False
+
+    monkeypatch.setattr(main, "verify_hostable_or_raise", ok_verify)
+
+    async with app_client() as client:
+        await create_user("host1", name="host")
+        token = bearer_token("host1", "host")
+        create = await client.post(
+            "/posts",
+            json={"post_type": "casual", "addr": "203.0.113.1:10800", "giuroll": False},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create.status_code == 200
+        body = create.json()
+        post_id = body["post"]["id"]
+        owner_token = body["owner_token"]
+        rec = main.RECORDS[post_id]
+
+        monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
+        main.SERVER_STARTED_AT = 1.0
+
+        payload = _update_payload(post_id, owner_token, "203.0.113.1:10800")
+
+        monkeypatch.setattr(main, "verify_hostable_or_raise", fail_verify)
+        rec.last_hostcheck_at = 0.0
+        await client.post("/posts/update", json=payload)
+
+        monkeypatch.setattr(main, "verify_hostable_or_raise", ok_verify)
+        rec.last_hostcheck_at = 0.0
+        await client.post("/posts/update", json=payload)
+        assert rec.hostcheck_fail_streak == 0
+
+        monkeypatch.setattr(main, "verify_hostable_or_raise", fail_verify)
+        rec.last_hostcheck_at = 0.0
+        res = await client.post("/posts/update", json=payload)
+        assert res.json()["reachability_lost"] is False
+        assert rec.hostcheck_fail_streak == 1

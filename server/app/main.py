@@ -821,6 +821,11 @@ HOSTCHECK_UPDATE_INTERVAL_SEC = float(
 )
 # デプロイ直後は UDP プローブが不安定になりやすい。hydrate 済み募集の
 # 到達性フラグをすぐ上書きしないよう、再起動後しばらく再検証を抑止する。
+# 募集中の再検証にこの回数連続で失敗したら reachability_lost を立てる
+# (再検証は約 HOSTCHECK_UPDATE_INTERVAL_SEC ごと → 既定で約 40 秒後に検知)
+HOSTCHECK_LOST_AFTER_FAILS = int(
+    os.environ.get("ASOBBY_HOSTCHECK_LOST_AFTER_FAILS", "2")
+)
 HOSTCHECK_STARTUP_GRACE_SEC = float(
     os.environ.get("ASOBBY_HOSTCHECK_STARTUP_GRACE_SEC", "45")
 )
@@ -895,6 +900,7 @@ class Post:
     autopunch: bool = False
     direct_reachable: bool = False  # 直接 UDP プローブで到達確認できたか (AP 表示用)
     reachability_uncertain: bool = False  # AP 必須だが接続可否が保証できない (❓ 表示用)
+    reachability_lost: bool = False  # 募集中の再検証に連続失敗 (⚠ 現在凸れない可能性)
     match_status: str = ""
     net_status: int = 0
     owner_name: str = ""  # Discord ログイン時の表示名（未ログインなら空）
@@ -931,6 +937,7 @@ class PostRecord:
     # giuroll_request / casual_invite の送信ログ (返信 API 用。配送キューとは別)
     sent_log: dict[str, dict] = field(default_factory=dict)
     last_hostcheck_at: float = 0.0
+    hostcheck_fail_streak: int = 0  # 募集中再検証の連続失敗回数 (到達性喪失検知用)
 
 
 POST_REDIS_TTL_SEC = POST_TTL_SEC + 30
@@ -967,6 +974,7 @@ def post_record_to_dict(rec: PostRecord) -> dict[str, Any]:
         "pending_ping_warnings": list(rec.pending_ping_warnings),
         "sent_log": dict(rec.sent_log),
         "last_hostcheck_at": rec.last_hostcheck_at,
+        "hostcheck_fail_streak": rec.hostcheck_fail_streak,
     }
 
 
@@ -989,6 +997,7 @@ def post_record_from_dict(data: dict[str, Any]) -> PostRecord:
         pending_ping_warnings=list(data.get("pending_ping_warnings") or []),
         sent_log=dict(data.get("sent_log") or {}),
         last_hostcheck_at=float(data.get("last_hostcheck_at", 0) or 0),
+        hostcheck_fail_streak=int(data.get("hostcheck_fail_streak", 0) or 0),
     )
     if not rec.post.guest_user_id and rec.guest_user_id:
         rec.post.guest_user_id = rec.guest_user_id
@@ -3490,10 +3499,19 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
         except HTTPException as exc:
             # heartbeat 再検証の一時的な失敗 (giuroll 等) で募集を落とさない
             if exc.status_code == 409 and not addr_changed:
-                pass  # direct_reachable / autopunch は前回値を維持
+                # ただし連続で失敗が続く場合は「到達性喪失」としてマークする
+                # (募集中にポート開放が切れた・AutoPunch が落ちた等の検知)
+                rec.hostcheck_fail_streak += 1
+                if (
+                    rec.hostcheck_fail_streak >= HOSTCHECK_LOST_AFTER_FAILS
+                    and not p.reachability_lost
+                ):
+                    p.reachability_lost = True
             else:
                 raise
         else:
+            rec.hostcheck_fail_streak = 0
+            p.reachability_lost = False
             if (
                 was_ap_only
                 and not addr_changed
@@ -4989,14 +5007,27 @@ async def verify_hostable_or_raise(
             timeout_sec=float(kwargs["timeout_sec"]),
         )
 
-    direct_lenient = await run_direct(probe_kwargs)
-    direct_strict = (
-        await run_direct(strict_kwargs) if direct_lenient else False
+    # AP チェック (最悪 ~10 秒) は direct チェックと並行して走らせ、
+    # direct が確定したら結果を待たずに破棄する。直結ホストの掲載が
+    # AP タイムアウト待ちでブロックされるのを防ぐ。
+    ap_task = asyncio.create_task(
+        asyncio.to_thread(check_hostable_autopunch, host, port)
     )
-    ap_ok, ap_verified = await asyncio.to_thread(check_hostable_autopunch, host, port)
+
+    try:
+        direct_lenient = await run_direct(probe_kwargs)
+        direct_strict = (
+            await run_direct(strict_kwargs) if direct_lenient else False
+        )
+    except BaseException:
+        ap_task.cancel()
+        raise
 
     if direct_strict:
+        ap_task.cancel()
         return True, False, False
+
+    ap_ok, ap_verified = await ap_task
 
     if ap_ok:
         uncertain = compute_reachability_uncertain(
