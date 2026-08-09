@@ -83,10 +83,12 @@ def clean_state(tmp_path):
     os.environ["DATABASE_URL"] = url
     main.DATABASE_URL = url
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     main.LAST_CREATE_AT.clear()
     main.LOGOUT_REVOKED.clear()
     yield
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
 
 
 @pytest.mark.asyncio

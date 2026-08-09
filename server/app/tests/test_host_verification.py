@@ -43,10 +43,12 @@ def clean_state(tmp_path):
     os.environ["DATABASE_URL"] = url
     main.DATABASE_URL = url
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     main.LAST_CREATE_AT.clear()
     main.SERVER_STARTED_AT = 0.0
     yield
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     main.SERVER_STARTED_AT = 0.0
 
 
@@ -360,6 +362,7 @@ def test_probe_target_records_skips_connection_in_progress():
         guest_user_id="guest1",
     )
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     main.RECORDS["quiet"] = quiet
     main.RECORDS["busy"] = busy
     main.RECORDS["busy_id"] = busy_identified
@@ -368,6 +371,7 @@ def test_probe_target_records_skips_connection_in_progress():
         assert [rec.post.id for rec in targets] == ["busy", "quiet"]
     finally:
         main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
 
 
 def test_guest_probe_paused_without_guest_ip():

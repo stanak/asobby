@@ -27,8 +27,10 @@ from test_ranked import bearer_token, create_user, make_0x08_reply
 def reset_lobby_state() -> None:
     main.LAST_CREATE_AT.clear()
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     yield
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
 
 
 @asynccontextmanager

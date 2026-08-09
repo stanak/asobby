@@ -40,6 +40,7 @@ from local_api import start_local_api_server, set_ping_probe_guard, LOCAL_API_PO
 ActionType = Literal["create", "update", "close", "result", "guest_result"]
 
 HEARTBEAT_SEC = 5  # サーバー側 TTL (20s) の 1/4
+GUEST_PRESENCE_INTERVAL_SEC = 20.0  # ゲスト側の対戦中自己申告 (同定+セッション状態受信)
 CREATE_RETRY_COOLDOWN_SEC = 10
 MYIP_REFRESH_INTERVAL_SEC = 60.0
 UPDATE_CHECK_INTERVAL_SEC = 6 * 3600
@@ -231,6 +232,9 @@ class Controller:
 
         self._battle_start_ts = 0.0
         self._battle_presence_announced = False
+        self._next_guest_presence_ts = 0.0
+        self._notified_ranked_established = False
+        self._notified_ranked_limit = False
         self._replay_pending = False
         self._uploaded_replay_keys: set[tuple[str, int]] = set()
         self._replay_result_reported = False
@@ -1004,6 +1008,8 @@ class Controller:
         autopunch: bool,
         match_status: str,
         net_status: int,
+        host_profile: str = "",
+        guest_profile: str = "",
     ) -> dict:
         return {
             "post_type": self.my_post.post_type or "casual",
@@ -1017,6 +1023,9 @@ class Controller:
             "autopunch": autopunch,
             "match_status": match_status,
             "net_status": net_status,
+            # 対戦中のプロファイルペア (サーバー側のゲスト同定・セッション成立用)
+            "host_profile": host_profile,
+            "guest_profile": guest_profile,
         }
 
     def _prune_pending_requests(self) -> None:
@@ -1247,6 +1256,8 @@ class Controller:
                         self._post_rank_band = post_rank
                     if not guest_connected:
                         self._notified_casual_fallback = False
+                        self._notified_ranked_established = False
+                        self._notified_ranked_limit = False
                         self._ranked_active = False
                         self._session_ranked_games = 0
                     else:
@@ -1254,6 +1265,10 @@ class Controller:
                         if self._ranked_active and not new_ranked_active:
                             self._session_ranked_games = 0
                         self._ranked_active = new_ranked_active
+                        if new_ranked_active:
+                            self._handle_ranked_session_info(
+                                resp.get("ranked_session")
+                            )
                     if (
                         self.my_post.post_type == "ranked"
                         and guest_connected
@@ -1418,6 +1433,9 @@ class Controller:
 
         if self._stable_for("session_score_idle", 5.0, seen=not in_net_flow):
             self._reset_session_score()
+            # ネット対戦フローを抜けたのでランクマセッション通知を次回また出せるようにする
+            self._notified_ranked_established = False
+            self._notified_ranked_limit = False
 
         if in_net_flow and st.net_side != "client":
             self._last_keepalive_ts = now
@@ -1573,9 +1591,32 @@ class Controller:
                 self._last_ko_played_at = 0.0
                 if self.is_logged_in() and not self._battle_presence_announced:
                     self._battle_presence_announced = True
+                    self._next_guest_presence_ts = now + GUEST_PRESENCE_INTERVAL_SEC
                     asyncio.get_running_loop().create_task(
-                        self._announce_net_battle_presence()
+                        self._announce_net_battle_presence(
+                            host_profile=(st.lprof or "").strip(),
+                            guest_profile=(st.rprof or "").strip(),
+                            my_side=st.net_side or "",
+                        )
                     )
+
+        # ゲスト側は対戦中も定期的に自己申告する (プロファイルペアでの同定と
+        # ランクマセッション状態の受信。IP 推論に依存しない同定経路)
+        if (
+            is_net_battle
+            and st.net_side == "client"
+            and self.is_logged_in()
+            and self._battle_presence_announced
+            and now >= self._next_guest_presence_ts
+        ):
+            self._next_guest_presence_ts = now + GUEST_PRESENCE_INTERVAL_SEC
+            asyncio.get_running_loop().create_task(
+                self._announce_net_battle_presence(
+                    host_profile=(st.lprof or "").strip(),
+                    guest_profile=(st.rprof or "").strip(),
+                    my_side="client",
+                )
+            )
 
         if (
             is_net_battle
@@ -1601,6 +1642,7 @@ class Controller:
             exe_path = st.exe_path
             self._battle_start_ts = 0.0
             self._battle_presence_announced = False
+            self._next_guest_presence_ts = 0.0
             asyncio.create_task(
                 self._schedule_replay_upload(battle_start_ts, battle_end_ts, exe_path)
             )
@@ -1702,6 +1744,8 @@ class Controller:
                 autopunch=self._host_uses_autopunch(st),
                 match_status=match_status,
                 net_status=self._host_net_status(st, is_battle=True),
+                host_profile=(st.lprof or "").strip(),
+                guest_profile=(st.rprof or "").strip(),
             )
 
             if payload != self._last_sent_payload:
@@ -1715,12 +1759,15 @@ class Controller:
         if not paused and self.has_active_post() and (now - self._last_heartbeat_ts) >= HEARTBEAT_SEC:
             self._last_heartbeat_ts = now
             net_status = self._host_net_status(st, is_battle=is_battle)
+            in_connection = net_status in (NET_CHECKING, NET_BATTLE)
             payload = self._build_payload(
                 addr=self.my_post.addr or "",
                 giuroll=st.giuroll,
                 autopunch=self._host_uses_autopunch(st),
                 match_status=match_status,
                 net_status=net_status,
+                host_profile=(st.lprof or "").strip() if in_connection else "",
+                guest_profile=(st.rprof or "").strip() if in_connection else "",
             )
             return Action("update", payload)
 
@@ -2087,11 +2134,39 @@ class Controller:
     # -----------------
     # result / error handling
     # -----------------
-    async def _announce_net_battle_presence(self) -> None:
+    async def _announce_net_battle_presence(
+        self,
+        host_profile: str = "",
+        guest_profile: str = "",
+        my_side: str = "",
+    ) -> None:
         try:
-            await self.api.announce_net_battle()
+            resp = await self.api.announce_net_battle(
+                host_profile=host_profile,
+                guest_profile=guest_profile,
+                my_side=my_side,
+            )
         except Exception as e:
             self.log_sink("debug", f"Net battle presence failed: {e}")
+            return
+        if isinstance(resp, dict):
+            self._handle_ranked_session_info(resp.get("ranked_session"))
+
+    def _handle_ranked_session_info(self, session: object) -> None:
+        """サーバーから返るランクマセッション状態を通知に反映する (ホスト/ゲスト共通)。"""
+        if not isinstance(session, dict):
+            return
+        rank_label = format_system_rank(str(session.get("match_rank") or ""))
+        if not self._notified_ranked_established:
+            self._notified_ranked_established = True
+            msg = t("notify.ranked_established", rank=rank_label)
+            self.notify_sink(msg)
+            self.log_sink("info", msg)
+        if bool(session.get("limit_reached")) and not self._notified_ranked_limit:
+            self._notified_ranked_limit = True
+            msg = t("notify.ranked_session_limit", max=int(session.get("max_games") or 3))
+            self.notify_sink(msg)
+            self.log_sink("info", msg)
 
     def _sync_post_reachability_from_server(self, data: dict) -> None:
         """サーバーが判定した AP 状態をローカルに反映する (404 再作成後も維持)。"""

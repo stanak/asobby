@@ -87,10 +87,12 @@ def clean_state(tmp_path):
     os.environ["DATABASE_URL"] = url
     main.DATABASE_URL = url
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     main.LAST_CREATE_AT.clear()
     main.LOGOUT_REVOKED.clear()
     yield
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
 
 
 @pytest.mark.asyncio
@@ -247,6 +249,7 @@ async def test_list_posts_returns_all_rank_bands():
 
 def test_compute_favicon_badges_excludes_own_post():
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     add_post(owner_user_id="u1", owner_name="me", post_type="casual")
     add_post(owner_user_id="u2", owner_name="other", post_type="casual")
     prefs = db.normalize_favicon_notify({})

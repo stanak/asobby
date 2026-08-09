@@ -108,6 +108,143 @@ def refresh_ranked_active(rec: PostRecord) -> None:
     )
 
 
+# ----------------------------
+# Ranked session (一級オブジェクト)
+# ----------------------------
+# 「同定 + 帯一致」が成立した時点でペア単位のセッションを作り、結果報告は
+# セッションのゲーム数で 3 戦上限を判定する。games は作成時に DB の連戦数
+# から seed するため、サーバー再起動・募集の作り直しでも数え直しに強い。
+@dataclass
+class RankedSession:
+    id: str
+    host_user_id: str
+    guest_user_id: str
+    match_rank: str
+    started_at: float
+    last_game_at: float = 0.0
+    games: int = 0
+
+    def anchor_at(self) -> float:
+        return max(self.started_at, self.last_game_at)
+
+    def limit_reached(self) -> bool:
+        return self.games >= RANKED_SESSION_MAX_GAMES
+
+    def info(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "games": self.games,
+            "max_games": RANKED_SESSION_MAX_GAMES,
+            "match_rank": self.match_rank,
+            "limit_reached": self.limit_reached(),
+        }
+
+
+RANKED_SESSIONS: dict[str, RankedSession] = {}
+
+
+def _ranked_session_key(user_a: str, user_b: str, match_rank: str) -> str:
+    return ":".join(sorted((user_a, user_b))) + f":{match_rank}"
+
+
+async def get_or_create_ranked_session(
+    host_user_id: str,
+    guest_user_id: str,
+    match_rank: str,
+) -> RankedSession:
+    """進行中セッションを返す。gap 超過なら新セッション (games は DB から seed)。"""
+    key = _ranked_session_key(host_user_id, guest_user_id, match_rank)
+    now = time.time()
+    ses = RANKED_SESSIONS.get(key)
+    if ses is not None and now - ses.anchor_at() <= RANKED_SESSION_GAP_MINUTES * 60:
+        return ses
+
+    # 期限切れセッションの掃除 (メモリ肥大防止)
+    if len(RANKED_SESSIONS) > 100:
+        gap_sec = RANKED_SESSION_GAP_MINUTES * 60
+        for k in [
+            k for k, s in RANKED_SESSIONS.items() if now - s.anchor_at() > gap_sec
+        ]:
+            RANKED_SESSIONS.pop(k, None)
+
+    games = 0
+    last_game_at = 0.0
+    if db.is_configured():
+        games = await db.count_ranked_pair_streak_before(
+            host_user_id,
+            guest_user_id,
+            before=datetime.now(timezone.utc),
+            match_rank=match_rank,
+            gap_minutes=RANKED_SESSION_GAP_MINUTES,
+        )
+        if games:
+            # seed 直後の gap 判定は「今」を起点にする
+            last_game_at = now
+    ses = RankedSession(
+        id=uuid4().hex,
+        host_user_id=host_user_id,
+        guest_user_id=guest_user_id,
+        match_rank=match_rank,
+        started_at=now,
+        last_game_at=last_game_at,
+        games=games,
+    )
+    RANKED_SESSIONS[key] = ses
+    return ses
+
+
+def _bump_ranked_session(ses: RankedSession) -> None:
+    ses.games += 1
+    ses.last_game_at = time.time()
+
+
+async def _record_ranked_game(
+    host_user_id: str, guest_user_id: str, match_rank: str
+) -> RankedSession:
+    """ランクマ 1 戦の DB insert 後にセッションのゲーム数へ反映する。
+
+    既存の生きたセッションがあれば +1。なければ新規作成する。新規作成の
+    seed (DB 連戦数) は insert 済みの今回の行を既に含むため bump しない。
+    """
+    key = _ranked_session_key(host_user_id, guest_user_id, match_rank)
+    now = time.time()
+    ses = RANKED_SESSIONS.get(key)
+    if ses is not None and now - ses.anchor_at() <= RANKED_SESSION_GAP_MINUTES * 60:
+        _bump_ranked_session(ses)
+        return ses
+    return await get_or_create_ranked_session(host_user_id, guest_user_id, match_rank)
+
+
+async def ranked_session_for_record(rec: PostRecord) -> Optional[RankedSession]:
+    """rec のランクマペアが成立していればセッションを返す (なければ作る)。"""
+    refresh_ranked_active(rec)
+    if not rec.post.ranked_active or not rec.owner_user_id or not rec.guest_user_id:
+        return None
+    return await get_or_create_ranked_session(
+        rec.owner_user_id, rec.guest_user_id, rec.post.rank
+    )
+
+
+_MATCH_STATUS_VS_RE = re.compile(
+    r"^(?P<lp>.*?)\((?P<lc>[^()]*)\)\s+vs\s+(?P<rp>.*?)\((?P<rc>[^()]*)\)$"
+)
+
+
+def _profiles_from_match_status(match_status: str) -> tuple[str, str]:
+    """"A(霊夢) vs B(魔理沙)" 形式からプロファイルペアを取り出す (旧クライアント互換)。"""
+    m = _MATCH_STATUS_VS_RE.match((match_status or "").strip())
+    if m is None:
+        return "", ""
+    return m.group("lp").strip(), m.group("rp").strip()
+
+
+def _record_profiles(rec: PostRecord) -> tuple[str, str]:
+    """rec の対戦プロファイルペア (host, guest)。明示フィールド優先、なければ match_status。"""
+    if rec.host_profile and rec.guest_profile:
+        return rec.host_profile, rec.guest_profile
+    return _profiles_from_match_status(rec.post.match_status)
+
+
 def _find_host_ranked_post(host_user_id: str) -> Optional[PostRecord]:
     """ホストの進行中ランクマ募集を返す (複数あれば更新が最も新しいもの)。"""
     best: Optional[PostRecord] = None
@@ -330,6 +467,7 @@ def _apply_guest_identity(rec: PostRecord, user: db.User) -> bool:
 def _clear_guest_identity(rec: PostRecord) -> None:
     rec.guest_user_id = ""
     rec.guest_rank = ""
+    rec.guest_identity_confirmed = False
     rec.post.guest_user_id = ""
     rec.post.guest_name = ""
     rec.post.guest_avatar = ""
@@ -368,6 +506,15 @@ async def _retry_guest_identity_from_ip(rec: PostRecord) -> bool:
 
     IP 照合に失敗しても、presence 等で確定済みの guest_user_id は消さない。
     """
+    if rec.guest_identity_confirmed and rec.guest_user_id:
+        # 認証付き presence で確定した同定は IP 照合で上書きしない (ランクのみ更新)
+        guest = await db.get_user(rec.guest_user_id) if db.is_configured() else None
+        if guest is not None and rec.guest_rank != guest.rank:
+            rec.guest_rank = guest.rank
+            refresh_ranked_active(rec)
+            return True
+        return False
+
     ip = rec.guest_ip
     if not ip or not db.is_configured():
         return False
@@ -399,12 +546,19 @@ async def _refresh_guest_identity_from_ip(rec: PostRecord) -> bool:
     return await _retry_guest_identity_from_ip(rec)
 
 
-async def _link_guest_to_active_posts(user: db.User, guest_ip: str) -> None:
-    """ゲスト client の presence/report で last_ip を反映し、echo 同定済み募集へ同定を補完する。
+async def _link_guest_to_active_posts(
+    user: db.User,
+    guest_ip: str,
+    *,
+    host_profile: str = "",
+    guest_profile: str = "",
+) -> Optional[PostRecord]:
+    """ゲスト client の presence/report で last_ip を反映し、募集へ同定を反映する。
 
-    guest_ip 未設定の募集へ IP を書き込まない。無関係な対戦の presence が
-    別ホストの募集を汚染するのを防ぐ (echo プローブで guest_ip が確定してから
-    presence で user_id を補完する)。
+    プロファイルペアが送られてきた場合は、接続中募集のプロファイルペアとの
+    完全一致で同定する (認証済みユーザーの自己申告なので IP 推論より優先し、
+    guest_identity_confirmed を立てる)。プロファイルがない場合は従来の
+    IP 照合にフォールバックする。同定できた募集レコードを返す。
     """
     ip = guest_ip.strip()
     try:
@@ -418,6 +572,44 @@ async def _link_guest_to_active_posts(user: db.User, guest_ip: str) -> None:
         if refreshed is not None:
             user = refreshed
 
+    # 1) プロファイルペアによる決定的同定 (認証付き自己申告)
+    hp = (host_profile or "").strip()
+    gp = (guest_profile or "").strip()
+    if hp and gp:
+        candidates: list[PostRecord] = []
+        for rec in list(RECORDS.values()):
+            if rec.owner_user_id == user.id:
+                continue
+            if rec.post.net_status not in (NET_CHECKING, NET_BATTLE):
+                continue
+            rec_hp, rec_gp = _record_profiles(rec)
+            if rec_hp == hp and rec_gp == gp:
+                candidates.append(rec)
+        if len(candidates) > 1 and ip:
+            # 同名ペアが同時に複数あるまれなケースは IP で絞る
+            ip_matched = [rec for rec in candidates if rec.guest_ip == ip]
+            if ip_matched:
+                candidates = ip_matched
+        if len(candidates) == 1:
+            rec = candidates[0]
+            changed = _apply_guest_identity(rec, user)
+            if not rec.guest_identity_confirmed:
+                rec.guest_identity_confirmed = True
+                changed = True
+            if not rec.guest_ip and ip:
+                rec.guest_ip = ip
+                changed = True
+            if not rec.post.guest_connected:
+                rec.post.guest_connected = True
+                changed = True
+            if changed:
+                refresh_ranked_active(rec)
+                await _persist_record(rec)
+                await HUB.publish("upsert", asdict(rec.post))
+            return rec
+
+    # 2) 従来の IP 照合フォールバック
+    linked: Optional[PostRecord] = None
     for rec in list(RECORDS.values()):
         if rec.owner_user_id == user.id:
             continue
@@ -440,6 +632,8 @@ async def _link_guest_to_active_posts(user: db.User, guest_ip: str) -> None:
             rec.post.guest_connected = True
             await _persist_record(rec)
             await HUB.publish("upsert", asdict(rec.post))
+        linked = linked or rec
+    return linked
 
 
 async def _assign_guest_from_ip(
@@ -710,6 +904,9 @@ class PostRecord:
     guest_ip: str = ""  # 現在対戦中のゲスト IP（空なら対戦中でない）
     guest_user_id: str = ""  # 同定済みゲストの Discord ID
     guest_rank: str = ""  # 同定済みゲストのランク
+    guest_identity_confirmed: bool = False  # 認証付き presence 由来の確定同定か
+    host_profile: str = ""  # ホストの対戦プロファイル名 (heartbeat 由来)
+    guest_profile: str = ""  # ゲストの対戦プロファイル名 (heartbeat 由来)
     session_games: int = 0  # 現在ゲストとの対戦報告回数
     pending_messages: list[dict] = field(default_factory=list)
     pending_ping_warnings: list[dict] = field(default_factory=list)
@@ -744,6 +941,9 @@ def post_record_to_dict(rec: PostRecord) -> dict[str, Any]:
         "guest_ip": rec.guest_ip,
         "guest_user_id": rec.guest_user_id,
         "guest_rank": rec.guest_rank,
+        "guest_identity_confirmed": rec.guest_identity_confirmed,
+        "host_profile": rec.host_profile,
+        "guest_profile": rec.guest_profile,
         "session_games": rec.session_games,
         "pending_messages": list(rec.pending_messages),
         "pending_ping_warnings": list(rec.pending_ping_warnings),
@@ -763,6 +963,9 @@ def post_record_from_dict(data: dict[str, Any]) -> PostRecord:
         guest_ip=str(data.get("guest_ip", "")),
         guest_user_id=str(data.get("guest_user_id", "")),
         guest_rank=str(data.get("guest_rank", "")),
+        guest_identity_confirmed=bool(data.get("guest_identity_confirmed", False)),
+        host_profile=str(data.get("host_profile", "")),
+        guest_profile=str(data.get("guest_profile", "")),
         session_games=int(data.get("session_games", 0) or 0),
         pending_messages=list(data.get("pending_messages") or []),
         pending_ping_warnings=list(data.get("pending_ping_warnings") or []),
@@ -790,6 +993,9 @@ class CreatePostIn(BaseModel):
     autopunch: bool = False
     match_status: str = Field(default="", max_length=200)
     net_status: int = 0
+    # 対戦中のプロファイルペア (未送信の旧クライアントは match_status から解析)
+    host_profile: str = Field(default="", max_length=64)
+    guest_profile: str = Field(default="", max_length=64)
     challenge_upper: bool = False  # 互換用 (無視)
     ping_warn_enabled: bool = True
     ping_warn_ms: int = Field(default=PING_WARN_MS_DEFAULT, ge=PING_WARN_MS_MIN, le=PING_WARN_MS_MAX)
@@ -3193,6 +3399,13 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     p.stream_url = body.stream_url
     p.giuroll = body.giuroll
     p.match_status = body.match_status
+    if body.host_profile and body.guest_profile:
+        rec.host_profile = body.host_profile
+        rec.guest_profile = body.guest_profile
+    else:
+        rec.host_profile, rec.guest_profile = _profiles_from_match_status(
+            body.match_status
+        )
     old_net_status = p.net_status
     p.net_status = body.net_status
     p.updated_at = now
@@ -3215,6 +3428,8 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     )
     if leaving_connection:
         _clear_guest_connection_display(rec)
+        rec.host_profile = ""
+        rec.guest_profile = ""
     if entering_battle or (
         not rec.guest_ip and body.net_status in (NET_CHECKING, NET_BATTLE)
     ):
@@ -3224,6 +3439,12 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
         if rec.guest_user_id:
             refresh_ranked_active(rec)
 
+    session_info: Optional[dict[str, Any]] = None
+    if p.ranked_active:
+        ses = await ranked_session_for_record(rec)
+        if ses is not None:
+            session_info = ses.info()
+
     messages = list(rec.pending_messages)
     rec.pending_messages.clear()
     ping_warnings = list(rec.pending_ping_warnings)
@@ -3231,6 +3452,7 @@ async def update_post(body: UpdatePostIn) -> dict[str, Any]:
     data = asdict(p)
     data["messages"] = messages
     data["ping_warnings"] = ping_warnings
+    data["ranked_session"] = session_info
     await _persist_record(rec)
     await HUB.publish("upsert", asdict(p))
     return data
@@ -3499,16 +3721,41 @@ async def upload_replay(
     return {"ok": True, "stored": True, "filename": filename}
 
 
+class PresenceIn(BaseModel):
+    """対戦中クライアントの自己申告 (プロファイルペア付き)。旧クライアントはボディなし。"""
+
+    host_profile: str = Field(default="", max_length=64)
+    guest_profile: str = Field(default="", max_length=64)
+    my_side: str = Field(default="", max_length=8)
+
+
 @app.post("/matches/presence")
-async def net_battle_presence(request: Request) -> dict[str, Any]:
-    """対戦開始時にゲスト last_ip を更新し、接続中募集へ同定を反映する。"""
+async def net_battle_presence(
+    request: Request, body: Optional[PresenceIn] = None
+) -> dict[str, Any]:
+    """対戦中ゲストの自己申告。同定を反映し、ランクマセッション状態を返す。"""
     sess = await resolve_session(request)
     if sess is None:
         raise HTTPException(status_code=401, detail="invalid or expired session")
     guest_user = await db.get_user(sess["id"])
+    linked: Optional[PostRecord] = None
     if guest_user is not None:
-        await _link_guest_to_active_posts(guest_user, client_ip(request))
-    return {"ok": True}
+        linked = await _link_guest_to_active_posts(
+            guest_user,
+            client_ip(request),
+            host_profile=body.host_profile if body else "",
+            guest_profile=body.guest_profile if body else "",
+        )
+    session_info: Optional[dict[str, Any]] = None
+    if linked is not None:
+        ses = await ranked_session_for_record(linked)
+        if ses is not None:
+            session_info = ses.info()
+    return {
+        "ok": True,
+        "identified": linked is not None,
+        "ranked_session": session_info,
+    }
 
 
 @app.post("/matches/report")
@@ -3655,22 +3902,33 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 f"band_mismatch(guest_rank={rec.guest_rank}, post_rank={post.rank})"
             )
 
-    limit_reached = await ranked_session_limit_reached(
-        rec.owner_user_id,
-        guest_user_id=rec.guest_user_id or None,
-        host_profile=body.host_profile,
-        guest_profile=body.guest_profile,
-        match_rank=post.rank,
-        played_at=played_at,
-        session_games=rec.session_games,
-        diag=diag,
-    )
-    if limit_reached and post.ranked_active:
-        streak = diag.get("streak")
-        if streak is not None:
-            diag["live_reason"] = f"session_limit(streak={streak})"
-        else:
-            diag["live_reason"] = f"session_limit(session_games={rec.session_games})"
+    ranked_session: Optional[RankedSession] = None
+    if post.ranked_active and rec.owner_user_id and rec.guest_user_id:
+        # セッション成立済み: 3 戦上限はセッションのゲーム数で判定する
+        ranked_session = await ranked_session_for_record(rec)
+    if ranked_session is not None:
+        limit_reached = ranked_session.limit_reached()
+        if limit_reached:
+            diag["live_reason"] = f"session_limit(session={ranked_session.games})"
+    else:
+        limit_reached = await ranked_session_limit_reached(
+            rec.owner_user_id,
+            guest_user_id=rec.guest_user_id or None,
+            host_profile=body.host_profile,
+            guest_profile=body.guest_profile,
+            match_rank=post.rank,
+            played_at=played_at,
+            session_games=rec.session_games,
+            diag=diag,
+        )
+        if limit_reached and post.ranked_active:
+            streak = diag.get("streak")
+            if streak is not None:
+                diag["live_reason"] = f"session_limit(streak={streak})"
+            else:
+                diag["live_reason"] = (
+                    f"session_limit(session_games={rec.session_games})"
+                )
     is_ranked = post.ranked_active and not limit_reached
     match_rank = post.rank if is_ranked else None
 
@@ -3840,6 +4098,11 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
     if newly_recorded:
         rec.session_games += 1
 
+        if is_ranked and rec.owner_user_id and rec.guest_user_id:
+            ranked_session = await _record_ranked_game(
+                rec.owner_user_id, rec.guest_user_id, match_rank or post.rank
+            )
+
         if is_ranked:
             if rec.owner_user_id:
                 await db.lock_user_rank(rec.owner_user_id)
@@ -3875,6 +4138,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
         "match_rank": match_rank,
         "duplicate": promoted and not newly_recorded,
         "ranked_reason": ranked_reason,
+        "ranked_session": ranked_session.info() if ranked_session else None,
     }
 
 
@@ -4219,6 +4483,7 @@ async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
     rec.guest_ip = ip
     rec.guest_user_id = ""
     rec.guest_rank = ""
+    rec.guest_identity_confirmed = False  # 接続が変わったので presence の再確認を待つ
     rec.session_games = 0
     post.guest_user_id = ""
     post.guest_name = ""

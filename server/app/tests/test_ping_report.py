@@ -99,10 +99,12 @@ def clean_state(tmp_path):
     os.environ["DATABASE_URL"] = url
     main.DATABASE_URL = url
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     main.LAST_CREATE_AT.clear()
     main.PING_REPORT_LAST.clear()
     yield
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     main.PING_REPORT_LAST.clear()
 
 

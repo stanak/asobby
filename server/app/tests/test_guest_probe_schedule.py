@@ -44,6 +44,7 @@ def test_guest_probe_tick_sleep_scales_with_post_count(monkeypatch):
 
 def test_probe_target_records_sorted_and_filtered(monkeypatch):
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     try:
         good = FakeRecord(FakePost(id="b", addr="203.0.113.10:10800"))
         bad = FakeRecord(FakePost(id="a", addr="invalid"))
@@ -54,3 +55,4 @@ def test_probe_target_records_sorted_and_filtered(monkeypatch):
         assert [rec.post.id for rec in targets] == ["b"]
     finally:
         main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()

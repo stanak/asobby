@@ -134,6 +134,7 @@ def test_chat_max_messages(fake_redis):
 async def test_hydrate_recruiting_post_survives_deploy_gap(monkeypatch):
     """デプロイ中ハートビート途切れでも AP-only 募集を hydrate できる。"""
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     now = main.now_ts()
     post = main.Post(
         id="ap1",
@@ -161,11 +162,13 @@ async def test_hydrate_recruiting_post_survives_deploy_gap(monkeypatch):
     assert restored.autopunch is True
     assert restored.direct_reachable is False
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
 
 
 @pytest.mark.asyncio
 async def test_hydrate_battle_post_survives_stale_heartbeat(monkeypatch):
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     now = main.now_ts()
     post = main.Post(
         id="battle1",
@@ -208,11 +211,13 @@ async def test_hydrate_battle_post_survives_stale_heartbeat(monkeypatch):
     assert "battle1" in main.RECORDS
     assert main.RECORDS["battle1"].guest_ip == "5.6.7.8"
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
 
 
 @pytest.mark.asyncio
 async def test_hydrate_idle_post_dropped_when_stale(monkeypatch):
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
     now = main.now_ts()
     post = main.Post(id="idle1", updated_at=now - 200, created_at=now - 600)
     data = main.post_record_to_dict(
@@ -232,6 +237,7 @@ async def test_hydrate_idle_post_dropped_when_stale(monkeypatch):
     assert "idle1" not in main.RECORDS
     assert deleted == ["idle1"]
     main.RECORDS.clear()
+    main.RANKED_SESSIONS.clear()
 
 
 @pytest.mark.asyncio

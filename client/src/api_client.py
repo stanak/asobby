@@ -220,13 +220,24 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
-    async def announce_net_battle(self) -> None:
-        """対戦開始時に last_ip 更新とホスト募集へのゲスト同定を促す。"""
+    async def announce_net_battle(
+        self,
+        host_profile: str = "",
+        guest_profile: str = "",
+        my_side: str = "",
+    ) -> dict:
+        """対戦中の自己申告。プロファイルペアでゲスト同定し、ランクマセッション状態を得る。"""
         r = await self.http.post(
             f"{self.base}/matches/presence",
+            json={
+                "host_profile": host_profile,
+                "guest_profile": guest_profile,
+                "my_side": my_side,
+            },
             headers=self._request_headers(),
         )
         r.raise_for_status()
+        return r.json()
 
     async def fetch_my_matches(self, since: float = 0.0, limit: int = 500) -> dict:
         """自分の戦績一覧を取得する。"""
