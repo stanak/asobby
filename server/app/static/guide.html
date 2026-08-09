@@ -15,7 +15,7 @@
   gtag('js', new Date());
   gtag('config', 'G-RJSLH3FRBR');
 </script>
-<script src="/static/i18n.js?v=0.7.11"></script>
+<script src="/static/i18n.js?v=0.7.25"></script>
 <script src="/static/client-update.js"></script>
 <script src="/static/favicon-notify.js"></script>
 <script src="/static/favicon-badge.js"></script>
@@ -211,6 +211,165 @@
     padding-left: 1.35em;
   }
   .steps li { margin-bottom: 8px; }
+  .toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 4px 0 16px;
+  }
+  .toc a {
+    display: inline-block;
+    padding: 4px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 13px;
+    background: var(--panel);
+  }
+  .toc a:hover { border-color: var(--accent); }
+  .step-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin: 16px 0 4px;
+    counter-reset: step;
+  }
+  .step-card {
+    position: relative;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 14px 12px;
+    background: rgba(255, 255, 255, 0.02);
+  }
+  .step-card::before {
+    counter-increment: step;
+    content: counter(step);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #10141a;
+    font-weight: 700;
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+  .step-card h3 { margin: 0 0 6px; font-size: 14px; }
+  .step-card p { margin: 0; font-size: 13px; color: var(--muted); }
+  /* トレイメニューのモックアップ */
+  .mock-wrap {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    margin: 16px 0 4px;
+  }
+  .mock-menu {
+    flex: 0 0 auto;
+    min-width: 280px;
+    background: #f3f3f3;
+    color: #1a1a1a;
+    border: 1px solid #b0b0b0;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    padding: 6px 0;
+    font-size: 13.5px;
+    font-family: "Yu Gothic UI", "Segoe UI", sans-serif;
+    line-height: 1.2;
+  }
+  .mock-menu .mi {
+    position: relative;
+    padding: 6px 30px 6px 34px;
+    white-space: nowrap;
+  }
+  .mock-menu .mi.hover { background: #d9e7f7; border-radius: 4px; margin: 0 4px; padding-left: 30px; padding-right: 26px; }
+  .mock-menu .mi.disabled { color: #8a8a8a; }
+  .mock-menu .mi .check::before {
+    content: "✓";
+    position: absolute;
+    left: 12px;
+  }
+  .mock-menu .mi .sub::after {
+    content: "›";
+    position: absolute;
+    right: 12px;
+    color: #6a6a6a;
+  }
+  .mock-menu hr {
+    border: none;
+    border-top: 1px solid #c9c9c9;
+    margin: 4px 10px;
+  }
+  .mock-menu .marker {
+    position: absolute;
+    right: -8px;
+    top: 50%;
+    transform: translate(100%, -50%);
+    background: var(--warn);
+    color: #10141a;
+    font-size: 11px;
+    font-weight: 700;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .mock-notes {
+    flex: 1 1 260px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 14px;
+  }
+  .mock-notes li {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 12px;
+    align-items: flex-start;
+  }
+  .mock-notes .num {
+    flex-shrink: 0;
+    background: var(--warn);
+    color: #10141a;
+    font-size: 11px;
+    font-weight: 700;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 3px;
+  }
+  .menu-group-title {
+    margin: 22px 0 4px;
+    font-size: 14px;
+    color: var(--warn);
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .menu-group-title:first-of-type { margin-top: 8px; }
+  .checklist {
+    margin: 0 0 12px;
+    padding: 0;
+    list-style: none;
+  }
+  .checklist li {
+    position: relative;
+    padding-left: 26px;
+    margin-bottom: 8px;
+  }
+  .checklist li::before {
+    content: "☑";
+    position: absolute;
+    left: 0;
+    color: var(--ok);
+  }
 </style>
 </head>
 <body>
@@ -233,19 +392,215 @@
 </header>
 
 <main>
-  <section class="panel">
-    <h2 data-i18n="guide.sectionBasic">基本の使い方</h2>
+  <nav class="toc" aria-label="page contents">
+    <a href="#quick" data-i18n="guide.sectionQuick">まずはこれだけ</a>
+    <a href="#setup" data-i18n="guide.sectionSetup">はじめてのセットアップ</a>
+    <a href="#tray" data-i18n="guide.sectionTray">トレイメニューの見方</a>
+    <a href="#menu" data-i18n="guide.sectionMenu">メニュー項目リファレンス</a>
+    <a href="#ranked" data-i18n="guide.sectionRanked">ランクマの仕様</a>
+    <a href="#stats" data-i18n="guide.sectionStats">戦績の管理</a>
+    <a href="#high-ping" data-i18n="guide.sectionHighPing">高 Ping 警告</a>
+    <a href="#vpn" data-i18n="guide.sectionVpn">VPN 利用時の注意</a>
+    <a href="#win-notify" data-i18n="guide.sectionWinNotify">Windows の通知設定</a>
+    <a href="#av" data-i18n="guide.sectionAv">ウイルス対策ソフトの警告</a>
+    <a href="#notify" data-i18n="guide.sectionNotify">主な通知</a>
+  </nav>
+
+  <section class="panel" id="quick">
+    <h2 data-i18n="guide.sectionQuick">まずはこれだけ</h2>
     <p class="lead" data-i18n="guide.basicLead">asobby は、非想天則のホスト募集を自動で Web ロビーに掲載するツールです。</p>
-    <ol>
-      <li data-i18n="guide.basicStep1">Windows クライアントを起動し、タスクトレイに常駐させます。</li>
-      <li data-i18n="guide.basicStep2">天則を起動してホストを立てます（キャラ選択・待機画面で OK）。</li>
-      <li data-i18n="guide.basicStep3">クライアントがホスト状態を検知すると、接続可能な場合は自動でロビーに募集が掲載されます。</li>
-    </ol>
+    <div class="step-cards">
+      <div class="step-card">
+        <h3 data-i18n="guide.quickStep1Title">クライアントを起動</h3>
+        <p data-i18n="guide.quickStep1Desc">ウィンドウは開かず、タスクトレイ（画面右下）に常駐します。起動すると「トレイに常駐しています」という通知が出ます。</p>
+      </div>
+      <div class="step-card">
+        <h3 data-i18n="guide.quickStep2Title">Discord でログイン</h3>
+        <p data-i18n="guide.quickStep2Desc">トレイアイコンをクリックしてメニューを開き、「Discord でログイン」を選びます。</p>
+      </div>
+      <div class="step-card">
+        <h3 data-i18n="guide.quickStep3Title">天則でホストを立てる</h3>
+        <p data-i18n="guide.quickStep3Desc">ホスト待機を検知すると、自動でロビーに募集が掲載されます。掲載のための操作は不要です。</p>
+      </div>
+    </div>
+    <p></p>
     <div class="warn" data-i18n="guide.basicFail">接続できない場合（ポート未開放・Autopunch 未設定など）は募集されず、トースト通知で「募集に失敗しました: ポート開放または autopunch を確認してください」と知らせます。</div>
     <p class="note" data-i18n="guide.basicLogin">asobby の利用（募集の自動投稿・Web ロビー・戦績・チャットなど）には、トレイメニューから Discord ログインが必要です。</p>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="setup">
+    <h2 data-i18n="guide.sectionSetup">はじめてのセットアップ</h2>
+    <ol class="steps">
+      <li data-i18n="guide.setupDl">GitHub Releases から asobby.exe をダウンロードします（このページ右上の「クライアント DL」からも開けます）。インストールは不要で、exe を実行するだけです。</li>
+      <li data-i18n="guide.setupAv">初回実行時に Windows Defender などの警告が出ることがあります。対処方法は下の「ウイルス対策ソフトの警告について」を参照してください。</li>
+      <li data-i18n="guide.setupTray">起動するとタスクトレイに常駐します。アイコンが見当たらないときは、時計の近くにある △ ボタンを押すと隠れているアイコンが表示されます。</li>
+      <li data-i18n="guide.setupLogin">トレイアイコンをクリックしてメニューを開き、「Discord でログイン」を選びます。ブラウザが開くので、Discord アカウントで認可してください。</li>
+      <li data-i18n="guide.setupAutopunch">ポート開放していない場合は、メニューの「ツール」欄から Autopunch の exe を指定して起動してください。ポート開放なしで対戦できるようになります。</li>
+    </ol>
+  </section>
+
+  <section class="panel" id="tray">
+    <h2 data-i18n="guide.sectionTray">トレイメニューの見方</h2>
+    <p data-i18n="guide.trayLead">トレイアイコンを左クリックまたは右クリックするとメニューが開きます。全体の構成は次のとおりです。</p>
+    <div class="mock-wrap">
+      <div class="mock-menu" role="img" aria-label="tray menu illustration">
+        <div class="mi disabled"><span data-i18n="guide.mock.status">待機中 - ホストを立てると自動投稿</span><span class="marker">1</span></div>
+        <div class="mi" data-i18n="guide.mock.login">Discord でログイン</div>
+        <div class="mi" data-i18n="guide.menu.openLobby.name">ロビーページを開く</div>
+        <hr>
+        <div class="mi disabled"><span data-i18n="guide.mock.headerLobby">─── ロビー ───────────</span><span class="marker">2</span></div>
+        <div class="mi" data-i18n="guide.menu.settings.name">投稿設定...</div>
+        <div class="mi"><span class="sub" data-i18n="guide.menu.postType.name">募集タイプ切替</span></div>
+        <div class="mi"><span class="sub" data-i18n="guide.menu.comment.name">コメント切替</span></div>
+        <div class="mi"><span class="sub" data-i18n="guide.menu.stream.name">配信URL切替</span></div>
+        <div class="mi"><span class="sub" data-i18n="guide.menu.pause.name">ロビー自動投稿を一時停止</span><span class="marker">4</span></div>
+        <hr>
+        <div class="mi disabled" data-i18n="guide.mock.headerStats">─── 戦績 ───────────</div>
+        <div class="mi" data-i18n="guide.menu.stats.name">戦績を見る...</div>
+        <div class="mi" data-i18n="guide.menu.syncStats.name">戦績をサーバーと同期</div>
+        <hr>
+        <div class="mi disabled" data-i18n="guide.mock.headerSettings">─── 設定 ───────────</div>
+        <div class="mi"><span class="sub" data-i18n="guide.menu.replayRefusal.name">リプレイ保存を拒否</span></div>
+        <div class="mi"><span class="check" data-i18n="guide.menu.copyAddr.name">ホスト時に IP:Port と使用ツールをコピー</span></div>
+        <div class="mi"><span class="check" data-i18n="guide.menu.pingWarn.name">高 Ping 警告</span><span class="marker">3</span></div>
+        <div class="mi"><span class="check" data-i18n="guide.menu.sessionScore.name">勝敗数通知</span></div>
+        <div class="mi" data-i18n="guide.mock.sessionScoreSettings">勝敗数通知の設定...</div>
+        <hr>
+        <div class="mi disabled" data-i18n="guide.mock.headerTools">─── ツール ───────────</div>
+        <div class="mi" data-i18n="guide.mock.toolAutopunch">autopunch を設定 / 起動</div>
+        <div class="mi" data-i18n="guide.mock.toolGiuroll">giuroll を設定 / 起動</div>
+        <div class="mi" data-i18n="guide.mock.toolSoku">天則 (soku) を設定 / 起動</div>
+        <hr>
+        <div class="mi" data-i18n="guide.menu.log.name">ログを開く</div>
+        <div class="mi" data-i18n="guide.menu.resetPaths.name">ツールのパスをリセット</div>
+        <div class="mi"><span class="sub" data-i18n="guide.mock.lang">言語 / Language</span></div>
+        <div class="mi disabled" data-i18n="guide.mock.version">バージョン v0.7.x</div>
+        <div class="mi" data-i18n="guide.mock.quit">終了</div>
+      </div>
+      <ul class="mock-notes">
+        <li><span class="num">1</span><span data-i18n="guide.mock.note1">一番上の行は現在の状態表示です。グレーの行は情報表示で、クリックしても何も起きません。</span></li>
+        <li><span class="num">2</span><span data-i18n="guide.mock.note2">「─── ロビー ───」のような罫線付きの行は、セクションの見出し（区切りラベル）です。ボタンではないので押せません。</span></li>
+        <li><span class="num">3</span><span data-i18n="guide.mock.note3">✓ が付く項目は ON / OFF のスイッチです。クリックするたびに切り替わります。</span></li>
+        <li><span class="num">4</span><span data-i18n="guide.mock.note4">「›」が付く項目は、カーソルを乗せるとサブメニュー（選択肢）が開きます。</span></li>
+      </ul>
+    </div>
+    <p class="note" data-i18n="guide.mock.caption">図はメニュー構成のイメージです。ログイン状態や動作状況によって、表示される項目・文言は多少変わります。</p>
+    <h3 data-i18n="guide.sectionIcon">トレイアイコンの色</h3>
+    <ul class="icon-list">
+      <li>
+        <span class="icon-dot idle" aria-hidden="true"></span>
+        <span data-i18n="guide.iconIdle">灰色 — 待機中。天則でホストを立てると自動投稿を開始します。</span>
+      </li>
+      <li>
+        <span class="icon-dot recruit" aria-hidden="true"></span>
+        <span data-i18n="guide.iconRecruit">緑 — 募集中。ロビーに掲載中です。</span>
+      </li>
+      <li>
+        <span class="icon-dot battle" aria-hidden="true"></span>
+        <span data-i18n="guide.iconBattle">橙 — 対戦中。ゲストが接続した状態です。</span>
+      </li>
+    </ul>
+    <p data-i18n="guide.iconStatus">メニュー最上部のステータス行にも、同じ状態がテキストで表示されます。</p>
+  </section>
+
+  <section class="panel" id="menu">
+    <h2 data-i18n="guide.sectionMenu">メニュー項目リファレンス</h2>
+    <p data-i18n="guide.menuLead">実際のメニューと同じ並び順で説明します。</p>
+
+    <h3 class="menu-group-title" data-i18n="guide.menuGroup.top">メニュー上部（共通）</h3>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.discord.name">Discord でログイン / ログアウト</h3>
+      <p data-i18n="guide.menu.discord.desc">Web ロビー・戦績・ランクマ募集に必要な Discord アカウント連携です。ログアウト後の再ログインではアカウント選択画面が開きます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.openLobby.name">ロビーページを開く</h3>
+      <p data-i18n="guide.menu.openLobby.desc">Web ロビーをブラウザで開きます。募集一覧の閲覧・ロビーチャット・相手への定型メッセージ送信ができます（要 Discord ログイン）。</p>
+    </div>
+
+    <h3 class="menu-group-title" data-i18n="guide.menuGroup.lobby">─── ロビー ───（募集の設定）</h3>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.reply.name">リクエストに返信</h3>
+      <p data-i18n="guide.menu.reply.desc">ロビー閲覧者から Giuroll 使用依頼やカジュアルお誘いが届いたとき、承諾 / 拒否で返信します。未返信があるときだけ表示されます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.settings.name">投稿設定...</h3>
+      <p data-i18n="guide.menu.settings.desc">募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、高 Ping 警告 (ON/OFF・通常 60ms / Giuroll 100ms) を設定します。OK でサーバーへ反映されます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.postType.name">募集タイプ切替</h3>
+      <p data-i18n="guide.menu.postType.desc">カジュアルとランクマを切り替えます。ランクマは Discord ログインが必須です。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.comment.name">コメント切替</h3>
+      <p data-i18n="guide.menu.comment.desc">ロビーに表示するコメント文を、投稿設定で登録した候補から選びます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.stream.name">配信URL切替</h3>
+      <p data-i18n="guide.menu.stream.desc">YouTube / Twitch / ニコニコの配信 URL を候補から選び、ロビーに表示します。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.pause.name">ロビー自動投稿を一時停止</h3>
+      <p data-i18n="guide.menu.pause.desc">asobby.com への自動投稿だけを止めます。天則の検知・到達性チェックは継続します（30 分 / 1 時間 / 3 時間 / 許可するまで、または今すぐ再開）。</p>
+    </div>
+
+    <h3 class="menu-group-title" data-i18n="guide.menuGroup.stats">─── 戦績 ───</h3>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.stats.name">戦績を見る...</h3>
+      <p data-i18n="guide.menu.stats.desc">PC 内に保存した対戦記録をウィンドウで表示します。フィルタやソートで自分の戦績を確認できます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.syncStats.name">戦績をサーバーと同期</h3>
+      <p data-i18n="guide.menu.syncStats.desc">ローカル戦績とサーバー上の記録を双方向に同期します（要 Discord ログイン）。</p>
+    </div>
+
+    <h3 class="menu-group-title" data-i18n="guide.menuGroup.settings">─── 設定 ───</h3>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.replayRefusal.name">リプレイ保存を拒否</h3>
+      <p data-i18n="guide.menu.replayRefusal.desc">一定時間、または許可するまで相手からのリプレイ保存を拒否します。サーバーにも設定が同期されます（要 Discord ログイン）。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.copyAddr.name">ホスト時に IP:Port と使用ツールをコピー</h3>
+      <p data-i18n="guide.menu.copyAddr.desc">ON にすると、募集開始時に接続アドレスと Giuroll / AutoPunch など必要な使用ツールをクリップボードへコピーします（直結可能なら AutoPunch は含めません）。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.pingWarn.name">高 Ping 警告</h3>
+      <p data-i18n="guide.menu.pingWarn.desc">高 Ping 警告の ON/OFF を切り替えます。しきい値 (ms) の変更は「投稿設定...」から行います。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.sessionScore.name">勝敗数通知</h3>
+      <p data-i18n="guide.menu.sessionScore.desc">同一相手との連続対戦で、ホスト-クライアント形式の勝敗数 (例: 2-1) をトースト通知します。「勝敗数通知の設定...」で毎戦通知か条件指定ができます。</p>
+    </div>
+
+    <h3 class="menu-group-title" data-i18n="guide.menuGroup.tools">─── ツール ───</h3>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.tools.name">Autopunch / Giuroll / 天則 (soku)</h3>
+      <p data-i18n="guide.menu.tools.desc">各ツールのパス設定・起動・停止です。初回は exe の場所を指定します。Autopunch はポート開放なしで接続可能にするために使います。</p>
+    </div>
+
+    <h3 class="menu-group-title" data-i18n="guide.menuGroup.other">メニュー下部（その他）</h3>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.log.name">ログを開く</h3>
+      <p data-i18n="guide.menu.log.desc">asobby.log をエディタで開き、検知状態やエラーの詳細を確認できます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.resetPaths.name">ツールのパスをリセット</h3>
+      <p data-i18n="guide.menu.resetPaths.desc">Autopunch / Giuroll / 天則の exe パス設定をクリアします。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.lang.name">言語 / Language</h3>
+      <p data-i18n="guide.menu.lang.desc">クライアント UI とトースト通知の表示言語（日本語 / English）を切り替えます。設定は PC 内に保存され、次回起動後も維持されます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.update.name">更新をダウンロード</h3>
+      <p data-i18n="guide.menu.update.desc">新しいクライアント版が公開されているときだけ表示され、GitHub の Release ページを開きます。</p>
+    </div>
+    <div class="menu-item">
+      <h3 data-i18n="guide.menu.quit.name">終了</h3>
+      <p data-i18n="guide.menu.quit.desc">クライアントを終了します。募集中の投稿は閉じられます。</p>
+    </div>
+  </section>
+
+  <section class="panel" id="ranked">
     <h2 data-i18n="guide.sectionRanked">ランクマの仕様</h2>
     <p data-i18n="guide.rankedIntro">ランクマ募集で、同じランク帯の Discord ログイン済み相手と対戦すると、条件を満たす対戦はランクマとして記録されます。</p>
     <p data-i18n="guide.rankedSessionLimit">同じ相手との連続対戦では、ランクマとして数えられるのは最初の 3 戦までです。4 戦目以降はカジュアル扱いになります（募集タイプがランクマのままでも）。</p>
@@ -293,9 +648,18 @@
       </tbody>
     </table>
     <p data-i18n="guide.rankedPh">Ph 帯ではランクの昇降格はありません。Ph 同士のランクマ対戦では、キャラごとのレート（TrueSkill）が更新されます。</p>
+    <h3 data-i18n="guide.rankedChecklistTitle">ランクマにならないときのチェックリスト</h3>
+    <p data-i18n="guide.rankedChecklistLead">ランクマ募集で対戦したのに戦績がカジュアル扱いになる場合は、次を順に確認してください。</p>
+    <ul class="checklist">
+      <li data-i18n="guide.rankedCheck1">募集タイプが「ランクマ」になっていますか？（トレイメニューの「募集タイプ切替」で確認できます）</li>
+      <li data-i18n="guide.rankedCheck2">自分も相手も Discord ログインしていますか？（未ログインの相手との対戦はカジュアル記録になります）</li>
+      <li data-i18n="guide.rankedCheck3">相手は自分と同じランク帯ですか？（違う帯との対戦はカジュアル記録になります）</li>
+      <li data-i18n="guide.rankedCheck4">同じ相手との 4 戦目以降ではないですか？（30 分以上空けるか、間に別の相手と対戦するとリセットされます）</li>
+      <li data-i18n="guide.rankedCheck5">自分も相手も最新版クライアントですか？（古い版では正しく記録されないことがあります）</li>
+    </ul>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="stats">
     <h2 data-i18n="guide.sectionStats">戦績の管理</h2>
     <p data-i18n="guide.statsIntro">対戦結果はクライアント側にも保存され、Discord ログイン後にサーバーとも同期されます（トレイの「戦績をサーバーと同期」、または Web 戦績ページ）。</p>
     <ul>
@@ -311,7 +675,7 @@
     <p data-i18n="guide.statsFilterNote">フィルタは対戦履歴・集計の両方に反映されます。チップの × または「クリア」で解除できます。</p>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="high-ping">
     <h2 data-i18n="guide.sectionHighPing">高 Ping 警告</h2>
     <p data-i18n="guide.highPingIntro">ロビー閲覧者がホストへ接続する際の Ping を監視し、しきい値を超えたときにホスト PC へトースト通知します。対戦前に回線状況を把握するための機能です。</p>
     <ul>
@@ -333,7 +697,7 @@
     <p data-i18n="guide.highPingBrowserNote">クライアント未起動の場合も Ping は「—」のままです。asobby トレイアイコンが表示されているかも確認してください。</p>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="vpn">
     <h2 data-i18n="guide.sectionVpn">VPN 利用時の注意</h2>
     <p data-i18n="guide.vpnIntro">asobby は公開 IP と UDP 到達性を使ってロビー掲載・接続確認を行います。VPN 利用時は経路が分かれると、トレイは「募集中」でも Web ロビーに載らないことがあります。</p>
     <h3 data-i18n="guide.vpnHostPostTitle">ホストでロビーに載らないとき</h3>
@@ -347,111 +711,7 @@
     <p class="note" data-i18n="guide.vpnLimitation">VPN ON のまま確実に掲載する機能は今後追加予定です。現時点では上記の運用回避が最も確実です。</p>
   </section>
 
-  <section class="panel">
-    <h2 data-i18n="guide.sectionIcon">トレイアイコンの色</h2>
-    <ul class="icon-list">
-      <li>
-        <span class="icon-dot idle" aria-hidden="true"></span>
-        <span data-i18n="guide.iconIdle">灰色 — 待機中。天則でホストを立てると自動投稿を開始します。</span>
-      </li>
-      <li>
-        <span class="icon-dot recruit" aria-hidden="true"></span>
-        <span data-i18n="guide.iconRecruit">緑 — 募集中。ロビーに掲載中です。</span>
-      </li>
-      <li>
-        <span class="icon-dot battle" aria-hidden="true"></span>
-        <span data-i18n="guide.iconBattle">橙 — 対戦中。ゲストが接続した状態です。</span>
-      </li>
-    </ul>
-    <p data-i18n="guide.iconStatus">メニュー最上部のステータス行にも、同じ状態がテキストで表示されます。</p>
-  </section>
-
-  <section class="panel">
-    <h2 data-i18n="guide.sectionMenu">トレイメニュー各項目</h2>
-
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.openLobby.name">ロビーページを開く</h3>
-      <p data-i18n="guide.menu.openLobby.desc">Web ロビーをブラウザで開きます。募集一覧の閲覧・ロビーチャット・相手への定型メッセージ送信ができます（要 Discord ログイン）。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.settings.name">投稿設定...</h3>
-      <p data-i18n="guide.menu.settings.desc">募集モード（カジュアル / ランクマ）、コメント候補、配信 URL 候補、高 Ping 警告 (ON/OFF・通常 60ms / Giuroll 100ms) を設定します。OK でサーバーへ反映されます。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.pingWarn.name">高 Ping 警告</h3>
-      <p data-i18n="guide.menu.pingWarn.desc">高 Ping 警告の ON/OFF を切り替えます。しきい値 (ms) の変更は「投稿設定...」から行います。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.stats.name">戦績を見る...</h3>
-      <p data-i18n="guide.menu.stats.desc">PC 内に保存した対戦記録をウィンドウで表示します。フィルタやソートで自分の戦績を確認できます。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.syncStats.name">戦績をサーバーと同期</h3>
-      <p data-i18n="guide.menu.syncStats.desc">ローカル戦績とサーバー上の記録を双方向に同期します（要 Discord ログイン）。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.postType.name">募集タイプ切替</h3>
-      <p data-i18n="guide.menu.postType.desc">カジュアルとランクマを切り替えます。ランクマは Discord ログインが必須です。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.comment.name">コメント切替</h3>
-      <p data-i18n="guide.menu.comment.desc">ロビーに表示するコメント文を、投稿設定で登録した候補から選びます。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.stream.name">配信URL切替</h3>
-      <p data-i18n="guide.menu.stream.desc">YouTube / Twitch / ニコニコの配信 URL を候補から選び、ロビーに表示します。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.pause.name">ロビー自動投稿を一時停止</h3>
-      <p data-i18n="guide.menu.pause.desc">asobby.com への自動投稿だけを止めます。天則の検知・到達性チェックは継続します（30 分 / 1 時間 / 3 時間 / 許可するまで、または今すぐ再開）。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.copyAddr.name">ホスト時に IP:Port と使用ツールをコピー</h3>
-      <p data-i18n="guide.menu.copyAddr.desc">ON にすると、募集開始時に接続アドレスと Giuroll / AutoPunch など必要な使用ツールをクリップボードへコピーします（直結可能なら AutoPunch は含めません）。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.reply.name">リクエストに返信</h3>
-      <p data-i18n="guide.menu.reply.desc">ロビー閲覧者から Giuroll 使用依頼やカジュアルお誘いが届いたとき、承諾 / 拒否で返信します。未返信があるときだけ表示されます。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.discord.name">Discord でログイン / ログアウト</h3>
-      <p data-i18n="guide.menu.discord.desc">Web ロビー・戦績・ランクマ募集に必要な Discord アカウント連携です。ログアウト後の再ログインではアカウント選択画面が開きます。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.tools.name">Autopunch / Giuroll / 天則 (soku)</h3>
-      <p data-i18n="guide.menu.tools.desc">各ツールのパス設定・起動・停止です。初回は exe の場所を指定します。Autopunch はポート開放なしで接続可能にするために使います。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.update.name">更新をダウンロード</h3>
-      <p data-i18n="guide.menu.update.desc">新しいクライアント版が公開されているときだけ表示され、GitHub の Release ページを開きます。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.log.name">ログを開く</h3>
-      <p data-i18n="guide.menu.log.desc">asobby.log をエディタで開き、検知状態やエラーの詳細を確認できます。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.resetPaths.name">ツールのパスをリセット</h3>
-      <p data-i18n="guide.menu.resetPaths.desc">Autopunch / Giuroll / 天則の exe パス設定をクリアします。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.sessionScore.name">勝敗数通知</h3>
-      <p data-i18n="guide.menu.sessionScore.desc">同一相手との連続対戦で、ホスト-クライアント形式の勝敗数 (例: 2-1) をトースト通知します。「勝敗数通知の設定...」で毎戦通知か条件指定ができます。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.replayRefusal.name">リプレイ保存を拒否</h3>
-      <p data-i18n="guide.menu.replayRefusal.desc">一定時間、または許可するまで相手からのリプレイ保存を拒否します。サーバーにも設定が同期されます（要 Discord ログイン）。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.lang.name">言語 / Language</h3>
-      <p data-i18n="guide.menu.lang.desc">クライアント UI とトースト通知の表示言語（日本語 / English）を切り替えます。設定は PC 内に保存され、次回起動後も維持されます。</p>
-    </div>
-    <div class="menu-item">
-      <h3 data-i18n="guide.menu.quit.name">終了</h3>
-      <p data-i18n="guide.menu.quit.desc">クライアントを終了します。募集中の投稿は閉じられます。</p>
-    </div>
-  </section>
-
-  <section class="panel">
+  <section class="panel" id="win-notify">
     <h2 data-i18n="guide.sectionWinNotify">Windows の通知設定</h2>
     <p data-i18n="guide.winNotifyIntro">asobby クライアントは、募集失敗・高 Ping 警告・勝敗数・リクエストなどを Windows のトースト通知で知らせます。ゲーム中（フルスクリーン）でも見逃しにくくするため、Windows 側の設定を整えることをおすすめします。</p>
     <p class="note"><span data-i18n="guide.winNotifyDuration"></span></p>
@@ -470,7 +730,7 @@
     <p data-i18n="guide.winNotifyWin10">Windows 10 の場合は、設定 → システム → 通知 → 集中モード で、ゲーム中・全画面アプリ中に自動でオンになるルールをオフにし、asobby の通知を許可してください。</p>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="av">
     <h2 data-i18n="guide.sectionAv">ウイルス対策ソフトの警告について</h2>
     <p data-i18n="guide.avIntro"></p>
     <p data-i18n="guide.avOpenSource"></p>
@@ -483,7 +743,7 @@
     <p data-i18n="guide.avReport"></p>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="notify">
     <h2 data-i18n="guide.sectionNotify">主な通知</h2>
     <p data-i18n="guide.notifyLangLead">トースト通知の文言は、トレイメニュー「言語 / Language」で選んだ表示言語（日本語 / English）に従います。Web ロビー (asobby.com) の言語切替とは別設定です。</p>
     <ul>

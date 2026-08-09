@@ -319,11 +319,54 @@
     "guide.pageTitle": "asobby - 使い方",
     "guide.title": "使い方",
     "guide.subtitle": "Windows クライアント",
-    "guide.sectionBasic": "基本の使い方",
+    "guide.sectionQuick": "まずはこれだけ（3 ステップ）",
     "guide.basicLead": "asobby は、非想天則のホスト募集を自動で Web ロビーに掲載するツールです。",
-    "guide.basicStep1": "Windows クライアントを起動し、タスクトレイに常駐させます。",
-    "guide.basicStep2": "天則を起動してホストを立てます。",
-    "guide.basicStep3": "クライアントがホスト状態を検知すると、接続可能な場合は自動でロビーに募集が掲載されます。",
+    "guide.quickStep1Title": "クライアントを起動",
+    "guide.quickStep1Desc":
+      "ウィンドウは開かず、タスクトレイ（画面右下）に常駐します。起動すると「トレイに常駐しています」という通知が出ます。",
+    "guide.quickStep2Title": "Discord でログイン",
+    "guide.quickStep2Desc":
+      "トレイアイコンをクリックしてメニューを開き、「Discord でログイン」を選びます。",
+    "guide.quickStep3Title": "天則でホストを立てる",
+    "guide.quickStep3Desc":
+      "ホスト待機を検知すると、自動でロビーに募集が掲載されます。掲載のための操作は不要です。",
+    "guide.sectionSetup": "はじめてのセットアップ",
+    "guide.setupDl":
+      "GitHub Releases から asobby.exe をダウンロードします（このページ右上の「クライアント DL」からも開けます）。インストールは不要で、exe を実行するだけです。",
+    "guide.setupAv":
+      "初回実行時に Windows Defender などの警告が出ることがあります。対処方法は下の「ウイルス対策ソフトの警告について」を参照してください。",
+    "guide.setupTray":
+      "起動するとタスクトレイに常駐します。アイコンが見当たらないときは、時計の近くにある △ ボタンを押すと隠れているアイコンが表示されます。",
+    "guide.setupLogin":
+      "トレイアイコンをクリックしてメニューを開き、「Discord でログイン」を選びます。ブラウザが開くので、Discord アカウントで認可してください。",
+    "guide.setupAutopunch":
+      "ポート開放していない場合は、メニューの「ツール」欄から Autopunch の exe を指定して起動してください。ポート開放なしで対戦できるようになります。",
+    "guide.sectionTray": "トレイメニューの見方",
+    "guide.trayLead":
+      "トレイアイコンを左クリックまたは右クリックするとメニューが開きます。全体の構成は次のとおりです。",
+    "guide.mock.status": "待機中 - ホストを立てると自動投稿",
+    "guide.mock.login": "Discord でログイン",
+    "guide.mock.headerLobby": "─── ロビー ───────────",
+    "guide.mock.headerStats": "─── 戦績 ───────────",
+    "guide.mock.headerSettings": "─── 設定 ───────────",
+    "guide.mock.headerTools": "─── ツール ───────────",
+    "guide.mock.sessionScoreSettings": "勝敗数通知の設定...",
+    "guide.mock.toolAutopunch": "autopunch を設定 / 起動",
+    "guide.mock.toolGiuroll": "giuroll を設定 / 起動",
+    "guide.mock.toolSoku": "天則 (soku) を設定 / 起動",
+    "guide.mock.lang": "言語 / Language",
+    "guide.mock.version": "バージョン v0.7.x",
+    "guide.mock.quit": "終了",
+    "guide.mock.note1":
+      "一番上の行は現在の状態表示です。グレーの行は情報表示で、クリックしても何も起きません。",
+    "guide.mock.note2":
+      "「─── ロビー ───」のような罫線付きの行は、セクションの見出し（区切りラベル）です。ボタンではないので押せません。",
+    "guide.mock.note3":
+      "✓ が付く項目は ON / OFF のスイッチです。クリックするたびに切り替わります。",
+    "guide.mock.note4":
+      "「›」が付く項目は、カーソルを乗せるとサブメニュー（選択肢）が開きます。",
+    "guide.mock.caption":
+      "図はメニュー構成のイメージです。ログイン状態や動作状況によって、表示される項目・文言は多少変わります。",
     "guide.basicFail":
       "接続できない場合（ポート未開放・Autopunch 未設定など）は募集されず、トースト通知で「募集に失敗しました: ポート開放または autopunch を確認してください」と知らせます。",
     "guide.basicLogin":
@@ -353,6 +396,19 @@
     "guide.rank.ph.demote": "降格なし",
     "guide.rankedPh":
       "Ph 帯ではランクの昇降格はありません。Ph 同士のランクマ対戦では、キャラごとのレート（TrueSkill）が更新されます。",
+    "guide.rankedChecklistTitle": "ランクマにならないときのチェックリスト",
+    "guide.rankedChecklistLead":
+      "ランクマ募集で対戦したのに戦績がカジュアル扱いになる場合は、次を順に確認してください。",
+    "guide.rankedCheck1":
+      "募集タイプが「ランクマ」になっていますか？（トレイメニューの「募集タイプ切替」で確認できます）",
+    "guide.rankedCheck2":
+      "自分も相手も Discord ログインしていますか？（未ログインの相手との対戦はカジュアル記録になります）",
+    "guide.rankedCheck3":
+      "相手は自分と同じランク帯ですか？（違う帯との対戦はカジュアル記録になります）",
+    "guide.rankedCheck4":
+      "同じ相手との 4 戦目以降ではないですか？（30 分以上空けるか、間に別の相手と対戦するとリセットされます）",
+    "guide.rankedCheck5":
+      "自分も相手も最新版クライアントですか？（古い版では正しく記録されないことがあります）",
     "guide.sectionStats": "戦績の管理",
     "guide.statsIntro":
       "対戦結果はクライアント側にも保存され、Discord ログイン後にサーバーとも同期されます（トレイの「戦績をサーバーと同期」、または Web 戦績ページ）。",
@@ -413,7 +469,14 @@
     "guide.iconRecruit": "緑 — 募集中。ロビーに掲載中です。",
     "guide.iconBattle": "橙 — 対戦中。ゲストが接続した状態です。",
     "guide.iconStatus": "メニュー最上部のステータス行にも、同じ状態がテキストで表示されます。",
-    "guide.sectionMenu": "トレイメニュー各項目",
+    "guide.sectionMenu": "メニュー項目リファレンス",
+    "guide.menuLead": "実際のメニューと同じ並び順で説明します。",
+    "guide.menuGroup.top": "メニュー上部（共通）",
+    "guide.menuGroup.lobby": "─── ロビー ───（募集の設定）",
+    "guide.menuGroup.stats": "─── 戦績 ───",
+    "guide.menuGroup.settings": "─── 設定 ───",
+    "guide.menuGroup.tools": "─── ツール ───",
+    "guide.menuGroup.other": "メニュー下部（その他）",
     "guide.menu.openLobby.name": "ロビーページを開く",
     "guide.menu.openLobby.desc":
       "Web ロビーをブラウザで開きます。募集一覧の閲覧・ロビーチャット・相手への定型メッセージ送信ができます（要 Discord ログイン）。",
@@ -826,13 +889,55 @@
     "guide.pageTitle": "asobby - Guide",
     "guide.title": "Guide",
     "guide.subtitle": "Windows client",
-    "guide.sectionBasic": "Basics",
+    "guide.sectionQuick": "Quick start (3 steps)",
     "guide.basicLead":
       "asobby automatically lists your Hisoutensoku host on the web lobby.",
-    "guide.basicStep1": "Start the Windows client and leave it running in the system tray.",
-    "guide.basicStep2": "Launch Hisoutensoku and open a host.",
-    "guide.basicStep3":
-      "When the client detects hosting, it posts to the lobby automatically if the server can reach your host.",
+    "guide.quickStep1Title": "Start the client",
+    "guide.quickStep1Desc":
+      "No window opens — it lives in the system tray (bottom-right of your screen). A notification tells you it is running in the tray.",
+    "guide.quickStep2Title": "Log in with Discord",
+    "guide.quickStep2Desc":
+      "Click the tray icon to open the menu, then choose \"Log in with Discord\".",
+    "guide.quickStep3Title": "Open a host in Hisoutensoku",
+    "guide.quickStep3Desc":
+      "When hosting is detected, your post appears on the lobby automatically. No extra steps needed.",
+    "guide.sectionSetup": "First-time setup",
+    "guide.setupDl":
+      "Download asobby.exe from GitHub Releases (also linked as \"Client DL\" at the top of this page). No installer — just run the exe.",
+    "guide.setupAv":
+      "Windows Defender may warn you on first run. See \"About antivirus warnings\" below for how to allow it.",
+    "guide.setupTray":
+      "Once started, it stays in the system tray. If you cannot find the icon, click the △ button near the clock to reveal hidden icons.",
+    "guide.setupLogin":
+      "Click the tray icon to open the menu and choose \"Log in with Discord\". Your browser opens to authorize the account.",
+    "guide.setupAutopunch":
+      "If you have not forwarded your port, set the Autopunch exe path in the Tools section of the menu and launch it. It lets you play without port forwarding.",
+    "guide.sectionTray": "Reading the tray menu",
+    "guide.trayLead":
+      "Left-click or right-click the tray icon to open the menu. The overall layout looks like this.",
+    "guide.mock.status": "Idle — start a host to post automatically",
+    "guide.mock.login": "Log in with Discord",
+    "guide.mock.headerLobby": "─── Lobby ───────────",
+    "guide.mock.headerStats": "─── Stats ───────────",
+    "guide.mock.headerSettings": "─── Settings ───────────",
+    "guide.mock.headerTools": "─── Tools ───────────",
+    "guide.mock.sessionScoreSettings": "Win-loss count notification settings...",
+    "guide.mock.toolAutopunch": "set / launch autopunch",
+    "guide.mock.toolGiuroll": "set / launch giuroll",
+    "guide.mock.toolSoku": "set / launch soku (th123)",
+    "guide.mock.lang": "Language / 言語",
+    "guide.mock.version": "Version v0.7.x",
+    "guide.mock.quit": "Quit",
+    "guide.mock.note1":
+      "The top line shows the current status. Gray lines are information only — clicking them does nothing.",
+    "guide.mock.note2":
+      "Lines like \"─── Lobby ───\" are section headers (dividers). They are labels, not buttons, so they cannot be clicked.",
+    "guide.mock.note3":
+      "Items with a ✓ are ON / OFF switches. Each click toggles them.",
+    "guide.mock.note4":
+      "Items with \"›\" open a submenu with more choices when you hover over them.",
+    "guide.mock.caption":
+      "This figure is an illustration of the menu layout. Actual items and labels vary slightly with login state and activity.",
     "guide.basicFail":
       "If you are not reachable (no port forwarding, Autopunch not set up, etc.), nothing is posted and a toast says: “Failed to post: check port forwarding or autopunch”.",
     "guide.basicLogin":
@@ -862,6 +967,19 @@
     "guide.rank.ph.demote": "No demotion",
     "guide.rankedPh":
       "There is no rank promotion or demotion in Ph. Ranked Ph vs Ph matches update per-character TrueSkill ratings.",
+    "guide.rankedChecklistTitle": "Checklist when a match is not recorded as ranked",
+    "guide.rankedChecklistLead":
+      "If you played on a ranked post but the result was recorded as casual, check the following in order.",
+    "guide.rankedCheck1":
+      "Is the post type set to Ranked? (Check \"Post type\" in the tray menu.)",
+    "guide.rankedCheck2":
+      "Are both you and your opponent logged in with Discord? (Matches against logged-out players are recorded as casual.)",
+    "guide.rankedCheck3":
+      "Is your opponent in the same rank band? (Cross-band matches are recorded as casual.)",
+    "guide.rankedCheck4":
+      "Is this the 4th or later game against the same opponent? (A 30+ minute break, or a match against someone else in between, resets the count.)",
+    "guide.rankedCheck5":
+      "Are both clients up to date? (Older versions may fail to record matches correctly.)",
     "guide.sectionStats": "Stats",
     "guide.statsIntro":
       "Match results are stored on the client and synced to the server after Discord login (tray “Sync stats with server” or the web stats page).",
@@ -922,7 +1040,14 @@
     "guide.iconRecruit": "Green — recruiting. Your post is live on the lobby.",
     "guide.iconBattle": "Orange — in battle. A guest is connected.",
     "guide.iconStatus": "The status line at the top of the menu shows the same state in text.",
-    "guide.sectionMenu": "Tray menu items",
+    "guide.sectionMenu": "Menu item reference",
+    "guide.menuLead": "Items are described in the same order as the actual menu.",
+    "guide.menuGroup.top": "Top of the menu (common)",
+    "guide.menuGroup.lobby": "─── Lobby ─── (post settings)",
+    "guide.menuGroup.stats": "─── Stats ───",
+    "guide.menuGroup.settings": "─── Settings ───",
+    "guide.menuGroup.tools": "─── Tools ───",
+    "guide.menuGroup.other": "Bottom of the menu (misc)",
     "guide.menu.openLobby.name": "Open lobby page",
     "guide.menu.openLobby.desc":
       "Opens the web lobby in your browser: post list, lobby chat, and preset messages to hosts (Discord login required).",

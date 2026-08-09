@@ -16,6 +16,11 @@ JA: dict[str, str] = {
     "post_type.casual": "カジュアル",
     "post_type.ranked": "ランクマ",
     "tray.already_running": "asobby は既に起動しています",
+    "tray.startup_notice": (
+        "asobby はタスクトレイに常駐して動いています。"
+        "画面右下のトレイアイコン（△の中にある場合もあります）を"
+        "クリックするとメニューが開きます。終了もメニューの「終了」からできます。"
+    ),
     "tray.version": "バージョン v{version}",
     "tray.open_lobby": "ロビーページを開く",
     "tray.settings": "投稿設定...",
@@ -246,6 +251,12 @@ EN: dict[str, str] = {
     "post_type.casual": "Casual",
     "post_type.ranked": "Ranked",
     "tray.already_running": "asobby is already running",
+    "tray.startup_notice": (
+        "asobby is running in the system tray. "
+        "Click the tray icon at the bottom-right of your screen "
+        "(it may be hidden behind the △ overflow button) to open the menu. "
+        "Use \"Quit\" in the menu to exit."
+    ),
     "tray.version": "Version v{version}",
     "tray.open_lobby": "Open lobby page",
     "tray.settings": "Post settings...",

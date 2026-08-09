@@ -638,7 +638,12 @@ class TrayApp:
             self._refresh_icon()
 
     def _section_header(self, key: str) -> MenuItem:
-        return MenuItem(lambda item: t(key), None, enabled=False)
+        # クリック可能な項目と誤認されないよう、罫線で囲んで見出しと分かる表示にする
+        return MenuItem(
+            lambda item: f"─── {t(key)} ───────────",
+            None,
+            enabled=False,
+        )
 
     def _build_menu(self) -> Menu:
         return Menu(
@@ -772,6 +777,10 @@ class TrayApp:
         self._append_log("info", f"asobby agent v{__version__} started")
         self._append_log("info", f"Lobby page: {self.controller.lobby_url()}")
         self.icon.run_detached()
+        # 「黙って常駐するのが怖い」対策: 起動直後にトレイ常駐を明示的に知らせる
+        self.tk_root.after(
+            1500, lambda: self.emit_notify(t("tray.startup_notice"))
+        )
         self.tk_root.mainloop()
 
 
