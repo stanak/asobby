@@ -510,6 +510,29 @@ async def _bump_session_games(host_user_id: str, guest_user_id: Optional[str]) -
     rec.session_games += 1
     await _persist_record(rec)
 
+
+# /posts/result・/matches/report・/matches/sync の dedup 判定と insert が並行実行
+# されると、互いの行が見えず同一対戦が二重登録される (check-then-insert レース)。
+# 対戦終了時にホスト報告とゲスト報告がほぼ同時に届くため、書き込み区間を直列化する。
+MATCH_WRITE_LOCK = asyncio.Lock()
+
+_DIAG_LOG_PATH = os.path.join(
+    os.environ.get("ASOBBY_STORE_DIR", tempfile.gettempdir()),
+    "ranked_diag.log",
+)
+
+
+def _diag_log(line: str) -> None:
+    """診断ログ: stdout (fly logs) に加えて STORE_DIR にも残す (ログ保持期間対策)。"""
+    print(line)
+    try:
+        os.makedirs(os.path.dirname(_DIAG_LOG_PATH), exist_ok=True)
+        with open(_DIAG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%S}Z {line}\n")
+    except OSError:
+        pass
+
+
 NET_CHECKING = 2  # hisoutensoku net_status: 接続処理中 (キャラセレ/ロード)
 NET_ALIVE = 3  # hisoutensoku net_status: ホスト待ち
 NET_BATTLE = 4  # hisoutensoku net_status: 対戦中
@@ -2386,45 +2409,117 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
     existing_ids = await db.filter_existing_match_ids(
         [_sync_match_id(user_id, m.client_id) for m in body.matches]
     )
-    for item in body.matches:
-        match_id = _sync_match_id(user_id, item.client_id)
-        if match_id in existing_ids:
-            results.append({
-                "client_id": item.client_id,
-                "server_id": match_id,
-                "status": "duplicate",
-            })
-            continue
+    async with MATCH_WRITE_LOCK:
+        for item in body.matches:
+            match_id = _sync_match_id(user_id, item.client_id)
+            if match_id in existing_ids:
+                results.append({
+                    "client_id": item.client_id,
+                    "server_id": match_id,
+                    "status": "duplicate",
+                })
+                continue
 
-        played_at = _parse_sync_played_at(item.played_at)
-        if played_at is None:
-            results.append({
-                "client_id": item.client_id,
-                "server_id": None,
-                "status": "invalid",
-            })
-            continue
+            played_at = _parse_sync_played_at(item.played_at)
+            if played_at is None:
+                results.append({
+                    "client_id": item.client_id,
+                    "server_id": None,
+                    "status": "invalid",
+                })
+                continue
 
-        # user_id で照合できない相手側報告 (ゲスト未同定の host 報告など)
-        # ともプロファイルで照合する
-        if item.my_side == "host":
-            hp, gp = item.my_profile, item.opp_profile
-        else:
-            hp, gp = item.opp_profile, item.my_profile
-        near_match = await _find_dedup_match(
-            played_at, item.winner, hp, gp, my_side=item.my_side
-        )
-        if near_match is not None:
-            # 既存行に自分の側が未同定で残っていれば紐付ける
-            side = "guest" if item.my_side == "client" else item.my_side
-            guest_uid = near_match.guest_user_id
-            if item.my_side == "host" and not guest_uid:
+            # user_id で照合できない相手側報告 (ゲスト未同定の host 報告など)
+            # ともプロファイルで照合する
+            if item.my_side == "host":
+                hp, gp = item.my_profile, item.opp_profile
+            else:
+                hp, gp = item.opp_profile, item.my_profile
+            near_match = await _find_dedup_match(
+                played_at, item.winner, hp, gp, my_side=item.my_side
+            )
+            if near_match is not None:
+                # 既存行に自分の側が未同定で残っていれば紐付ける
+                side = "guest" if item.my_side == "client" else item.my_side
+                guest_uid = near_match.guest_user_id
+                if item.my_side == "host" and not guest_uid:
+                    guest_uid = await db.find_guest_user_id_by_profiles(
+                        item.my_profile, item.opp_profile
+                    )
+                is_ranked = item.ranked
+                match_rank = item.match_rank
+                if item.my_side == "host":
+                    host_rec = _find_host_ranked_post(user_id)
+                    wants_ranked = bool(
+                        item.ranked or (host_rec is not None and guest_uid)
+                    )
+                    is_ranked, match_rank = await resolve_ranked_for_host_session(
+                        user_id,
+                        guest_user_id=guest_uid,
+                        host_profile=item.my_profile,
+                        guest_profile=item.opp_profile,
+                        client_wants_ranked=wants_ranked,
+                        match_rank=item.match_rank or (host_rec.post.rank if host_rec else None),
+                        played_at=played_at,
+                        reporting_rec=host_rec,
+                    )
+                if (
+                    side == "host"
+                    and near_match.source in ("guest", "sync")
+                    and not near_match.host_user_id
+                    and item.my_side == "host"
+                ):
+                    await db.promote_guest_match(
+                        near_match.id,
+                        host_user_id=user_id,
+                        host_ip="",
+                        winner=item.winner,
+                        host_char=_normalize_char(item.my_char),
+                        guest_char=_normalize_char(item.opp_char),
+                        host_profile=item.my_profile,
+                        guest_profile=item.opp_profile,
+                        ranked=is_ranked,
+                        match_rank=match_rank if is_ranked else None,
+                        played_at=played_at,
+                    )
+                    if is_ranked:
+                        await _bump_session_games(user_id, guest_uid)
+                elif (
+                    item.my_side == "host"
+                    and near_match.host_user_id == user_id
+                    and not near_match.ranked
+                    and is_ranked
+                ):
+                    await db.promote_guest_match(
+                        near_match.id,
+                        host_user_id=user_id,
+                        host_ip="",
+                        winner=item.winner,
+                        host_char=_normalize_char(item.my_char),
+                        guest_char=_normalize_char(item.opp_char),
+                        host_profile=item.my_profile,
+                        guest_profile=item.opp_profile,
+                        ranked=True,
+                        match_rank=match_rank,
+                        played_at=played_at,
+                    )
+                    await _bump_session_games(user_id, guest_uid)
+                    if guest_uid:
+                        await db.claim_match_side(near_match.id, "guest", guest_uid)
+                else:
+                    await db.claim_match_side(near_match.id, side, user_id)
+                results.append({
+                    "client_id": item.client_id,
+                    "server_id": near_match.id,
+                    "status": "duplicate",
+                })
+                continue
+
+            row = _sync_row_from_item(user_id, item, match_id, played_at)
+            if item.my_side == "host":
                 guest_uid = await db.find_guest_user_id_by_profiles(
                     item.my_profile, item.opp_profile
                 )
-            is_ranked = item.ranked
-            match_rank = item.match_rank
-            if item.my_side == "host":
                 host_rec = _find_host_ranked_post(user_id)
                 wants_ranked = bool(
                     item.ranked or (host_rec is not None and guest_uid)
@@ -2439,91 +2534,20 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
                     played_at=played_at,
                     reporting_rec=host_rec,
                 )
-            if (
-                side == "host"
-                and near_match.source in ("guest", "sync")
-                and not near_match.host_user_id
-                and item.my_side == "host"
-            ):
-                await db.promote_guest_match(
-                    near_match.id,
-                    host_user_id=user_id,
-                    host_ip="",
-                    winner=item.winner,
-                    host_char=_normalize_char(item.my_char),
-                    guest_char=_normalize_char(item.opp_char),
-                    host_profile=item.my_profile,
-                    guest_profile=item.opp_profile,
-                    ranked=is_ranked,
-                    match_rank=match_rank if is_ranked else None,
-                    played_at=played_at,
-                )
+                row["ranked"] = is_ranked
+                row["match_rank"] = match_rank if is_ranked else None
                 if is_ranked:
                     await _bump_session_games(user_id, guest_uid)
-            elif (
-                item.my_side == "host"
-                and near_match.host_user_id == user_id
-                and not near_match.ranked
-                and is_ranked
-            ):
-                await db.promote_guest_match(
-                    near_match.id,
-                    host_user_id=user_id,
-                    host_ip="",
-                    winner=item.winner,
-                    host_char=_normalize_char(item.my_char),
-                    guest_char=_normalize_char(item.opp_char),
-                    host_profile=item.my_profile,
-                    guest_profile=item.opp_profile,
-                    ranked=True,
-                    match_rank=match_rank,
-                    played_at=played_at,
-                )
-                await _bump_session_games(user_id, guest_uid)
-                if guest_uid:
-                    await db.claim_match_side(near_match.id, "guest", guest_uid)
-            else:
-                await db.claim_match_side(near_match.id, side, user_id)
+            to_insert.append(row)
+            existing_ids.add(match_id)
             results.append({
                 "client_id": item.client_id,
-                "server_id": near_match.id,
-                "status": "duplicate",
+                "server_id": match_id,
+                "status": "imported",
             })
-            continue
 
-        row = _sync_row_from_item(user_id, item, match_id, played_at)
-        if item.my_side == "host":
-            guest_uid = await db.find_guest_user_id_by_profiles(
-                item.my_profile, item.opp_profile
-            )
-            host_rec = _find_host_ranked_post(user_id)
-            wants_ranked = bool(
-                item.ranked or (host_rec is not None and guest_uid)
-            )
-            is_ranked, match_rank = await resolve_ranked_for_host_session(
-                user_id,
-                guest_user_id=guest_uid,
-                host_profile=item.my_profile,
-                guest_profile=item.opp_profile,
-                client_wants_ranked=wants_ranked,
-                match_rank=item.match_rank or (host_rec.post.rank if host_rec else None),
-                played_at=played_at,
-                reporting_rec=host_rec,
-            )
-            row["ranked"] = is_ranked
-            row["match_rank"] = match_rank if is_ranked else None
-            if is_ranked:
-                await _bump_session_games(user_id, guest_uid)
-        to_insert.append(row)
-        existing_ids.add(match_id)
-        results.append({
-            "client_id": item.client_id,
-            "server_id": match_id,
-            "status": "imported",
-        })
-
-    if to_insert:
-        await db.bulk_insert_matches(to_insert)
+        if to_insert:
+            await db.bulk_insert_matches(to_insert)
 
     return {"ok": True, "results": results}
 
@@ -3504,48 +3528,63 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
         await _link_guest_to_active_posts(guest_user, guest_ip)
 
     # ゲスト未同定の host 報告と重複しないようプロファイルでも照合する
-    near = await _find_dedup_match(
-        played_at,
-        body.winner,
-        body.host_profile,
-        body.guest_profile,
-        my_side="guest",
-    )
-    if near is not None:
-        await db.claim_match_side(near.id, "guest", uid)
-        return {
-            "ok": True,
-            "recorded": False,
-            "reason": "duplicate",
-            "match_id": near.id,
-        }
+    async with MATCH_WRITE_LOCK:
+        near = await _find_dedup_match(
+            played_at,
+            body.winner,
+            body.host_profile,
+            body.guest_profile,
+            my_side="guest",
+        )
+        if near is not None:
+            await db.claim_match_side(near.id, "guest", uid)
+            _diag_log(
+                f"guest_report_diag: uid={uid} dedup=near match={near.id} "
+                f"src={near.source} played_at={played_at:%H:%M:%S}"
+            )
+            return {
+                "ok": True,
+                "recorded": False,
+                "reason": "duplicate",
+                "match_id": near.id,
+            }
 
-    near_profiles = await db.find_near_match_profiles_only(
-        played_at, body.host_profile, body.guest_profile
-    )
-    if near_profiles is not None:
-        await db.claim_match_side(near_profiles.id, "guest", uid)
-        return {
-            "ok": True,
-            "recorded": False,
-            "reason": "duplicate",
-            "match_id": near_profiles.id,
-        }
+        near_profiles = await db.find_near_match_profiles_only(
+            played_at, body.host_profile, body.guest_profile
+        )
+        if near_profiles is not None:
+            await db.claim_match_side(near_profiles.id, "guest", uid)
+            _diag_log(
+                f"guest_report_diag: uid={uid} dedup=profiles_only "
+                f"match={near_profiles.id} src={near_profiles.source} "
+                f"played_at={played_at:%H:%M:%S}"
+            )
+            return {
+                "ok": True,
+                "recorded": False,
+                "reason": "duplicate",
+                "match_id": near_profiles.id,
+            }
 
-    match_id = await db.insert_match_result(
-        host_user_id=None,
-        guest_user_id=uid,
-        host_ip="",
-        guest_ip=client_ip(request),
-        winner=body.winner,
-        host_char=body.host_char,
-        guest_char=body.guest_char,
-        host_profile=body.host_profile,
-        guest_profile=body.guest_profile,
-        ranked=False,
-        source="guest",
-        played_at=played_at,
-    )
+        match_id = await db.insert_match_result(
+            host_user_id=None,
+            guest_user_id=uid,
+            host_ip="",
+            guest_ip=client_ip(request),
+            winner=body.winner,
+            host_char=body.host_char,
+            guest_char=body.guest_char,
+            host_profile=body.host_profile,
+            guest_profile=body.guest_profile,
+            ranked=False,
+            source="guest",
+            played_at=played_at,
+        )
+        _diag_log(
+            f"guest_report_diag: uid={uid} dedup=miss inserted={match_id} "
+            f"winner={body.winner} prof={body.host_profile}/{body.guest_profile} "
+            f"played_at={played_at:%H:%M:%S}"
+        )
     ranked_session = _guest_ranked_session_rank(uid, client_ip(request))
     return {
         "ok": True,
@@ -3656,57 +3695,20 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
         diag=diag,
     )
 
-    match_id: Optional[str] = None
-    promoted = False
-    newly_recorded = False
-    dedup_casual = False
-    if rec.guest_user_id:
-        guest_match = await db.find_recent_guest_reported_match(
-            rec.guest_user_id,
-            winner=body.winner,
-            host_profile=body.host_profile,
-            guest_profile=body.guest_profile,
-            played_at=played_at,
-        )
-        if guest_match is not None:
-            promote_ranked, promote_match_rank = await _resolve_host_result_ranked(
-                rec,
-                host_profile=body.host_profile,
-                guest_profile=body.guest_profile,
-                played_at=played_at,
-                is_ranked=is_ranked,
-                match_rank=match_rank,
-                diag=diag,
-            )
-            await db.promote_guest_match(
-                guest_match.id,
-                host_user_id=rec.owner_user_id,
-                host_ip=host_ip,
+    async with MATCH_WRITE_LOCK:
+        match_id: Optional[str] = None
+        promoted = False
+        newly_recorded = False
+        dedup_casual = False
+        if rec.guest_user_id:
+            guest_match = await db.find_recent_guest_reported_match(
+                rec.guest_user_id,
                 winner=body.winner,
-                host_char=body.host_char,
-                guest_char=body.guest_char,
                 host_profile=body.host_profile,
                 guest_profile=body.guest_profile,
-                ranked=promote_ranked,
-                match_rank=promote_match_rank if promote_ranked else None,
                 played_at=played_at,
             )
-            is_ranked = promote_ranked
-            match_rank = promote_match_rank
-            match_id = guest_match.id
-            promoted = True
-            newly_recorded = True
-
-    if not promoted:
-        near = await _find_dedup_match(
-            played_at,
-            body.winner,
-            body.host_profile,
-            body.guest_profile,
-            my_side="host",
-        )
-        if near is not None:
-            if near.source in ("sync", "guest"):
+            if guest_match is not None:
                 promote_ranked, promote_match_rank = await _resolve_host_result_ranked(
                     rec,
                     host_profile=body.host_profile,
@@ -3717,7 +3719,7 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                     diag=diag,
                 )
                 await db.promote_guest_match(
-                    near.id,
+                    guest_match.id,
                     host_user_id=rec.owner_user_id,
                     host_ip=host_ip,
                     winner=body.winner,
@@ -3731,13 +3733,20 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                 )
                 is_ranked = promote_ranked
                 match_rank = promote_match_rank
-                if rec.guest_user_id:
-                    await db.claim_match_side(near.id, "guest", rec.guest_user_id)
-                match_id = near.id
+                match_id = guest_match.id
                 promoted = True
                 newly_recorded = True
-            elif near.host_user_id == rec.owner_user_id:
-                if not near.ranked:
+
+        if not promoted:
+            near = await _find_dedup_match(
+                played_at,
+                body.winner,
+                body.host_profile,
+                body.guest_profile,
+                my_side="host",
+            )
+            if near is not None:
+                if near.source in ("sync", "guest"):
                     promote_ranked, promote_match_rank = await _resolve_host_result_ranked(
                         rec,
                         host_profile=body.host_profile,
@@ -3747,47 +3756,78 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
                         match_rank=match_rank,
                         diag=diag,
                     )
-                    if promote_ranked:
-                        await db.promote_guest_match(
-                            near.id,
-                            host_user_id=rec.owner_user_id,
-                            host_ip=host_ip,
-                            winner=body.winner,
-                            host_char=body.host_char,
-                            guest_char=body.guest_char,
+                    await db.promote_guest_match(
+                        near.id,
+                        host_user_id=rec.owner_user_id,
+                        host_ip=host_ip,
+                        winner=body.winner,
+                        host_char=body.host_char,
+                        guest_char=body.guest_char,
+                        host_profile=body.host_profile,
+                        guest_profile=body.guest_profile,
+                        ranked=promote_ranked,
+                        match_rank=promote_match_rank if promote_ranked else None,
+                        played_at=played_at,
+                    )
+                    is_ranked = promote_ranked
+                    match_rank = promote_match_rank
+                    if rec.guest_user_id:
+                        await db.claim_match_side(near.id, "guest", rec.guest_user_id)
+                    match_id = near.id
+                    promoted = True
+                    newly_recorded = True
+                elif near.host_user_id == rec.owner_user_id:
+                    if not near.ranked:
+                        promote_ranked, promote_match_rank = await _resolve_host_result_ranked(
+                            rec,
                             host_profile=body.host_profile,
                             guest_profile=body.guest_profile,
-                            ranked=True,
-                            match_rank=promote_match_rank,
                             played_at=played_at,
+                            is_ranked=is_ranked,
+                            match_rank=match_rank,
+                            diag=diag,
                         )
-                        is_ranked = promote_ranked
-                        match_rank = promote_match_rank
-                        newly_recorded = True
-                    else:
-                        dedup_casual = True
-                if rec.guest_user_id:
-                    await db.claim_match_side(near.id, "guest", rec.guest_user_id)
-                match_id = near.id
-                promoted = True
+                        if promote_ranked:
+                            await db.promote_guest_match(
+                                near.id,
+                                host_user_id=rec.owner_user_id,
+                                host_ip=host_ip,
+                                winner=body.winner,
+                                host_char=body.host_char,
+                                guest_char=body.guest_char,
+                                host_profile=body.host_profile,
+                                guest_profile=body.guest_profile,
+                                ranked=True,
+                                match_rank=promote_match_rank,
+                                played_at=played_at,
+                            )
+                            is_ranked = promote_ranked
+                            match_rank = promote_match_rank
+                            newly_recorded = True
+                        else:
+                            dedup_casual = True
+                    if rec.guest_user_id:
+                        await db.claim_match_side(near.id, "guest", rec.guest_user_id)
+                    match_id = near.id
+                    promoted = True
 
-    if not promoted:
-        match_id = await db.insert_match_result(
-            host_user_id=rec.owner_user_id,
-            guest_user_id=rec.guest_user_id or None,
-            host_ip=host_ip,
-            guest_ip=rec.guest_ip or "",
-            winner=body.winner,
-            host_char=body.host_char,
-            guest_char=body.guest_char,
-            host_profile=body.host_profile,
-            guest_profile=body.guest_profile,
-            ranked=is_ranked,
-            match_rank=match_rank,
-            source="host",
-            played_at=played_at,
-        )
-        newly_recorded = True
+        if not promoted:
+            match_id = await db.insert_match_result(
+                host_user_id=rec.owner_user_id,
+                guest_user_id=rec.guest_user_id or None,
+                host_ip=host_ip,
+                guest_ip=rec.guest_ip or "",
+                winner=body.winner,
+                host_char=body.host_char,
+                guest_char=body.guest_char,
+                host_profile=body.host_profile,
+                guest_profile=body.guest_profile,
+                ranked=is_ranked,
+                match_rank=match_rank,
+                source="host",
+                played_at=played_at,
+            )
+            newly_recorded = True
 
     if is_ranked:
         ranked_reason: Optional[str] = "ok"
@@ -3820,11 +3860,12 @@ async def report_result(body: ReportResultIn) -> dict[str, Any]:
 
     await _persist_record(rec)
     result_path = "promote" if promoted else "insert"
-    print(
+    _diag_log(
         f"ranked_diag: post={post.id} guest={rec.guest_user_id or '-'} "
         f"guest_rank={rec.guest_rank or '-'} post_rank={post.rank} "
         f"post_type={post.post_type} ranked={is_ranked} match_rank={match_rank} "
-        f"reason={ranked_reason} path={result_path}"
+        f"reason={ranked_reason} path={result_path} "
+        f"match_id={match_id or '-'} played_at={played_at:%H:%M:%S}"
     )
     return {
         "ok": True,

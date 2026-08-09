@@ -720,3 +720,66 @@ async def test_guest_reports_two_hosts_not_blocked():
         async with db.session() as s:
             res_m = await s.execute(select(db.Match))
             assert len(list(res_m.scalars().all())) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_host_result_and_guest_report_single_row():
+    """ホスト報告とゲスト報告が同時に届いても 1 行に dedup される (書き込み直列化)。"""
+    import asyncio
+    import time
+
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4")
+        await create_user("888", name="guest", last_ip="5.6.7.8")
+
+        host_token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "ranked", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        assert rec.guest_user_id == "888"
+
+        guest_token = bearer_token("888", "guest")
+        now = time.time()
+        # 本番で観測された挙動: KO 検知時刻は 7 秒ズレるが HTTP はほぼ同時に届く
+        host_res, guest_res = await asyncio.gather(
+            client.post(
+                "/posts/result",
+                json={
+                    "id": post["id"],
+                    "owner_token": owner_token,
+                    "winner": "host",
+                    "host_char": 2,
+                    "guest_char": 3,
+                    "host_profile": "hostp",
+                    "guest_profile": "guestp",
+                    "played_at": now,
+                },
+            ),
+            client.post(
+                "/matches/report",
+                json={
+                    "winner": "host",
+                    "host_char": 2,
+                    "guest_char": 3,
+                    "host_profile": "hostp",
+                    "guest_profile": "guestp",
+                    "played_at": now - 7,
+                },
+                headers={"Authorization": f"Bearer {guest_token}"},
+            ),
+        )
+        assert host_res.status_code == 200
+        assert guest_res.status_code == 200
+
+        async with db.session() as s:
+            res_m = await s.execute(select(db.Match))
+            matches = list(res_m.scalars().all())
+            assert len(matches) == 1
+            assert matches[0].host_user_id == "999"
+            assert matches[0].guest_user_id == "888"
