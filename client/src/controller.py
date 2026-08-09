@@ -41,6 +41,7 @@ ActionType = Literal["create", "update", "close", "result", "guest_result"]
 
 HEARTBEAT_SEC = 5  # サーバー側 TTL (20s) の 1/4
 GUEST_PRESENCE_INTERVAL_SEC = 20.0  # ゲスト側の対戦中自己申告 (同定+セッション状態受信)
+RANKED_SESSION_MAX_GAMES = 5  # 同一相手との連続ランクマ上限 (サーバー側と揃える)
 CREATE_RETRY_COOLDOWN_SEC = 10
 MYIP_REFRESH_INTERVAL_SEC = 60.0
 UPDATE_CHECK_INTERVAL_SEC = 6 * 3600
@@ -1501,7 +1502,7 @@ class Controller:
                 and self.has_active_post()
                 and self.my_post.post_type == "ranked"
                 and self._ranked_active
-                and self._session_ranked_games < 3
+                and self._session_ranked_games < RANKED_SESSION_MAX_GAMES
             ):
                 ranked = 1
                 match_rank = self._post_rank_band or None

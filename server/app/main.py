@@ -78,7 +78,7 @@ RANKED_EVAL_MIN_GAMES = 30
 # 昇降格判定に使う直近ランクマ対戦数
 RANKED_EVAL_WINDOW = 30
 # 1 セッション (ゲスト接続) でランクマ扱いになるのは最初の 3 戦まで
-RANKED_SESSION_MAX_GAMES = 3
+RANKED_SESSION_MAX_GAMES = 5
 # この分数以上空くと別セッション (sync 遅延時の streak 判定)
 RANKED_SESSION_GAP_MINUTES = 30
 

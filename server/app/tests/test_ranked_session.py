@@ -195,8 +195,8 @@ async def test_confirmed_identity_not_overwritten_by_ip_inference():
 
 
 @pytest.mark.asyncio
-async def test_session_counts_games_and_limits_to_three():
-    """結果報告はセッションのゲーム数で 3 戦上限を判定し、レスポンスで進捗を返す。"""
+async def test_session_counts_games_and_limits_to_max():
+    """結果報告はセッションのゲーム数で上限を判定し、レスポンスで進捗を返す。"""
     async with app_client() as client:
         await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
         await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
@@ -219,8 +219,9 @@ async def test_session_counts_games_and_limits_to_three():
         assert pres.json()["ranked_session"]["games"] == 0
         assert len(main.RANKED_SESSIONS) == 1
 
+        max_games = main.RANKED_SESSION_MAX_GAMES
         played_at = time.time()
-        for i in range(4):
+        for i in range(max_games + 1):
             r = await client.post(
                 "/posts/result",
                 json={
@@ -237,7 +238,7 @@ async def test_session_counts_games_and_limits_to_three():
             assert r.status_code == 200
             data = r.json()
             assert data["recorded"] is True
-            if i < 3:
+            if i < max_games:
                 assert data["ranked"] is True, data
                 assert data["ranked_session"]["games"] == i + 1
             else:
@@ -247,7 +248,7 @@ async def test_session_counts_games_and_limits_to_three():
         async with db.session() as s:
             res_m = await s.execute(select(db.Match))
             flags = [m.ranked for m in res_m.scalars().all()]
-            assert flags == [True, True, True, False]
+            assert flags == [True] * max_games + [False]
 
 
 @pytest.mark.asyncio
@@ -257,7 +258,8 @@ async def test_session_seeded_from_db_streak_after_restart():
         await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
         await create_user("888", name="guest", last_ip="5.6.7.8", rank="normal")
 
-        for _ in range(2):
+        seed_games = main.RANKED_SESSION_MAX_GAMES - 1
+        for _ in range(seed_games):
             await db.insert_match_result(
                 host_user_id="999",
                 guest_user_id="888",
@@ -269,12 +271,12 @@ async def test_session_seeded_from_db_streak_after_restart():
             )
 
         ses = await main.get_or_create_ranked_session("999", "888", "normal")
-        assert ses.games == 2
+        assert ses.games == seed_games
 
         # 直近 insert を反映する場合は既存セッションが bump される
         ses2 = await main._record_ranked_game("999", "888", "normal")
         assert ses2 is ses
-        assert ses2.games == 3
+        assert ses2.games == main.RANKED_SESSION_MAX_GAMES
         assert ses2.limit_reached() is True
 
 
@@ -364,7 +366,7 @@ async def test_update_response_includes_ranked_session(monkeypatch):
         data = r.json()
         assert data["ranked_session"] is not None
         assert data["ranked_session"]["games"] == 0
-        assert data["ranked_session"]["max_games"] == 3
+        assert data["ranked_session"]["max_games"] == main.RANKED_SESSION_MAX_GAMES
         # 明示フィールドが rec に保存される
         assert rec.host_profile == "Alice"
         assert rec.guest_profile == "Bob"

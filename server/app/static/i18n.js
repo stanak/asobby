@@ -375,9 +375,9 @@
     "guide.rankedIntro":
       "ランクマ募集で、同じランク帯の Discord ログイン済み相手と対戦すると、条件を満たす対戦はランクマとして記録されます。",
     "guide.rankedSessionLimit":
-      "同じ相手との連続対戦では、ランクマとして数えられるのは最初の 3 戦までです。4 戦目以降はカジュアル扱いになります（募集タイプがランクマのままでも）。",
+      "同じ相手との連続対戦では、ランクマとして数えられるのは最初の 5 戦までです。6 戦目以降はカジュアル扱いになります（募集タイプがランクマのままでも）。",
     "guide.rankedGuestReset":
-      "相手が切断したり、別の人が入ったりするとセッションが切り替わり、対戦カウントがリセットされます。一度 3 戦終えた相手でも、間に別の人が入ったあとなら、再びランクマ 3 戦が可能です。",
+      "相手が切断したり、別の人が入ったりするとセッションが切り替わり、対戦カウントがリセットされます。一度 5 戦終えた相手でも、間に別の人が入ったあとなら、再びランクマ 5 戦が可能です。",
     "guide.rankedEval":
       "昇格・降格は、現在のランク帯における直近 30 戦の勝率で判定します（30 戦揃ってから判定されます）。",
     "guide.rank.colRank": "ランク",
@@ -406,7 +406,7 @@
     "guide.rankedCheck3":
       "相手は自分と同じランク帯ですか？（違う帯との対戦はカジュアル記録になります）",
     "guide.rankedCheck4":
-      "同じ相手との 4 戦目以降ではないですか？（30 分以上空けるか、間に別の相手と対戦するとリセットされます）",
+      "同じ相手との 6 戦目以降ではないですか？（30 分以上空けるか、間に別の相手と対戦するとリセットされます）",
     "guide.rankedCheck5":
       "自分も相手も最新版クライアントですか？（古い版では正しく記録されないことがあります）",
     "guide.sectionStats": "戦績の管理",
@@ -946,9 +946,9 @@
     "guide.rankedIntro":
       "On ranked posts, qualifying matches against a logged-in opponent in the same rank band are recorded as ranked.",
     "guide.rankedSessionLimit":
-      "With the same opponent in one session, only the first 3 matches count as ranked. From the 4th onward they are casual, even if your post stays ranked.",
+      "With the same opponent in one session, only the first 5 matches count as ranked. From the 6th onward they are casual, even if your post stays ranked.",
     "guide.rankedGuestReset":
-      "When your opponent disconnects or someone else connects, the session resets and the match counter starts over. After another guest sits in between, you can play up to 3 ranked matches again with the same person.",
+      "When your opponent disconnects or someone else connects, the session resets and the match counter starts over. After another guest sits in between, you can play up to 5 ranked matches again with the same person.",
     "guide.rankedEval":
       "Promotion and demotion use your win rate over the latest 30 ranked matches in your current band (evaluated once all 30 are recorded).",
     "guide.rank.colRank": "Rank",
@@ -977,7 +977,7 @@
     "guide.rankedCheck3":
       "Is your opponent in the same rank band? (Cross-band matches are recorded as casual.)",
     "guide.rankedCheck4":
-      "Is this the 4th or later game against the same opponent? (A 30+ minute break, or a match against someone else in between, resets the count.)",
+      "Is this the 6th or later game against the same opponent? (A 30+ minute break, or a match against someone else in between, resets the count.)",
     "guide.rankedCheck5":
       "Are both clients up to date? (Older versions may fail to record matches correctly.)",
     "guide.sectionStats": "Stats",

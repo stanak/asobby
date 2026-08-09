@@ -123,8 +123,9 @@ async def test_ranked_match_flow():
 
         import time
 
+        max_games = main.RANKED_SESSION_MAX_GAMES
         played_at = time.time()
-        for i in range(4):
+        for i in range(max_games + 1):
             r = await client.post(
                 "/posts/result",
                 json={
@@ -141,18 +142,18 @@ async def test_ranked_match_flow():
             assert r.status_code == 200
             data = r.json()
             assert data["recorded"] is True
-            expected_ranked = i < 3
+            expected_ranked = i < max_games
             assert data["ranked"] is expected_ranked
 
         async with db.session() as s:
             res_m = await s.execute(select(db.Match))
             matches = list(res_m.scalars().all())
-            assert len(matches) == 4
+            assert len(matches) == max_games + 1
             ranked_flags = [m.ranked for m in matches]
-            assert ranked_flags == [True, True, True, False]
-            ranked_match_ranks = [m.match_rank for m in matches[:3]]
-            assert ranked_match_ranks == ["normal", "normal", "normal"]
-            assert matches[3].match_rank is None
+            assert ranked_flags == [True] * max_games + [False]
+            ranked_match_ranks = [m.match_rank for m in matches[:max_games]]
+            assert ranked_match_ranks == ["normal"] * max_games
+            assert matches[max_games].match_rank is None
 
         host_token = bearer_token("999", "host")
         stats_matches = await client.get(
@@ -162,7 +163,7 @@ async def test_ranked_match_flow():
         assert stats_matches.status_code == 200
         rows = stats_matches.json()["matches"]
         ranked_rows = [r for r in rows if r["ranked"]]
-        assert len(ranked_rows) == 3
+        assert len(ranked_rows) == max_games
         assert all(r["match_rank"] == "normal" for r in ranked_rows)
 
 
@@ -403,7 +404,7 @@ async def test_cross_rank_band_not_ranked():
 
 @pytest.mark.asyncio
 async def test_sync_respects_ranked_session_limit():
-    """sync も /posts/result と同様、同一セッション 4 戦目以降は ranked=false。"""
+    """sync も /posts/result と同様、同一セッションの上限超過分は ranked=false。"""
     import time
 
     async with app_client() as client:
@@ -421,8 +422,9 @@ async def test_sync_respects_ranked_session_limit():
         rec = main.RECORDS[post["id"]]
         await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
 
+        max_games = main.RANKED_SESSION_MAX_GAMES
         played_at = time.time()
-        for i in range(3):
+        for i in range(max_games):
             r = await client.post(
                 "/posts/result",
                 json={
@@ -443,7 +445,7 @@ async def test_sync_respects_ranked_session_limit():
             json={
                 "matches": [{
                     "client_id": "d" * 32,
-                    "played_at": played_at + 600,
+                    "played_at": played_at + max_games * 200 + 400,
                     "my_side": "host",
                     "winner": "host",
                     "my_char": 0,
@@ -462,9 +464,9 @@ async def test_sync_respects_ranked_session_limit():
         async with db.session() as s:
             res_m = await s.execute(select(db.Match))
             matches = list(res_m.scalars().all())
-            assert len(matches) == 4
+            assert len(matches) == max_games + 1
             ranked_count = sum(1 for m in matches if m.ranked)
-            assert ranked_count == 3
+            assert ranked_count == max_games
             sync_match = await s.get(db.Match, sync_res.json()["results"][0]["server_id"])
             assert sync_match is not None
             assert sync_match.ranked is False
@@ -675,7 +677,7 @@ async def test_ranked_active_after_update_probe_during_connection(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ranked_pair_limit_when_host_and_client_swap():
-    """ホスト/クライアントを入れ替えても同一ペアの 3 戦上限を共有する。"""
+    """ホスト/クライアントを入れ替えても同一ペアの連戦上限を共有する。"""
     import time
 
     async with app_client() as client:
@@ -693,8 +695,9 @@ async def test_ranked_pair_limit_when_host_and_client_swap():
         rec_a = main.RECORDS[post_a["id"]]
         await main.apply_guest_probe(rec_a, make_0x08_reply("2.2.2.2"))
 
+        max_games = main.RANKED_SESSION_MAX_GAMES
         played_at = time.time()
-        for i in range(3):
+        for i in range(max_games):
             r = await client.post(
                 "/posts/result",
                 json={
@@ -742,7 +745,7 @@ async def test_ranked_pair_limit_when_host_and_client_swap():
                 "guest_char": 4,
                 "host_profile": "bob_prof",
                 "guest_profile": "alice_prof",
-                "played_at": played_at + 900,
+                "played_at": played_at + max_games * 200 + 300,
             },
         )
         assert r.json()["recorded"] is True
@@ -751,10 +754,10 @@ async def test_ranked_pair_limit_when_host_and_client_swap():
         async with db.session() as s:
             res_m = await s.execute(select(db.Match))
             matches = list(res_m.scalars().all())
-            assert len(matches) == 4
-            assert sum(1 for m in matches if m.ranked) == 3
-            assert all(m.ranked for m in matches[:3])
-            assert matches[3].ranked is False
+            assert len(matches) == max_games + 1
+            assert sum(1 for m in matches if m.ranked) == max_games
+            assert all(m.ranked for m in matches[:max_games])
+            assert matches[max_games].ranked is False
 
 
 @pytest.mark.asyncio
