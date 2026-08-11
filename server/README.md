@@ -185,7 +185,7 @@ asobby クライアントはローカル SQLite に戦績を保持し、`POST /m
 
 - 開始ランクのデフォルトは N (`normal`)。ログイン後、**初回のみ** E / N / Ex / H / L から開始ランクを選択できる（Ph は選択不可）。選択後、またはランクマ対戦を 1 戦記録した時点でロックされ、以降は昇降格のみ
 - ランク (E → N → Ex → H → L → Ph) はシステムが決定する。初回選択を行わなければ N からスタート
-- 昇降格は**現ランクで行ったランクマ対戦の直近 30 戦の勝率**で判定（最低 10 戦揃ってから）。ランク変更時に窓はリセット (`rank_changed_at` 以降のみ集計)
+- 昇降格は**現ランクで行ったランクマ対戦の直近 50 戦の勝率**で判定（50 戦揃ってから）。ランク変更時に窓はリセット (`rank_changed_at` 以降のみ集計)
   - E: 勝率 >= 50% で N へ昇格（降格なし）
   - N: 降格なし。>= 50% で Ex へ
   - Ex: < 20% で N へ降格。>= 60% で H へ
@@ -223,6 +223,19 @@ fly secrets set \
 - `ASOBBY_BASE_URL` は既定で `https://asobby.com`。別ドメインで動かす場合は上書きし、Discord 側の Redirect も合わせる
 - `ASOBBY_SESSION_SECRET` 未設定時は起動ごとにランダム生成され、再起動で全セッションが失効するので本番では必ず設定する
 - client id / secret が未設定なら `/auth/*` は 503 を返す（ログイン機能だけ無効になり、他は通常動作）
+
+### 意見・報告フォーム (`/feedback`)
+
+Discord ログイン済みユーザー向け。カテゴリは不具合 / 要望 / その他。本文上限 2000 文字、同一ユーザーは 5 分に 1 回まで。
+
+- 投稿は `/data/asobby/feedback.jsonl`（または Redis）に保存。管理者は `/admin` で一覧
+- 通知: `ASOBBY_FEEDBACK_WEBHOOK_URL` に Discord Webhook URL を設定すると投稿時に embed 通知（未設定なら保存のみ）
+
+```sh
+fly secrets set ASOBBY_FEEDBACK_WEBHOOK_URL='https://discord.com/api/webhooks/...'
+```
+
+管理者 Discord ID は `ASOBBY_ADMIN_USER_IDS`（カンマ区切り）で指定する。
 
 ## カスタムドメイン (asobby.com)
 

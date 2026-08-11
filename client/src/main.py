@@ -798,15 +798,15 @@ class TrayApp:
             self._section_header("tray.section.tools"),
             MenuItem(
                 lambda item: self._tool_label("autopunch"),
-                lambda: self._handle_tool("autopunch", "Select autopunch exe"),
+                lambda: self._handle_tool("autopunch", t("tool.autopunch.pick_title")),
             ),
             MenuItem(
                 lambda item: self._tool_label("giuroll"),
-                lambda: self._handle_tool("giuroll", "Select giuroll exe"),
+                lambda: self._handle_tool("giuroll", t("tool.giuroll.pick_title")),
             ),
             MenuItem(
                 lambda item: self._tool_label("soku"),
-                lambda: self._handle_tool("soku", "Select th123.exe"),
+                lambda: self._handle_tool("soku", t("tool.soku.pick_title")),
             ),
             Menu.SEPARATOR,
             MenuItem(t("tray.open_log"), lambda: self._open_log()),

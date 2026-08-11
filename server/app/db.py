@@ -1020,7 +1020,7 @@ async def fetch_user_ranked_matches(user_id: str, limit: int = 1000) -> list[Mat
 
 
 async def fetch_ranked_matches_at_current_rank(
-    user_id: str, limit: int = 30
+    user_id: str, limit: int = 50
 ) -> list[Match]:
     """現ランク期間中のランクマ対戦 (直近 limit 件) を played_at 降順で返す。"""
     async with session() as s:

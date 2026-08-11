@@ -16,7 +16,7 @@
   gtag('js', new Date());
   gtag('config', 'G-RJSLH3FRBR');
 </script>
-<script src="/static/i18n.js?v=0.8.1"></script>
+<script src="/static/i18n.js?v=0.8.3"></script>
 <script src="/static/client-update.js"></script>
 <script src="/static/favicon-notify.js"></script>
 <script src="/static/favicon-badge.js"></script>
@@ -340,6 +340,7 @@
     <a href="/data/" data-i18n="nav.frameData">フレームデータ</a>
     <a href="/guide" data-i18n="nav.guide">使い方</a>
     <a href="/settings" data-i18n="nav.settings">設定</a>
+    <a href="/feedback" data-i18n="nav.feedback">意見・報告</a>
     <a id="nav-client-dl" href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
     <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
     <button type="button" id="lang-toggle" class="lang-btn"></button>
@@ -1268,13 +1269,13 @@ function renderRanked() {
   rTotal.appendChild(document.createTextNode(" " + t("stats.rankedTotalGames", { games: rt.games })));
   rankedEl.appendChild(rTotal);
 
-  const r30 = ranked.recent30 || { games: 0, wins: 0, win_rate: 0 };
+  const r50 = ranked.recent50 || { games: 0, wins: 0, win_rate: 0 };
   const rRecent = document.createElement("div");
   rRecent.className = "summary";
-  rRecent.textContent = t("stats.rankedRecent30", {
-    rate: pct(r30.win_rate),
-    wins: r30.wins,
-    games: r30.games,
+  rRecent.textContent = t("stats.rankedRecent50", {
+    rate: pct(r50.win_rate),
+    wins: r50.wins,
+    games: r50.games,
   });
   rankedEl.appendChild(rRecent);
 }

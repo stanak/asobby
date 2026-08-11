@@ -75,6 +75,31 @@
   }
   .preview.info { display: block; background: rgba(106, 176, 243, 0.12); border-color: var(--accent); }
   .preview.warn { display: block; background: rgba(229, 192, 123, 0.12); border-color: var(--warn); }
+  .feedback-list { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+  .feedback-item {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    background: var(--bg);
+  }
+  .feedback-item .meta {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+  .feedback-item .cat {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .feedback-item pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font: inherit;
+  }
 </style>
 </head>
 <body>
@@ -105,6 +130,13 @@
     <div id="status"></div>
     <div id="preview" class="preview"></div>
     <p class="muted" id="meta"></p>
+  </div>
+
+  <div class="panel" id="feedback-panel" style="display:none">
+    <h2>意見・報告</h2>
+    <p class="muted">Discord ログイン済みユーザーから届いた内容 (新しい順)。Webhook 通知も同時に送られます。</p>
+    <div id="feedback-list" class="feedback-list"></div>
+    <p class="muted" id="feedback-empty" style="display:none">まだ投稿はありません</p>
   </div>
 </main>
 <script>
@@ -148,6 +180,42 @@
     return;
   }
   $("editor").style.display = "block";
+  $("feedback-panel").style.display = "block";
+
+  const FEEDBACK_CAT = { bug: "不具合", feature: "要望", other: "その他" };
+
+  function renderFeedback(entries) {
+    const list = $("feedback-list");
+    const empty = $("feedback-empty");
+    list.innerHTML = "";
+    if (!entries || !entries.length) {
+      empty.style.display = "block";
+      return;
+    }
+    empty.style.display = "none";
+    for (const e of entries) {
+      const item = document.createElement("div");
+      item.className = "feedback-item";
+      const dt = e.ts ? new Date(e.ts * 1000).toLocaleString() : "";
+      const cat = FEEDBACK_CAT[e.category] || e.category || "?";
+      const client = e.client_version || "不明";
+      item.innerHTML =
+        `<div class="meta">` +
+        `<span class="cat">${cat}</span>` +
+        `<span>${dt}</span>` +
+        `<span>${e.user_name || "?"} (${e.user_id || "?"})</span>` +
+        `<span>client: ${client}</span>` +
+        `</div>` +
+        `<pre></pre>`;
+      item.querySelector("pre").textContent = e.text || "";
+      list.appendChild(item);
+    }
+  }
+
+  try {
+    const fb = await fetchJson("/admin/feedback?limit=100");
+    renderFeedback(fb.entries);
+  } catch (e) { /* ignore */ }
 
   try {
     const cur = await fetchJson("/announcement");

@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="feedback.pageTitle">asobby - 意見・報告</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" data-asobby="1">
+<link rel="icon" href="/static/favicon-64.png" type="image/png" sizes="64x64">
+<link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<script src="/static/i18n.js?v=0.8.3"></script>
+<script src="/static/client-update.js"></script>
+<script src="/static/favicon-notify.js"></script>
+<script src="/static/favicon-badge.js"></script>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1c2129;
+    --border: #2c3440;
+    --text: #d8dee9;
+    --muted: #7b8794;
+    --accent: #6ab0f3;
+    --ok: #57c07d;
+    --err: #e06c75;
+    --warn: #e5c07b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 12px;
+    padding: 16px 20px 8px;
+  }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: 1px; }
+  header .site-logo-link {
+    display: flex;
+    align-items: center;
+    line-height: 0;
+  }
+  header .site-logo {
+    display: block;
+    height: 56px;
+    width: auto;
+  }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+  }
+  header nav a { color: var(--accent); text-decoration: none; }
+  header nav a:hover { text-decoration: underline; }
+  header nav .lang-btn {
+    padding: 2px 8px;
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  header nav .lang-btn:hover { border-color: var(--accent); }
+  main { max-width: 640px; margin: 0 auto; padding: 8px 20px 40px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .panel h2 { margin: 0 0 8px; font-size: 17px; }
+  .panel p.hint { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+  .notice {
+    border-radius: 8px;
+    border: 1px solid var(--warn);
+    background: rgba(229, 192, 123, 0.12);
+    padding: 10px 12px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .field { margin: 16px 0; }
+  .field label { display: block; margin-bottom: 6px; font-size: 14px; }
+  select, textarea {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    font: inherit;
+  }
+  textarea { min-height: 160px; resize: vertical; }
+  .char-count {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    text-align: right;
+  }
+  .actions { display: flex; align-items: center; gap: 12px; margin-top: 20px; }
+  button.primary {
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #0d1117;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.primary:disabled { opacity: 0.5; cursor: default; }
+  #status { font-size: 13px; color: var(--muted); }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--err); }
+  #gate p { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <a href="/" class="site-logo-link" aria-label="asobby">
+    <img class="site-logo" src="/static/logo-header.png" alt="asobby" height="56">
+  </a>
+  <span class="sub" data-i18n="feedback.subtitle">ご意見・不具合報告</span>
+  <nav>
+    <a href="/" data-i18n="nav.lobby">ロビー</a>
+    <a href="/stats" data-i18n="nav.stats">戦績</a>
+    <a href="/replays" data-i18n="nav.replays">リプレイ検索</a>
+    <a href="/data/" data-i18n="nav.frameData">フレームデータ</a>
+    <a href="/guide" data-i18n="nav.guide">使い方</a>
+    <a href="/settings" data-i18n="nav.settings">設定</a>
+    <a id="nav-client-dl" href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
+    <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
+    <button type="button" id="lang-toggle" class="lang-btn"></button>
+  </nav>
+</header>
+
+<main>
+  <div id="loading" data-i18n="common.loading">読み込み中...</div>
+  <div id="gate" hidden>
+    <p data-i18n="feedback.loginRequired">意見・報告を送るには Discord ログインが必要です</p>
+    <p data-i18n="common.loginGateClientHint">asobby クライアント（トレイメニュー「Discord でログイン」）からログインしてください</p>
+  </div>
+  <form id="form" hidden>
+    <div class="panel">
+      <h2 data-i18n="feedback.title">意見・報告フォーム</h2>
+      <p class="hint" data-i18n="feedback.lead">不具合・要望・その他のご意見をお送りください。管理者が内容を確認します。</p>
+      <div class="notice" data-i18n="feedback.bugNote">不具合報告の場合は、できるだけ最新版の Windows クライアントをご利用のうえ、再現手順や症状を具体的に書いてください。</div>
+      <div class="field">
+        <label for="category" data-i18n="feedback.categoryLabel">カテゴリ</label>
+        <select id="category" name="category" required>
+          <option value="bug" data-i18n="feedback.categoryBug">不具合</option>
+          <option value="feature" data-i18n="feedback.categoryFeature">要望</option>
+          <option value="other" data-i18n="feedback.categoryOther">その他</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="text" data-i18n="feedback.textLabel">内容</label>
+        <textarea id="text" name="text" maxlength="2000" required data-i18n-placeholder="feedback.textPlaceholder" placeholder="内容を入力..."></textarea>
+        <div class="char-count"><span id="char-count">0</span> / 2000</div>
+      </div>
+    </div>
+    <div class="actions">
+      <button type="submit" class="primary" id="submit-btn" data-i18n="feedback.submit">送信</button>
+      <span id="status" aria-live="polite"></span>
+    </div>
+  </form>
+</main>
+
+<script>
+const MAX_TEXT = 2000;
+const loadingEl = document.getElementById("loading");
+const gateEl = document.getElementById("gate");
+const formEl = document.getElementById("form");
+const statusEl = document.getElementById("status");
+const submitBtn = document.getElementById("submit-btn");
+const textEl = document.getElementById("text");
+const charCountEl = document.getElementById("char-count");
+
+function t(key, vars) {
+  return window.asobbyI18n ? window.asobbyI18n.t(key, vars) : key;
+}
+
+function setStatus(msg, ok) {
+  statusEl.textContent = msg;
+  statusEl.className = ok ? "ok" : "err";
+}
+
+function updateCharCount() {
+  charCountEl.textContent = String(textEl.value.length);
+}
+
+textEl.addEventListener("input", updateCharCount);
+
+(async () => {
+  let me = null;
+  try {
+    const res = await fetch("/auth/me", { credentials: "same-origin" });
+    if (res.ok) me = await res.json();
+  } catch (e) { /* ignore */ }
+
+  loadingEl.hidden = true;
+  if (!me || !me.id) {
+    gateEl.hidden = false;
+    return;
+  }
+  formEl.hidden = false;
+  updateCharCount();
+
+  formEl.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const text = textEl.value.trim();
+    if (!text) return;
+    submitBtn.disabled = true;
+    setStatus("", false);
+    try {
+      const res = await fetch("/feedback", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          category: document.getElementById("category").value,
+          text,
+        }),
+      });
+      if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        const sec = data.detail && data.detail.retry_after_sec
+          ? data.detail.retry_after_sec
+          : 300;
+        setStatus(t("feedback.cooldown", { sec }), false);
+        return;
+      }
+      if (!res.ok) {
+        setStatus(t("common.networkError"), false);
+        return;
+      }
+      textEl.value = "";
+      updateCharCount();
+      setStatus(t("feedback.sent"), true);
+    } catch (e) {
+      setStatus(t("common.networkError"), false);
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -32,6 +32,13 @@ from replay_refusal import (
     normalize_replay_refusal_until,
     replay_refusal_until_from_duration,
 )
+from detect_pause import (
+    DETECT_PAUSE_INACTIVE,
+    DETECT_PAUSE_PERMANENT,
+    detect_pause_until_from_duration,
+    is_detect_pause_active,
+    normalize_detect_pause_until,
+)
 from tool_manager import ToolManager, ToolState
 from host_probe import probe_rtt_ms
 from local_api import start_local_api_server, set_ping_probe_guard, LOCAL_API_PORT
@@ -251,7 +258,7 @@ class Controller:
         self.pending_requests: list[PendingRequest] = []
 
         # ロビー自動投稿の一時停止。0 なら停止していない (検知自体は止めない)
-        self._detect_pause_until: float = 0.0
+        self._detect_pause_until: float = self._load_detect_pause_runtime()
         self._last_host_self_check_ts: float = 0.0
         self._host_unreachable_notified: bool = False
 
@@ -784,10 +791,14 @@ class Controller:
     def pause_auto_detect(self, seconds: float) -> None:
         """asobby.com への自動投稿だけを止める。検知・到達性チェックは継続。"""
         self._host_unreachable_notified = False
-        if seconds == PAUSE_UNTIL_RESUME:
+        until = detect_pause_until_from_duration(seconds)
+        self.config_mgr.set_value("options", "detect_pause_until", until)
+        if until == DETECT_PAUSE_PERMANENT:
             self._detect_pause_until = PAUSE_UNTIL_RESUME
+        elif until == DETECT_PAUSE_INACTIVE:
+            self._detect_pause_until = 0.0
         else:
-            self._detect_pause_until = time.time() + seconds
+            self._detect_pause_until = until
         label = self._pause_duration_label(seconds)
         self.log_sink("info", t("log.auto_posting_paused", label=label))
         self.notify_sink(t("notify.pause", label=label))
@@ -796,10 +807,28 @@ class Controller:
     def resume_auto_detect(self) -> None:
         if self._detect_pause_until:
             self._detect_pause_until = 0.0
+            self.config_mgr.set_value(
+                "options", "detect_pause_until", DETECT_PAUSE_INACTIVE
+            )
             self._host_unreachable_notified = False
             self.log_sink("info", t("log.auto_posting_resumed"))
             self.notify_sink(t("notify.pause_resumed"))
             self.pause_ui_sink()
+
+    def _load_detect_pause_runtime(self) -> float:
+        """設定ファイルから一時停止状態を復元する (リプレイ拒否と同形式)。"""
+        raw = self.config_mgr.get_value("options", "detect_pause_until", 0)
+        until = normalize_detect_pause_until(raw)
+        if until == DETECT_PAUSE_INACTIVE:
+            return 0.0
+        if until == DETECT_PAUSE_PERMANENT:
+            return PAUSE_UNTIL_RESUME
+        if not is_detect_pause_active(until):
+            self.config_mgr.set_value(
+                "options", "detect_pause_until", DETECT_PAUSE_INACTIVE
+            )
+            return 0.0
+        return until
 
     def tray_icon_key(self) -> str:
         return self._tray_icon_key
@@ -1431,6 +1460,9 @@ class Controller:
             and now >= self._detect_pause_until
         ):
             self._detect_pause_until = 0.0
+            self.config_mgr.set_value(
+                "options", "detect_pause_until", DETECT_PAUSE_INACTIVE
+            )
             self._host_unreachable_notified = False
             self.log_sink("info", t("log.auto_posting_resumed_expired"))
             self.notify_sink(t("notify.pause_resumed"))

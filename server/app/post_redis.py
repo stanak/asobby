@@ -26,6 +26,9 @@ PRESENCE_ZSET_KEY = "asobby:presence"
 PRESENCE_TTL_SEC = 90
 
 ANNOUNCEMENT_KEY = "asobby:announcement"
+FEEDBACK_LIST_KEY = "asobby:feedback:entries"
+FEEDBACK_COOLDOWN_PREFIX = "asobby:feedback:cooldown:"
+FEEDBACK_MAX_ENTRIES = 500
 
 _LOCAL_LOCK = threading.Lock()
 
@@ -66,6 +69,10 @@ def _local_chat_path(lang: str) -> Path:
 
 def _local_cooldown_path() -> Path:
     return _store_dir() / "chat_cooldowns.json"
+
+
+def _local_feedback_cooldown_path() -> Path:
+    return _store_dir() / "feedback_cooldowns.json"
 
 
 def _ensure_local_dirs() -> None:
@@ -537,6 +544,145 @@ def load_announcement() -> dict[str, Any] | None:
             except (OSError, json.JSONDecodeError, TypeError, ValueError):
                 return None
     return None
+
+
+def _local_feedback_path() -> Path:
+    return _store_dir() / "feedback.jsonl"
+
+
+def _local_load_feedback_cooldowns() -> dict[str, float]:
+    path = _local_feedback_cooldown_path()
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): float(v) for k, v in data.items()}
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def _local_save_feedback_cooldowns_unlocked(kept: dict[str, float]) -> None:
+    if kept:
+        payload = json.dumps(kept, separators=(",", ":"), ensure_ascii=False)
+        _atomic_write_text(_local_feedback_cooldown_path(), payload)
+    else:
+        _local_feedback_cooldown_path().unlink(missing_ok=True)
+
+
+def _local_feedback_cooldown_remaining(user_id: str) -> float:
+    with _LOCAL_LOCK:
+        cooldowns = _local_load_feedback_cooldowns()
+    expires = cooldowns.get(user_id, 0.0)
+    rem = expires - time.time()
+    return rem if rem > 0 else 0.0
+
+
+def _local_feedback_cooldown_mark(user_id: str, cooldown_sec: float) -> None:
+    with _LOCAL_LOCK:
+        cooldowns = _local_load_feedback_cooldowns()
+        cooldowns[user_id] = time.time() + max(cooldown_sec, 0.0)
+        now = time.time()
+        kept = {uid: exp for uid, exp in cooldowns.items() if exp > now}
+        _local_save_feedback_cooldowns_unlocked(kept)
+
+
+def _feedback_cooldown_key(user_id: str) -> str:
+    return f"{FEEDBACK_COOLDOWN_PREFIX}{user_id}"
+
+
+def feedback_cooldown_remaining(user_id: str) -> float:
+    """送信可能になるまでの残秒。0 なら送信可。永続化無効時は常に 0。"""
+    if is_redis_configured():
+        redis = _client()
+        ttl = redis.ttl(_feedback_cooldown_key(user_id))
+        if ttl is None or ttl < 0:
+            return 0.0
+        return float(ttl)
+    if _local_store_enabled():
+        return _local_feedback_cooldown_remaining(user_id)
+    return 0.0
+
+
+def feedback_cooldown_mark(user_id: str, cooldown_sec: float) -> None:
+    if is_redis_configured():
+        redis = _client()
+        redis.set(
+            _feedback_cooldown_key(user_id),
+            "1",
+            ex=max(int(cooldown_sec), 1),
+        )
+        return
+    if _local_store_enabled():
+        _local_feedback_cooldown_mark(user_id, cooldown_sec)
+
+
+def append_feedback_entry(entry: dict[str, Any]) -> None:
+    """意見・報告を先頭に追加 (新しい順で取得)。"""
+    payload = json.dumps(entry, separators=(",", ":"), ensure_ascii=False)
+    if is_redis_configured():
+        redis = _client()
+        redis.lpush(FEEDBACK_LIST_KEY, payload)
+        redis.ltrim(FEEDBACK_LIST_KEY, 0, FEEDBACK_MAX_ENTRIES - 1)
+        return
+    if _local_store_enabled():
+        with _LOCAL_LOCK:
+            _ensure_local_dirs()
+            path = _local_feedback_path()
+            lines: list[str] = []
+            if path.is_file():
+                try:
+                    lines = [
+                        ln.strip()
+                        for ln in path.read_text(encoding="utf-8").splitlines()
+                        if ln.strip()
+                    ]
+                except OSError:
+                    lines = []
+            lines.insert(0, payload)
+            lines = lines[:FEEDBACK_MAX_ENTRIES]
+            _atomic_write_text(path, "\n".join(lines) + ("\n" if lines else ""))
+
+
+def load_feedback_entries(limit: int = 100) -> list[dict[str, Any]]:
+    """保存済みの意見・報告 (新しい順)。"""
+    cap = max(1, min(int(limit), FEEDBACK_MAX_ENTRIES))
+    if is_redis_configured():
+        redis = _client()
+        raw_values = redis.lrange(FEEDBACK_LIST_KEY, 0, cap - 1)
+        out: list[dict[str, Any]] = []
+        for raw in raw_values or []:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    out.append(data)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return out
+    if _local_store_enabled():
+        with _LOCAL_LOCK:
+            path = _local_feedback_path()
+            if not path.is_file():
+                return []
+            try:
+                lines = [
+                    ln.strip()
+                    for ln in path.read_text(encoding="utf-8").splitlines()
+                    if ln.strip()
+                ]
+            except OSError:
+                return []
+        out = []
+        for raw in lines[:cap]:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    out.append(data)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return out
+    return []
 
 
 def presence_touch(visitor_id: str, *, now: float | None = None) -> int:

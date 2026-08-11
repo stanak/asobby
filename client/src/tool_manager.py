@@ -5,6 +5,8 @@ from hisoutensoku_memory import (
     set_soku_path_hint,
 )
 
+from i18n import t
+
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -42,18 +44,21 @@ class ToolEntry:
             # LOADED 状態はゲーム未起動の間に reset_state() で READY に
             # 戻されるため頼れない。パス設定の有無と稼働中かで決める
             if self.state == ToolState.NO_PATH:
-                return f"stop {self.name}" if self.is_active else f"set {self.name} path"
-            return f"restart {self.name}" if self.is_active else f"load {self.name}"
+                key = "tool.soku.stop" if self.is_active else "tool.soku.set_path"
+            elif self.is_active:
+                key = "tool.soku.restart"
+            else:
+                key = "tool.soku.load"
+            return t(key)
 
         if self.state == ToolState.LOADED and self.is_active:
-            return f"{self.name} loaded"
-        else:
-            if self.state == ToolState.NO_PATH:
-                return f"set {self.name} path"
-            if self.state == ToolState.READY:
-                return f"load {self.name}"
+            return t(f"tool.{self.name}.loaded")
+        if self.state == ToolState.NO_PATH:
+            return t(f"tool.{self.name}.set_path")
+        if self.state == ToolState.READY:
+            return t(f"tool.{self.name}.load")
 
-        return f"{self.name} unknown"
+        return t("tool.unknown", name=self.name)
 
 
 class ToolManager:

@@ -74,9 +74,9 @@ PRESENCE_LOCAL: dict[str, float] = {}
 _PRESENCE_LOCK = threading.Lock()
 
 # ランクマッチ: 昇降格判定に必要な最低試合数
-RANKED_EVAL_MIN_GAMES = 30
+RANKED_EVAL_MIN_GAMES = 50
 # 昇降格判定に使う直近ランクマ対戦数
-RANKED_EVAL_WINDOW = 30
+RANKED_EVAL_WINDOW = 50
 # 1 セッション (同一ペア) でランクマ扱いになるのは最初の 5 戦まで
 RANKED_SESSION_MAX_GAMES = 5
 # この分数以上空くと別セッション (sync 遅延時の streak 判定)
@@ -95,6 +95,14 @@ ADMIN_USER_IDS: set[str] = {
 # 旧クライアントの募集作成を 426 で拒否する。未設定なら警告のみで拒否しない。
 MIN_CLIENT_VERSION = os.environ.get("ASOBBY_MIN_CLIENT_VERSION", "").strip()
 MIN_CLIENT_ENFORCE_AT = os.environ.get("ASOBBY_MIN_CLIENT_ENFORCE_AT", "").strip()
+FEEDBACK_WEBHOOK_URL = os.environ.get("ASOBBY_FEEDBACK_WEBHOOK_URL", "").strip()
+FEEDBACK_COOLDOWN_SEC = 300
+FEEDBACK_MAX_TEXT = 2000
+FEEDBACK_CATEGORY_LABELS = {
+    "bug": "不具合",
+    "feature": "要望",
+    "other": "その他",
+}
 
 
 def is_admin_user(user_id: str) -> bool:
@@ -2002,7 +2010,7 @@ def compute_ranked_stats(matches: list[db.Match], user_id: str) -> dict[str, Any
     recent = _bucket_stats(matches[:RANKED_EVAL_WINDOW], user_id)
     return {
         "total": total,
-        "recent30": {
+        "recent50": {
             "games": recent["games"],
             "wins": recent["wins"],
             "win_rate": recent["win_rate"],
@@ -3261,6 +3269,60 @@ class AnnouncementIn(BaseModel):
     level: Literal["info", "warn"] = "info"
 
 
+class FeedbackIn(BaseModel):
+    category: Literal["bug", "feature", "other"]
+    text: str = Field(..., min_length=1, max_length=FEEDBACK_MAX_TEXT)
+
+    @field_validator("text")
+    @classmethod
+    def strip_text(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("empty")
+        return s
+
+
+async def _notify_feedback_webhook(entry: dict[str, Any]) -> None:
+    url = FEEDBACK_WEBHOOK_URL
+    if not url:
+        return
+    cat = FEEDBACK_CATEGORY_LABELS.get(str(entry.get("category")), "?")
+    user_name = str(entry.get("user_name") or "?")
+    user_id = str(entry.get("user_id") or "?")
+    client_ver = str(entry.get("client_version") or "不明")
+    latest_ver = str(entry.get("latest_client_version") or "")
+    text = str(entry.get("text") or "")[:1900]
+    ts = entry.get("ts")
+    try:
+        ts_iso = (
+            datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+            if ts is not None
+            else datetime.now(timezone.utc).isoformat()
+        )
+    except (TypeError, ValueError, OSError):
+        ts_iso = datetime.now(timezone.utc).isoformat()
+    fields = [
+        {"name": "投稿者", "value": f"{user_name} (`{user_id}`)", "inline": True},
+        {"name": "クライアント", "value": client_ver or "不明", "inline": True},
+    ]
+    if latest_ver:
+        fields.append(
+            {"name": "最新クライアント", "value": latest_ver, "inline": True},
+        )
+    embed = {
+        "title": f"asobby 意見・報告 ({cat})",
+        "description": text,
+        "color": 0x6AB0F3,
+        "fields": fields,
+        "timestamp": ts_iso,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            await http.post(url, json={"embeds": [embed]})
+    except Exception as e:
+        print(f"feedback webhook error: {e}")
+
+
 @app.get("/announcement")
 async def get_announcement() -> dict[str, Any]:
     """現在のお知らせ (なければ null)。Web バナー・クライアント通知用。"""
@@ -3296,6 +3358,69 @@ async def set_announcement(body: AnnouncementIn, request: Request) -> dict[str, 
 async def admin_page() -> FileResponse:
     """管理ページ (お知らせ管理)。権限チェックは API 側で行う。"""
     return FileResponse(STATIC_DIR / "admin.html")
+
+
+@app.get("/feedback")
+async def feedback_page() -> FileResponse:
+    """意見・報告フォーム (Discord ログイン必須)。"""
+    return FileResponse(STATIC_DIR / "feedback.html")
+
+
+@app.post("/feedback")
+async def submit_feedback(body: FeedbackIn, request: Request) -> dict[str, Any]:
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="login required")
+
+    remaining = await asyncio.to_thread(
+        post_redis.feedback_cooldown_remaining, sess["id"]
+    )
+    if remaining > 0:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "cooldown",
+                "retry_after_sec": int(remaining + 0.999),
+            },
+        )
+
+    user_row = await db.get_user(sess["id"])
+    client_version = (user_row.client_version if user_row else "") or ""
+    latest_info = await client_release.get_latest_release()
+    latest_version = ""
+    if latest_info:
+        latest_version = str(latest_info.get("version") or "")
+
+    entry = {
+        "id": uuid4().hex,
+        "ts": now_ts(),
+        "category": body.category,
+        "text": body.text,
+        "user_id": sess["id"],
+        "user_name": sess.get("name") or sess["id"],
+        "client_version": client_version,
+        "latest_client_version": latest_version,
+    }
+    await asyncio.to_thread(post_redis.append_feedback_entry, entry)
+    await asyncio.to_thread(
+        post_redis.feedback_cooldown_mark, sess["id"], FEEDBACK_COOLDOWN_SEC
+    )
+    asyncio.create_task(_notify_feedback_webhook(entry))
+    return {"ok": True, "id": entry["id"], "cooldown_sec": FEEDBACK_COOLDOWN_SEC}
+
+
+@app.get("/admin/feedback")
+async def admin_list_feedback(
+    request: Request,
+    limit: int = Query(100, ge=1, le=200),
+) -> dict[str, Any]:
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="login required")
+    if not is_admin_user(sess["id"]):
+        raise HTTPException(status_code=403, detail="admin only")
+    entries = await asyncio.to_thread(post_redis.load_feedback_entries, limit)
+    return {"entries": entries}
 
 
 @app.get("/user/settings")

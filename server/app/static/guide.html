@@ -15,7 +15,7 @@
   gtag('js', new Date());
   gtag('config', 'G-RJSLH3FRBR');
 </script>
-<script src="/static/i18n.js?v=0.8.1"></script>
+<script src="/static/i18n.js?v=0.8.3"></script>
 <script src="/static/client-update.js"></script>
 <script src="/static/favicon-notify.js"></script>
 <script src="/static/favicon-badge.js"></script>
@@ -383,6 +383,7 @@
     <a href="/replays" data-i18n="nav.replays">リプレイ検索</a>
     <a href="/data/" data-i18n="nav.frameData">フレームデータ</a>
     <a href="/settings" data-i18n="nav.settings">設定</a>
+    <a href="/feedback" data-i18n="nav.feedback">意見・報告</a>
     <a id="nav-client-dl" href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
     <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
     <button type="button" id="lang-toggle" class="lang-btn"></button>
@@ -629,7 +630,7 @@
     <p data-i18n="guide.rankedIntro">ランクマ募集で、同じランク帯の Discord ログイン済み相手と対戦すると、条件を満たす対戦はランクマとして記録されます。</p>
     <p data-i18n="guide.rankedSessionLimit">同じ相手との連続対戦では、ランクマとして数えられるのは最初の 5 戦までです。6 戦目以降はカジュアル扱いになります（募集タイプがランクマのままでも）。</p>
     <p data-i18n="guide.rankedGuestReset">相手が切断したり、別の人が入ったりするとセッションが切り替わり、対戦カウントがリセットされます。一度 5 戦終えた相手でも、間に別の人が入ったあとなら、再びランクマ 5 戦が可能です。</p>
-    <p data-i18n="guide.rankedEval">昇格・降格は、現在のランク帯における直近 30 戦の勝率で判定します（30 戦揃ってから判定されます）。</p>
+    <p data-i18n="guide.rankedEval">昇格・降格は、現在のランク帯における直近 50 戦の勝率で判定します（50 戦揃ってから判定されます）。</p>
     <table class="rank-table">
       <thead>
         <tr>
