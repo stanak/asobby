@@ -103,6 +103,7 @@
     "lobby.rankChoiceTitle":
       "ランクマの開始ランクを選択できます（初回のみ・未選択なら N）",
     "lobby.loginGateLine1": "募集一覧を見るには Discord ログインが必要です。",
+    "lobby.loginGateGuide": "はじめての方 — 使い方を見る",
     "lobby.sectionRanked": "ランクマ募集",
     "lobby.sectionCasual": "カジュアル募集",
     "lobby.colMatch": "Match",
@@ -711,6 +712,7 @@
     "lobby.rankChoiceTitle":
       "Choose your starting ranked tier (first time only; defaults to N if skipped)",
     "lobby.loginGateLine1": "Discord login is required to view listings.",
+    "lobby.loginGateGuide": "New here? Read the guide",
     "lobby.sectionRanked": "Ranked listings",
     "lobby.sectionCasual": "Casual listings",
     "lobby.colMatch": "Match",
