@@ -111,19 +111,25 @@ class ApiClient:
         host_profile: str = "",
         guest_profile: str = "",
         played_at: float = 0,
+        host_wins: int | None = None,
+        guest_wins: int | None = None,
     ) -> dict:
+        payload: dict = {
+            "id": post_id,
+            "owner_token": owner_token,
+            "winner": winner,
+            "host_char": host_char,
+            "guest_char": guest_char,
+            "host_profile": host_profile,
+            "guest_profile": guest_profile,
+            "played_at": played_at,
+        }
+        if host_wins is not None and guest_wins is not None:
+            payload["host_wins"] = host_wins
+            payload["guest_wins"] = guest_wins
         r = await self.http.post(
             f"{self.base}/posts/result",
-            json={
-                "id": post_id,
-                "owner_token": owner_token,
-                "winner": winner,
-                "host_char": host_char,
-                "guest_char": guest_char,
-                "host_profile": host_profile,
-                "guest_profile": guest_profile,
-                "played_at": played_at,
-            },
+            json=payload,
             headers=self._request_headers(),
         )
         r.raise_for_status()
@@ -137,17 +143,23 @@ class ApiClient:
         host_profile: str = "",
         guest_profile: str = "",
         played_at: float = 0,
+        host_wins: int | None = None,
+        guest_wins: int | None = None,
     ) -> dict:
+        payload: dict = {
+            "winner": winner,
+            "host_char": host_char,
+            "guest_char": guest_char,
+            "host_profile": host_profile,
+            "guest_profile": guest_profile,
+            "played_at": played_at,
+        }
+        if host_wins is not None and guest_wins is not None:
+            payload["host_wins"] = host_wins
+            payload["guest_wins"] = guest_wins
         r = await self.http.post(
             f"{self.base}/matches/report",
-            json={
-                "winner": winner,
-                "host_char": host_char,
-                "guest_char": guest_char,
-                "host_profile": host_profile,
-                "guest_profile": guest_profile,
-                "played_at": played_at,
-            },
+            json=payload,
             headers=self._request_headers(),
         )
         r.raise_for_status()

@@ -184,6 +184,9 @@ class Match(Base):
     ranked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # ランクマ成立時のランク帯 (easy / normal / ex / hard / luna / ph)
     match_rank: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    # セット内スコア (ホスト側-ゲスト側)。同時 KO 等で 3-2 などになり得る。
+    host_wins: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    guest_wins: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
     # "host" = ホスト報告 (正)、 "guest" = ゲスト補完報告
     source: Mapped[str] = mapped_column(String(8), default="host", server_default="host")
     played_at: Mapped[Optional[datetime]] = mapped_column(
@@ -587,6 +590,8 @@ async def insert_match_result(
     guest_profile: str = "",
     ranked: bool = False,
     match_rank: Optional[str] = None,
+    host_wins: Optional[int] = None,
+    guest_wins: Optional[int] = None,
     source: str = "host",
     played_at: Optional[datetime] = None,
 ) -> str:
@@ -604,6 +609,8 @@ async def insert_match_result(
             guest_profile=guest_profile,
             ranked=ranked,
             match_rank=match_rank,
+            host_wins=host_wins,
+            guest_wins=guest_wins,
             source=source,
             played_at=played_at if played_at is not None else utcnow(),
         )
@@ -817,6 +824,8 @@ async def promote_guest_match(
     guest_profile: str,
     ranked: bool,
     match_rank: Optional[str] = None,
+    host_wins: Optional[int] = None,
+    guest_wins: Optional[int] = None,
     played_at: Optional[datetime] = None,
 ) -> Optional[Match]:
     """ゲスト報告行をホスト報告に昇格する (delete+insert 禁止)。更新後の Match を返す。"""
@@ -833,6 +842,10 @@ async def promote_guest_match(
         match.guest_profile = guest_profile
         match.ranked = ranked
         match.match_rank = match_rank
+        if host_wins is not None:
+            match.host_wins = host_wins
+        if guest_wins is not None:
+            match.guest_wins = guest_wins
         match.source = "host"
         if played_at is not None:
             match.played_at = played_at

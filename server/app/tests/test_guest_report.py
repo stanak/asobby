@@ -121,6 +121,35 @@ async def test_guest_report_recorded_and_stats():
 
 
 @pytest.mark.asyncio
+async def test_guest_report_stores_set_score():
+    async with app_client() as client:
+        await create_user("889", name="guest2", last_ip="5.6.7.9")
+        guest_token = bearer_token("889", "guest2")
+
+        res = await client.post(
+            "/matches/report",
+            json={
+                **GUEST_REPORT_BODY,
+                "winner": "host",
+                "host_wins": 3,
+                "guest_wins": 2,
+            },
+            headers={"Authorization": f"Bearer {guest_token}"},
+        )
+        assert res.status_code == 200
+        assert res.json()["recorded"] is True
+
+        async with db.session() as s:
+            res_m = await s.execute(
+                select(db.Match).where(db.Match.guest_user_id == "889")
+            )
+            match = res_m.scalar_one()
+            assert match.winner == "host"
+            assert match.host_wins == 3
+            assert match.guest_wins == 2
+
+
+@pytest.mark.asyncio
 async def test_guest_report_duplicate():
     async with app_client() as client:
         await create_user("888", name="guest")

@@ -1061,6 +1061,8 @@ class ReportResultIn(BaseModel):
     host_profile: str = Field(default="", max_length=64)
     guest_profile: str = Field(default="", max_length=64)
     played_at: float = 0
+    host_wins: Optional[int] = Field(default=None, ge=0, le=9)
+    guest_wins: Optional[int] = Field(default=None, ge=0, le=9)
 
 
 class GuestReportIn(BaseModel):
@@ -1070,6 +1072,8 @@ class GuestReportIn(BaseModel):
     host_profile: str = Field(default="", max_length=64)
     guest_profile: str = Field(default="", max_length=64)
     played_at: float = 0
+    host_wins: Optional[int] = Field(default=None, ge=0, le=9)
+    guest_wins: Optional[int] = Field(default=None, ge=0, le=9)
 
 
 class DevicePollIn(BaseModel):
@@ -1125,6 +1129,27 @@ def _normalize_char(char: Optional[int]) -> Optional[int]:
     return None
 
 
+def _normalize_set_score(
+    host_wins: Optional[int], guest_wins: Optional[int]
+) -> tuple[Optional[int], Optional[int]]:
+    if host_wins is None or guest_wins is None:
+        return None, None
+    try:
+        hw, gw = int(host_wins), int(guest_wins)
+    except (TypeError, ValueError):
+        return None, None
+    if hw < 0 or gw < 0 or hw == gw or max(hw, gw) < 2:
+        return None, None
+    return hw, gw
+
+
+def _score_kwargs(host_wins: Optional[int], guest_wins: Optional[int]) -> dict[str, int]:
+    hw, gw = _normalize_set_score(host_wins, guest_wins)
+    if hw is None:
+        return {}
+    return {"host_wins": hw, "guest_wins": gw}
+
+
 class SyncMatchIn(BaseModel):
     client_id: str
     played_at: float
@@ -1136,6 +1161,8 @@ class SyncMatchIn(BaseModel):
     opp_profile: str = Field(default="", max_length=64)
     ranked: bool = False
     match_rank: Optional[str] = None
+    host_wins: Optional[int] = Field(default=None, ge=0, le=9)
+    guest_wins: Optional[int] = Field(default=None, ge=0, le=9)
 
     @field_validator("client_id")
     @classmethod
@@ -2259,10 +2286,10 @@ def _parse_tsk_db(
                 skipped_invalid += 1
                 continue
 
-            if not (0 <= p1win <= 2 and 0 <= p2win <= 2):
+            if not (0 <= p1win <= 9 and 0 <= p2win <= 9):
                 skipped_invalid += 1
                 continue
-            if p1win != 2 and p2win != 2:
+            if p1win == p2win or max(p1win, p2win) < 2:
                 skipped_invalid += 1
                 continue
             if not (0 <= p1id <= 19 and 0 <= p2id <= 19):
@@ -2279,7 +2306,7 @@ def _parse_tsk_db(
                 skipped_duplicate += 1
                 continue
 
-            winner = "host" if p1win == 2 else "guest"
+            winner = "host" if p1win > p2win else "guest"
             to_insert.append({
                 "id": match_id,
                 "host_user_id": user_id,
@@ -2289,6 +2316,8 @@ def _parse_tsk_db(
                 "winner": winner,
                 "host_char": p1id,
                 "guest_char": p2id,
+                "host_wins": p1win,
+                "guest_wins": p2win,
                 "host_profile": _decode_tsk_name(p1name),
                 "guest_profile": _decode_tsk_name(p2name),
                 "ranked": False,
@@ -2442,6 +2471,8 @@ def _match_to_stats_item(match: db.Match, user_id: str, has_replay: bool) -> dic
         "guest_profile": match.guest_profile or "",
         "ranked": match.ranked,
         "match_rank": match.match_rank,
+        "host_wins": match.host_wins,
+        "guest_wins": match.guest_wins,
         "source": match.source,
         "has_replay": has_replay,
     }
@@ -2536,6 +2567,7 @@ def _replay_search_item(
 def _sync_row_from_item(user_id: str, item: SyncMatchIn, match_id: str, played_at: datetime) -> dict[str, Any]:
     my_char = _normalize_char(item.my_char)
     opp_char = _normalize_char(item.opp_char)
+    score = _score_kwargs(item.host_wins, item.guest_wins)
     if item.my_side == "host":
         return {
             "id": match_id,
@@ -2552,6 +2584,7 @@ def _sync_row_from_item(user_id: str, item: SyncMatchIn, match_id: str, played_a
             "match_rank": item.match_rank,
             "source": "sync",
             "played_at": played_at,
+            **score,
         }
     return {
         "id": match_id,
@@ -2568,6 +2601,7 @@ def _sync_row_from_item(user_id: str, item: SyncMatchIn, match_id: str, played_a
         "match_rank": item.match_rank,
         "source": "sync",
         "played_at": played_at,
+        **score,
     }
 
 
@@ -2805,6 +2839,7 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
                         ranked=is_ranked,
                         match_rank=match_rank if is_ranked else None,
                         played_at=played_at,
+                        **_score_kwargs(item.host_wins, item.guest_wins),
                     )
                     if is_ranked:
                         await _bump_session_games(user_id, guest_uid)
@@ -2834,6 +2869,7 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
                         ranked=True,
                         match_rank=match_rank,
                         played_at=played_at,
+                        **_score_kwargs(item.host_wins, item.guest_wins),
                     )
                     await _bump_session_games(user_id, guest_uid)
                     if guest_uid:
@@ -4151,6 +4187,7 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
             ranked=False,
             source="guest",
             played_at=played_at,
+            **_score_kwargs(body.host_wins, body.guest_wins),
         )
         _diag_log(
             f"guest_report_diag: uid={uid} dedup=miss inserted={match_id} "
@@ -4190,6 +4227,7 @@ async def _report_result_inner(body: ReportResultIn) -> dict[str, Any]:
         return {"ok": True, "recorded": False}
 
     played_at = _resolve_report_played_at(body.played_at)
+    score = _score_kwargs(body.host_wins, body.guest_wins)
 
     post = rec.post
     host_ip, _, _ = post.addr.partition(":")
@@ -4336,6 +4374,7 @@ async def _report_result_inner(body: ReportResultIn) -> dict[str, Any]:
                     ranked=promote_ranked,
                     match_rank=promote_match_rank if promote_ranked else None,
                     played_at=played_at,
+                    **score,
                 )
                 is_ranked = promote_ranked
                 match_rank = promote_match_rank
@@ -4374,6 +4413,7 @@ async def _report_result_inner(body: ReportResultIn) -> dict[str, Any]:
                         ranked=promote_ranked,
                         match_rank=promote_match_rank if promote_ranked else None,
                         played_at=played_at,
+                        **score,
                     )
                     is_ranked = promote_ranked
                     match_rank = promote_match_rank
@@ -4406,6 +4446,7 @@ async def _report_result_inner(body: ReportResultIn) -> dict[str, Any]:
                                 ranked=True,
                                 match_rank=promote_match_rank,
                                 played_at=played_at,
+                                **score,
                             )
                             is_ranked = promote_ranked
                             match_rank = promote_match_rank
@@ -4432,6 +4473,7 @@ async def _report_result_inner(body: ReportResultIn) -> dict[str, Any]:
                 match_rank=match_rank,
                 source="host",
                 played_at=played_at,
+                **score,
             )
             newly_recorded = True
 

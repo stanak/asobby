@@ -446,6 +446,7 @@
             <th data-i18n="stats.colOppChar">相手キャラ</th>
             <th data-i18n="stats.colOppProfile">相手プロファイル</th>
             <th data-i18n="stats.colResult">勝敗</th>
+            <th data-i18n="stats.colScore">スコア</th>
             <th data-i18n="stats.colRanked">ランクマ</th>
             <th data-i18n="stats.colReplay">リプレイ</th>
           </tr></thead>
@@ -854,6 +855,11 @@ function formatJst(unixSec) {
   });
 }
 
+function formatSetScore(m) {
+  if (m.host_wins == null || m.guest_wins == null) return "-";
+  return `${m.host_wins}-${m.guest_wins}`;
+}
+
 function resultSymbol(m) {
   if (m.winner === "draw") return { text: "?", cls: "result-unknown" };
   return matchWon(m)
@@ -1174,6 +1180,7 @@ function renderHistory() {
 
     const res = resultSymbol(m);
     appendTextCell(tr, res.text, res.cls);
+    appendTextCell(tr, formatSetScore(m));
 
     appendTextCell(tr, formatRankedCell(m.ranked, m.match_rank));
 
@@ -1197,7 +1204,7 @@ function renderHistory() {
   if (!filtered.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 7;
+    td.colSpan = 8;
     td.style.color = "var(--muted)";
     td.textContent = t("common.noData");
     tr.appendChild(td);

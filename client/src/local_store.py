@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS matches(
   guest_profile TEXT NOT NULL DEFAULT '',
   ranked INTEGER NOT NULL DEFAULT 0,
   match_rank TEXT,
+  host_wins INTEGER,
+  guest_wins INTEGER,
   source TEXT NOT NULL DEFAULT 'local',
   pushed INTEGER NOT NULL DEFAULT 0
 );
@@ -76,6 +78,10 @@ class LocalStore:
         columns = {row[1] for row in cur.fetchall()}
         if "match_rank" not in columns:
             conn.execute("ALTER TABLE matches ADD COLUMN match_rank TEXT")
+        if "host_wins" not in columns:
+            conn.execute("ALTER TABLE matches ADD COLUMN host_wins INTEGER")
+        if "guest_wins" not in columns:
+            conn.execute("ALTER TABLE matches ADD COLUMN guest_wins INTEGER")
         conn.execute("UPDATE matches SET my_side = 'client' WHERE my_side = 'guest'")
 
     @staticmethod
@@ -93,6 +99,8 @@ class LocalStore:
         *,
         ranked: int = 0,
         match_rank: str | None = None,
+        host_wins: int | None = None,
+        guest_wins: int | None = None,
         played_at: float | None = None,
     ) -> str:
         """ローカル対戦を記録する。戻り値は生成した id (重複時は既存 id)。"""
@@ -115,8 +123,8 @@ class LocalStore:
                 INSERT INTO matches(
                   id, server_id, played_at, my_side, winner,
                   host_char, guest_char, host_profile, guest_profile,
-                  ranked, match_rank, source, pushed
-                ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', 0)
+                  ranked, match_rank, host_wins, guest_wins, source, pushed
+                ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', 0)
                 """,
                 (
                     local_id,
@@ -129,6 +137,8 @@ class LocalStore:
                     guest_profile or "",
                     ranked,
                     match_rank,
+                    host_wins,
+                    guest_wins,
                 ),
             )
         return local_id
@@ -198,6 +208,8 @@ class LocalStore:
                     my_side = "client"
                 ranked = int(row.get("ranked", 0) or 0)
                 match_rank = row.get("match_rank")
+                host_wins = row.get("host_wins")
+                guest_wins = row.get("guest_wins")
                 source = str(row.get("source", "server") or "server")
 
                 cur = conn.execute(
@@ -212,7 +224,8 @@ class LocalStore:
                           played_at = ?, my_side = ?, winner = ?,
                           host_char = ?, guest_char = ?,
                           host_profile = ?, guest_profile = ?,
-                          ranked = ?, match_rank = ?, source = ?
+                          ranked = ?, match_rank = ?,
+                          host_wins = ?, guest_wins = ?, source = ?
                         WHERE server_id = ?
                         """,
                         (
@@ -225,6 +238,8 @@ class LocalStore:
                             guest_profile,
                             ranked,
                             match_rank,
+                            host_wins,
+                            guest_wins,
                             source,
                             server_id,
                         ),
@@ -272,7 +287,8 @@ class LocalStore:
                           played_at = ?, my_side = ?, winner = ?,
                           host_char = ?, guest_char = ?,
                           host_profile = ?, guest_profile = ?,
-                          ranked = ?, match_rank = ?
+                          ranked = ?, match_rank = ?,
+                          host_wins = ?, guest_wins = ?
                         WHERE id = ?
                         """,
                         (
@@ -286,6 +302,8 @@ class LocalStore:
                             guest_profile,
                             ranked,
                             match_rank,
+                            host_wins,
+                            guest_wins,
                             local_match["id"],
                         ),
                     )
@@ -324,8 +342,8 @@ class LocalStore:
                     INSERT INTO matches(
                       id, server_id, played_at, my_side, winner,
                       host_char, guest_char, host_profile, guest_profile,
-                      ranked, match_rank, source, pushed
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'server', 1)
+                      ranked, match_rank, host_wins, guest_wins, source, pushed
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'server', 1)
                     """,
                     (
                         server_id,
@@ -339,6 +357,8 @@ class LocalStore:
                         guest_profile,
                         ranked,
                         match_rank,
+                        host_wins,
+                        guest_wins,
                     ),
                 )
                 inserted += 1

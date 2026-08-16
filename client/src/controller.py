@@ -121,15 +121,39 @@ def _match_char_ids(st: DetectionState) -> tuple[Optional[int], Optional[int]]:
     return None, None
 
 
+def _ko_set_score(st: DetectionState) -> tuple[int, int] | None:
+    """PBATTLEMGR の lwin/rwin (左/右のセット内勝利数)。"""
+    if st.lwin is None or st.rwin is None:
+        return None
+    if st.lwin < 0 or st.rwin < 0:
+        return None
+    return st.lwin, st.rwin
+
+
 def _ko_decided(st: DetectionState) -> bool:
-    return (
-        st.btl_mode == 5
-        and st.lwin is not None
-        and st.rwin is not None
-        and 0 <= st.lwin <= 2
-        and 0 <= st.rwin <= 2
-        and (st.lwin == 2 or st.rwin == 2)
-    )
+    """セット終了 KO。同時 KO で 2-2 などになった場合は未決着 (False)。"""
+    if st.btl_mode != 5:
+        return False
+    score = _ko_set_score(st)
+    if score is None:
+        return False
+    lwin, rwin = score
+    return lwin != rwin and max(lwin, rwin) >= 2
+
+
+def _ko_match_winner(st: DetectionState) -> str:
+    assert _ko_decided(st)
+    lwin, rwin = _ko_set_score(st)  # type: ignore[misc]
+    return "host" if lwin > rwin else "guest"
+
+
+def _ko_result_core(st: DetectionState) -> dict:
+    lwin, rwin = _ko_set_score(st)  # type: ignore[misc]
+    return {
+        "winner": _ko_match_winner(st),
+        "host_wins": lwin,
+        "guest_wins": rwin,
+    }
 
 
 def _ko_fingerprint(st: DetectionState, *, host_char: int, guest_char: int) -> str:
@@ -1386,6 +1410,8 @@ class Controller:
                             host_profile=act.payload.get("host_profile", ""),
                             guest_profile=act.payload.get("guest_profile", ""),
                             played_at=act.payload.get("played_at", 0),
+                            host_wins=act.payload.get("host_wins"),
+                            guest_wins=act.payload.get("guest_wins"),
                         )
                         self._replay_result_reported = True
                         server_id = str(resp.get("match_id") or "")
@@ -1414,6 +1440,8 @@ class Controller:
                             host_profile=act.payload.get("host_profile", ""),
                             guest_profile=act.payload.get("guest_profile", ""),
                             played_at=act.payload.get("played_at", 0),
+                            host_wins=act.payload.get("host_wins"),
+                            guest_wins=act.payload.get("guest_wins"),
                         )
                         if resp.get("recorded") or resp.get("reason") == "duplicate":
                             self._replay_result_reported = True
@@ -1583,7 +1611,6 @@ class Controller:
             played_at = time.time()
             self._last_ko_played_at = played_at
             my_side = "host" if st.net_side == "host" else "client"
-            winner = "host" if st.lwin == 2 else "guest"
             ranked = 0
             match_rank = None
             if (
@@ -1597,7 +1624,7 @@ class Controller:
                 match_rank = self._post_rank_band or None
             payload = {
                 "my_side": my_side,
-                "winner": winner,
+                **_ko_result_core(st),
                 "host_char": host_char,
                 "guest_char": guest_char,
                 "host_profile": (st.lprof or ""),
@@ -1626,11 +1653,10 @@ class Controller:
             )
         ):
             self._result_reported = True
-            winner = "host" if st.lwin == 2 else "guest"
             played_at = self._last_ko_played_at or time.time()
             self._last_ko_played_at = played_at
             return Action("result", {
-                "winner": winner,
+                **_ko_result_core(st),
                 "host_char": host_char,
                 "guest_char": guest_char,
                 "host_profile": (st.lprof or ""),
@@ -1653,11 +1679,10 @@ class Controller:
             )
         ):
             self._result_reported = True
-            winner = "host" if st.lwin == 2 else "guest"
             played_at = self._last_ko_played_at or time.time()
             self._last_ko_played_at = played_at
             return Action("guest_result", {
-                "winner": winner,
+                **_ko_result_core(st),
                 "host_char": host_char,
                 "guest_char": guest_char,
                 "host_profile": (st.lprof or ""),
@@ -1722,7 +1747,7 @@ class Controller:
             self._replay_match_meta = {
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
-                "winner": "host" if st.lwin == 2 else "guest",
+                **_ko_result_core(st),
                 "my_side": st.net_side or "",
             }
 
@@ -2155,6 +2180,11 @@ class Controller:
         match_rank = row.get("match_rank")
         if match_rank:
             payload["match_rank"] = match_rank
+        host_wins = row.get("host_wins")
+        guest_wins = row.get("guest_wins")
+        if host_wins is not None and guest_wins is not None:
+            payload["host_wins"] = host_wins
+            payload["guest_wins"] = guest_wins
         return payload
 
     async def stats_sync_loop(self) -> None:

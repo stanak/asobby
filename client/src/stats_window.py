@@ -49,6 +49,14 @@ def _char_label(cid: int | None) -> str:
     return CHAR_NAME.get(cid, f"CHAR_{cid}")
 
 
+def _format_set_score(row: dict) -> str:
+    host_wins = row.get("host_wins")
+    guest_wins = row.get("guest_wins")
+    if host_wins is None or guest_wins is None:
+        return "-"
+    return f"{host_wins}-{guest_wins}"
+
+
 def _result_symbol(row: dict) -> str:
     if LocalStore.is_draw(row):
         return "?"
@@ -581,7 +589,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
     history_body = ttk.Frame(history_frame)
     history_body.pack(fill="both", expand=True)
 
-    history_cols = ("played_at", "my_char", "opp_char", "opp_profile", "result", "ranked")
+    history_cols = ("played_at", "my_char", "opp_char", "opp_profile", "result", "score", "ranked")
     history_tree = ttk.Treeview(
         history_body, columns=history_cols, show="headings", height=12
     )
@@ -590,12 +598,14 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
     history_tree.heading("opp_char", text=t("stats.col.opp_char"))
     history_tree.heading("opp_profile", text=t("stats.col.opp_profile"))
     history_tree.heading("result", text=t("stats.col.result"))
+    history_tree.heading("score", text=t("stats.col.score"))
     history_tree.heading("ranked", text=t("stats.col.ranked"))
     history_tree.column("played_at", width=90, anchor="w")
     history_tree.column("my_char", width=80, anchor="w")
     history_tree.column("opp_char", width=80, anchor="w")
-    history_tree.column("opp_profile", width=180, anchor="w")
+    history_tree.column("opp_profile", width=160, anchor="w")
     history_tree.column("result", width=40, anchor="center")
+    history_tree.column("score", width=48, anchor="center")
     history_tree.column("ranked", width=50, anchor="center")
     history_scroll = ttk.Scrollbar(history_body, orient="vertical", command=history_tree.yview)
     history_tree.configure(yscrollcommand=history_scroll.set)
@@ -723,6 +733,7 @@ def open_stats_window(parent, local_store: LocalStore) -> None:
                     _char_label(LocalStore.opp_char_id(row)),
                     LocalStore.opp_profile(row),
                     _result_symbol(row),
+                    _format_set_score(row),
                     _format_ranked_cell(row),
                 ),
             )

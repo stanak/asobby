@@ -6,7 +6,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from controller import (  # noqa: E402
+    _ko_decided,
     _ko_fingerprint,
+    _ko_match_winner,
     _ko_recordable,
     _match_char_ids,
     _valid_char_id,
@@ -114,3 +116,23 @@ def test_ko_fingerprint_ignores_unstable_char_ids():
     fp1 = _ko_fingerprint(st, host_char=0, guest_char=8)
     fp2 = _ko_fingerprint(st, host_char=0, guest_char=0)
     assert fp1 == fp2 == "2:0:host:guest"
+
+
+def test_ko_decided_standard_scores():
+    assert _ko_decided(_state(lwin=2, rwin=0))
+    assert _ko_decided(_state(lwin=2, rwin=1))
+    assert _ko_decided(_state(lwin=1, rwin=2))
+    assert _ko_match_winner(_state(lwin=2, rwin=1)) == "host"
+    assert _ko_match_winner(_state(lwin=1, rwin=3)) == "guest"
+
+
+def test_ko_decided_rejects_double_ko_and_in_progress():
+    assert not _ko_decided(_state(lwin=2, rwin=2))
+    assert not _ko_decided(_state(lwin=1, rwin=1))
+    assert not _ko_decided(_state(lwin=1, rwin=0))
+    assert _ko_fingerprint(_state(lwin=2, rwin=2)) == ""
+
+
+def test_ko_decided_extended_set():
+    assert _ko_decided(_state(lwin=3, rwin=2))
+    assert _ko_match_winner(_state(lwin=3, rwin=2)) == "host"
