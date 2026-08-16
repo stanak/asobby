@@ -53,6 +53,8 @@ GUEST_PRESENCE_INTERVAL_SEC = 20.0  # ゲスト側の対戦中自己申告 (同�
 RANKED_SESSION_MAX_GAMES = 5  # 同一相手との連続ランクマ上限 (サーバー側と揃える)
 RELEASES_URL = "https://github.com/stanak/asobby/releases/latest"
 CREATE_RETRY_COOLDOWN_SEC = 10
+CREATE_HOSTCHECK_COOLDOWN_SEC = 5  # 到達性の一時失敗後、通知前の再試行間隔
+CREATE_HOSTCHECK_NOTIFY_AFTER = 2  # この回数に達するまで通知しない
 MYIP_REFRESH_INTERVAL_SEC = 60.0
 UPDATE_CHECK_INTERVAL_SEC = 6 * 3600
 
@@ -255,6 +257,7 @@ class Controller:
         self._notified_announcement_id: str = ""
         self._notified_reachability_lost: bool = False
         self._notified_paused_recruit: bool = False
+        self._create_hostcheck_failures: int = 0
 
         # Discord ログイン（任意）。設定に保存済みのセッションを復元する。
         auth = self.config_mgr.get_section("auth")
@@ -735,6 +738,7 @@ class Controller:
         self._pending_local_match = None
         self._notified_casual_fallback = False
         self._notified_reachability_lost = False
+        self._create_hostcheck_failures = 0
         self.pending_requests.clear()
         self.my_post = replace(
             self.my_post,
@@ -2333,6 +2337,7 @@ class Controller:
 
     def _on_create_result(self, result: dict, *, giuroll: bool) -> None:
         self._create_pending = False
+        self._create_hostcheck_failures = 0
         post = result.get("post") or {}
         token = result.get("owner_token") or ""
         rid = post.get("id")
@@ -2371,6 +2376,24 @@ class Controller:
             pass
         return ""
 
+    def _handle_create_hostcheck_failure(self, *, detail: str) -> None:
+        """到達性 409: 1 回目は通知せず短い間隔で再試行する。"""
+        self._create_pending = False
+        self._last_sent_payload = None
+        self._create_hostcheck_failures += 1
+        self._next_create_ts = time.time() + CREATE_HOSTCHECK_COOLDOWN_SEC
+        if self._create_hostcheck_failures >= CREATE_HOSTCHECK_NOTIFY_AFTER:
+            self._notify_post_unreachable(detail=detail)
+        else:
+            self.log_sink(
+                "warn",
+                t(
+                    "log.create_hostcheck_will_retry",
+                    attempt=self._create_hostcheck_failures,
+                    max_attempts=CREATE_HOSTCHECK_NOTIFY_AFTER,
+                ),
+            )
+
     def _notify_post_unreachable(self, *, detail: str) -> None:
         detail_lower = detail.lower()
         if "autopunch" in detail_lower:
@@ -2402,16 +2425,18 @@ class Controller:
         if act.type == "create":
             self._create_pending = False
             self._last_sent_payload = None
-            self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
 
             if code in (401, 403):
+                self._create_hostcheck_failures = 0
+                self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
                 self._clear_expired_session()
                 self.notify_sink(t("notify.session_expired"))
             elif code == 409:
-                self._notify_post_unreachable(
+                self._handle_create_hostcheck_failure(
                     detail=self._post_failure_detail(e),
                 )
             elif code == 426:
+                self._create_hostcheck_failures = 0
                 # サーバーの最低バージョンゲート: 更新しないと募集できない
                 self._next_create_ts = time.time() + 300  # 通知連発を避ける
                 self.notify_sink(
@@ -2421,8 +2446,11 @@ class Controller:
                 )
                 self.log_sink("error", "Client version rejected by server (426).")
             elif code == 429:
+                self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
                 self.log_sink("warn", "Rate limited by server. Retrying soon.")
             else:
+                self._create_hostcheck_failures = 0
+                self._next_create_ts = time.time() + CREATE_RETRY_COOLDOWN_SEC
                 self.log_sink("error", f"API error: {e}")
             return
 

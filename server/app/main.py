@@ -837,6 +837,13 @@ HOSTCHECK_LOST_AFTER_FAILS = int(
 HOSTCHECK_STARTUP_GRACE_SEC = float(
     os.environ.get("ASOBBY_HOSTCHECK_STARTUP_GRACE_SEC", "45")
 )
+# 初回 create の到達性検証: ホスト立て直後の一瞬の失敗を吸収する短いリトライ
+CREATE_HOSTCHECK_ATTEMPTS = int(
+    os.environ.get("ASOBBY_CREATE_HOSTCHECK_ATTEMPTS", "3")
+)
+CREATE_HOSTCHECK_RETRY_SEC = float(
+    os.environ.get("ASOBBY_CREATE_HOSTCHECK_RETRY_SEC", "0.35")
+)
 # デプロイ中ハートビートが途切れても Redis から募集を復元できるよう、
 # 起動時 hydrate だけ updated_at 判定を POST_TTL より長く許容する。
 HYDRATE_STALE_GRACE_SEC = float(
@@ -3608,14 +3615,17 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
 
     check_addr = probe_addr_for_hostcheck(body.addr, fallback_host=ip)
     try:
-        direct_reachable, autopunch_effective, reachability_uncertain = await verify_hostable_or_raise(
-            check_addr, autopunch=body.autopunch, giuroll=body.giuroll
+        direct_reachable, autopunch_effective, reachability_uncertain = (
+            await verify_hostable_for_create(
+                check_addr, autopunch=body.autopunch, giuroll=body.giuroll
+            )
         )
     except HTTPException as exc:
         _diag_log(
             f"create_diag: user={owner_user_id or '-'} name={owner_name} "
             f"type={body.post_type} addr={check_addr} result=hostcheck_fail "
-            f"status={exc.status_code} autopunch={body.autopunch} giuroll={body.giuroll}"
+            f"status={exc.status_code} autopunch={body.autopunch} giuroll={body.giuroll} "
+            f"attempts={CREATE_HOSTCHECK_ATTEMPTS}"
         )
         raise
 
@@ -5208,6 +5218,33 @@ def host_probe_kwargs(*, giuroll: bool = False) -> dict[str, float | int]:
         "timeout_sec": 0.25,
         "needed_consecutive": 2,
     }
+
+
+async def verify_hostable_for_create(
+    addr: str,
+    *,
+    autopunch: bool = False,
+    giuroll: bool = False,
+) -> tuple[bool, bool, bool]:
+    """create 専用: 到達性検証を短い間隔で数回試す (初回のみ)。"""
+    last_exc: Optional[HTTPException] = None
+    for attempt in range(CREATE_HOSTCHECK_ATTEMPTS):
+        try:
+            return await verify_hostable_or_raise(
+                addr, autopunch=autopunch, giuroll=giuroll
+            )
+        except HTTPException as exc:
+            last_exc = exc
+            if exc.status_code != 409 or attempt + 1 >= CREATE_HOSTCHECK_ATTEMPTS:
+                raise
+            _diag_log(
+                f"create_hostcheck_retry: attempt={attempt + 1} "
+                f"addr={addr} autopunch={autopunch} giuroll={giuroll}"
+            )
+            await asyncio.sleep(CREATE_HOSTCHECK_RETRY_SEC)
+    if last_exc is not None:
+        raise last_exc
+    raise HTTPException(status_code=409, detail={"message": "host not reachable"})
 
 
 async def verify_hostable_or_raise(
