@@ -343,6 +343,100 @@ async def test_replay_upload_blocked_by_guest_refusal():
 
 
 @pytest.mark.asyncio
+async def test_replay_upload_blocked_when_opponent_not_asobby():
+    """ゲスト報告のみ (host 非 asobby) ではリプレイを保存しない。"""
+    async with app_client() as client:
+        await create_user("200", name="guest", last_ip="5.6.7.8")
+
+        guest_token = bearer_token("200", "guest")
+        gr = await client.post(
+            "/matches/report",
+            json={
+                "winner": "guest",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "HostP",
+                "guest_profile": "GuestP",
+            },
+            headers={"Authorization": f"Bearer {guest_token}"},
+        )
+        assert gr.status_code == 200
+        assert gr.json()["recorded"] is True
+
+        up = await client.post(
+            "/replays/upload",
+            content=REPLAY_DATA,
+            headers={
+                "Authorization": f"Bearer {guest_token}",
+                "Content-Type": "application/octet-stream",
+            },
+        )
+        assert up.status_code == 200
+        data = up.json()
+        assert data["stored"] is False
+        assert data["reason"] == "opponent_not_asobby"
+
+        async with db.session() as s:
+            from sqlalchemy import select
+
+            match = (await s.execute(select(db.Match))).scalar_one()
+            assert match.host_user_id is None
+            assert match.guest_user_id == "200"
+            assert await db.replay_count_for_match(match.id) == 0
+
+
+@pytest.mark.asyncio
+async def test_replay_upload_stored_when_both_asobby():
+    """host / guest 双方が同定済みなら保存される (既存フローの確認)。"""
+    async with app_client() as client:
+        await create_user("999", name="host", last_ip="1.2.3.4")
+        await create_user("888", name="guest", last_ip="5.6.7.8")
+
+        host_token = bearer_token("999", "host")
+        res = await client.post(
+            "/posts",
+            json={"post_type": "casual", "addr": "1.2.3.4:10800"},
+            headers={"Authorization": f"Bearer {host_token}"},
+        )
+        post = res.json()["post"]
+        owner_token = res.json()["owner_token"]
+        rec = main.RECORDS[post["id"]]
+        await main.apply_guest_probe(rec, make_0x08_reply("5.6.7.8"))
+        assert rec.guest_user_id == "888"
+
+        await client.post(
+            "/posts/result",
+            json={
+                "id": post["id"],
+                "owner_token": owner_token,
+                "winner": "host",
+                "host_char": 0,
+                "guest_char": 1,
+                "host_profile": "hp",
+                "guest_profile": "gp",
+            },
+        )
+
+        async with db.session() as s:
+            from sqlalchemy import select
+
+            match = (await s.execute(select(db.Match))).scalar_one()
+            assert match.host_user_id == "999"
+            assert match.guest_user_id == "888"
+            assert db.match_replay_both_asobby(match)
+
+        up = await client.post(
+            "/replays/upload",
+            content=REPLAY_DATA,
+            headers={
+                "Authorization": f"Bearer {host_token}",
+                "Content-Type": "application/octet-stream",
+            },
+        )
+        assert up.json()["stored"] is True
+
+
+@pytest.mark.asyncio
 async def test_replay_upload_no_match():
     async with app_client() as client:
         await create_user("777", name="solo")

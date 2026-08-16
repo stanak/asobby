@@ -254,6 +254,7 @@ class Controller:
         self._replay_result_reported = False
         self._replay_match_meta: Optional[dict[str, str]] = None
         self._replay_upload_lock = asyncio.Lock()
+        self._battle_opponent_asobby: Optional[bool] = None
 
         self.pending_requests: list[PendingRequest] = []
 
@@ -1334,6 +1335,9 @@ class Controller:
                         self.notify_sink(msg)
                         self.log_sink("info", msg)
                     guest_connected = resp.get("guest_connected")
+                    guest_user_id = str(resp.get("guest_user_id") or "")
+                    if guest_user_id:
+                        self._battle_opponent_asobby = True
                     post_rank = str(resp.get("rank") or "")
                     if post_rank:
                         self._post_rank_band = post_rank
@@ -1670,6 +1674,7 @@ class Controller:
             if self._stable_for("battle_enter", 0.5, seen=True):
                 self._battle_start_ts = now
                 self._replay_result_reported = False
+                self._battle_opponent_asobby = None
                 # 新ラウンド開始時のみ KO 報告フラグをリセットする。
                 # btl_mode!=5 への一瞬の落ち込みでリセットすると二重登録になる。
                 self._result_reported = False
@@ -1974,6 +1979,9 @@ class Controller:
         if self.is_replay_refusal_active():
             self.log_sink("info", "Replay upload skipped: replay saving refused")
             return
+        if self._battle_opponent_asobby is False:
+            self.log_sink("info", t("log.replay_opponent_not_asobby"))
+            return
         if not exe_path:
             self.log_sink("info", "Replay upload skipped: exe path unknown")
             return
@@ -2034,7 +2042,7 @@ class Controller:
             except httpx.HTTPError as e:
                 self.log_sink("error", f"Replay upload failed: {e}")
                 return
-            if resp.get("stored") or resp.get("reason") != "no_match":
+            if resp.get("stored") or resp.get("reason") not in ("no_match",):
                 break
 
         if resp.get("stored"):
@@ -2048,6 +2056,8 @@ class Controller:
             self.log_sink("info", f"Replay not stored: {reason}")
             if reason == "refused":
                 self.log_sink("info", t("log.replay_refusal_blocked"))
+            elif reason == "opponent_not_asobby":
+                self.log_sink("info", t("log.replay_opponent_not_asobby"))
             if reason == "duplicate":
                 self._uploaded_replay_keys.add(upload_key)
 
@@ -2247,6 +2257,12 @@ class Controller:
             return
         if isinstance(resp, dict):
             self._handle_ranked_session_info(resp.get("ranked_session"))
+            if my_side == "client":
+                identified = resp.get("identified")
+                if identified is True:
+                    self._battle_opponent_asobby = True
+                elif identified is False:
+                    self._battle_opponent_asobby = False
 
     def _handle_ranked_session_info(self, session: object) -> None:
         """サーバーから返るランクマセッション状態を通知に反映する (ホスト/ゲスト共通)。"""

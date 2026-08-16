@@ -4033,6 +4033,9 @@ async def upload_replay(
             return {"ok": True, "stored": False, "reason": "duplicate"}
         return {"ok": True, "stored": False, "reason": "no_match"}
 
+    if not db.match_replay_both_asobby(match):
+        return {"ok": True, "stored": False, "reason": "opponent_not_asobby"}
+
     if await db.match_replay_blocked(match):
         return {"ok": True, "stored": False, "reason": "refused"}
 

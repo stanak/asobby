@@ -361,6 +361,11 @@ async def get_user_settings(user_id: str) -> dict[str, Any]:
         return normalize_user_settings(user.settings or {})
 
 
+def match_replay_both_asobby(match: Match) -> bool:
+    """Both host and guest are identified as logged-in asobby users."""
+    return bool(match.host_user_id and match.guest_user_id)
+
+
 async def match_replay_blocked(match: Match) -> bool:
     """Either participant refusing replay upload blocks storage for both."""
     async with session() as s:

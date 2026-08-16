@@ -200,6 +200,7 @@ asobby クライアントはローカル SQLite に戦績を保持し、`POST /m
 - asobby クライアントはネット対戦終了後、非想天則が保存した `.rep` を自動アップロードする
 - 1 対戦 (match) に対して 1 ファイルのみ保存される（両側クライアントがアップロードしても先着 1 件のみ）
 - 同一 `.rep` 内容 (SHA-256) は 1 件のみ保存される（別 match への誤再利用を拒否）
+- **保存条件**: 対戦双方が Discord ログイン済み asobby ユーザーとして同定されていること。どちらか一方でも非導入・未同定なら保存しない (`reason: opponent_not_asobby`)。リプレイ保存拒否設定が有効な参加者がいる場合も保存しない (`reason: refused`)
 - **ダウンロードは公開**（`GET /replays/{match_id}` はログイン不要。リプレイ未添付・存在しない match は 404）
 - **`GET /replays` でリプレイ検索ページ**を提供。プレイヤー名（プロファイル / Discord 表示名）、キャラ、日付範囲、並び順（日付・ランク）で絞り込み可能
 - ファイル名形式: `{日時JST}_{host_profile}-{host_char}_vs_{guest_profile}-{guest_char}_{result}.rep`
