@@ -158,6 +158,16 @@
     border-color: #e5c07b;
     opacity: 1;
   }
+  .rank-status {
+    display: block;
+    width: fit-content;
+    margin-top: 3px;
+    margin-right: 0;
+    font-weight: normal;
+  }
+  .rank-status[data-rank-status="unset"],
+  .rank-status[data-rank-status="initial"],
+  .rank-status[data-rank-status="provisional"] { border-style: dashed; }
   a.stream { color: var(--accent); text-decoration: none; }
   a.stream:hover { text-decoration: underline; }
   button.copy {
@@ -979,6 +989,23 @@ function rankLabel(p) {
   return label;
 }
 
+function rankCell(p) {
+  const cell = td(rankLabel(p));
+  cell.className = "rank-cell";
+  if (!p.rank) return cell;
+  const status = ["unset", "initial", "provisional", "ranked"].includes(p.rank_status)
+    ? p.rank_status : "unknown";
+  const n = Number.isInteger(p.ranked_games) && p.ranked_games >= 0 ? p.ranked_games : "?";
+  const marker = badge(t(`lobby.rankStatus.${status}`, { n }), {
+    title: t(`lobby.rankStatusTitle.${status}`, { n }),
+  });
+  marker.classList.add("rank-status");
+  marker.dataset.rankStatus = status;
+  marker.setAttribute("aria-label", marker.title);
+  cell.appendChild(marker);
+  return cell;
+}
+
 function sortPosts(list) {
   list.sort((a, b) => {
     const dc = (b.created_at || 0) - (a.created_at || 0);
@@ -1431,7 +1458,7 @@ function buildRow(p) {
   }
   userCell.appendChild(userInner);
   tr.appendChild(userCell);
-  tr.appendChild(td(rankLabel(p)));
+  tr.appendChild(rankCell(p));
 
   const requireCell = document.createElement("td");
   if (p.giuroll) requireCell.appendChild(badge(t("common.badgeGiu")));

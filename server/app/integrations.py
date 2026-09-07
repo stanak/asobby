@@ -38,6 +38,7 @@ API_REQUESTS_PER_MINUTE = 60
 # guest IPs, private message queues or user settings leave this API.
 LOBBY_FIELDS = (
     "id", "owner_name", "rank", "post_type", "rating", "comment", "created_at",
+    "rank_status", "ranked_games",
     "stream_url", "giuroll", "autopunch", "direct_reachable",
     "reachability_uncertain", "reachability_lost", "match_status", "guest_name",
     "ranked_active", "country_code", "country_name",

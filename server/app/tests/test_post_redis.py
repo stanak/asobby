@@ -16,6 +16,8 @@ def test_post_record_roundtrip():
     now = main.now_ts()
     post = main.Post(
         rank="normal",
+        rank_status="provisional",
+        ranked_games=17,
         post_type="casual",
         rating=1500.0,
         addr="1.2.3.4:10800",
@@ -51,6 +53,7 @@ def test_post_record_roundtrip():
     assert restored.sent_log == rec.sent_log
     assert restored.post.addr == rec.post.addr
     assert restored.post.owner_name == rec.post.owner_name
+    assert restored.post.rank_status == "provisional" and restored.post.ranked_games == 17
 
 
 def test_post_store_memory_mode_is_noop(monkeypatch):

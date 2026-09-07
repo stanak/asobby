@@ -458,6 +458,30 @@ async def get_user_rank(user_id: str) -> tuple[str, float, float] | None:
         return user.rank, user.ts_mu, user.ts_sigma
 
 
+async def get_user_rank_evidence(user_id: str) -> tuple[str, float, float, bool, int] | None:
+    """Rank and lifetime confirmed ranked-game count, in one DB snapshot.
+
+    Count both host and guest participation once per match. Casual/imported
+    games and unfinished results are not evidence of ranked experience.
+    Lifetime counts do not reset when promotion changes rank_changed_at.
+    """
+    games = (
+        select(func.count(Match.id))
+        .where(
+            or_(Match.host_user_id == user_id, Match.guest_user_id == user_id),
+            Match.ranked.is_(True),
+            Match.winner.in_(("host", "guest", "draw")),
+        )
+        .scalar_subquery()
+    )
+    async with session() as s:
+        row = (await s.execute(
+            select(User.rank, User.ts_mu, User.ts_sigma, User.rank_locked, games)
+            .where(User.id == user_id)
+        )).one_or_none()
+        return tuple(row) if row is not None else None
+
+
 async def choose_initial_rank(user_id: str, rank: str) -> bool:
     """初回のみ開始ランクを設定する。rank_locked が False のときだけ成功。"""
     async with session() as s:

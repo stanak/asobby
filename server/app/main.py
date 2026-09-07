@@ -911,6 +911,8 @@ class Post:
 
     id: str = field(default_factory=lambda: uuid4().hex)
     rank: str = "normal"  # ホストの現在システムランク (作成時に設定)
+    rank_status: str = "unknown"  # unset / initial / provisional / ranked / unknown
+    ranked_games: Optional[int] = None  # lifetime confirmed ranked games; None = unavailable
     post_type: str = "casual"  # "casual" | "ranked"
     rating: Optional[float] = None  # ph のみ表示レート
     addr: str = ""
@@ -1039,6 +1041,8 @@ def post_record_from_dict(data: dict[str, Any]) -> PostRecord:
         rec.owner_user_id = ""
         rec.post.post_type = "casual"
         rec.post.rank = ""
+        rec.post.rank_status = "unknown"
+        rec.post.ranked_games = None
         rec.post.rating = None
         rec.post.ranked_active = False
         rec.post.supports_messages = False
@@ -1535,6 +1539,8 @@ async def _hydrate_records_from_redis() -> None:
         if now - rec.post.updated_at >= hydrate_ttl:
             await _delete_persisted_post(rec.post.id)
             continue
+        if rec.monitor is None and rec.owner_user_id and db.is_configured():
+            apply_post_rank(rec, await host_rank_for_post(rec.owner_user_id))
         RECORDS[rec.post.id] = rec
         restored += 1
         # 対戦中の再起動では「対戦開始」のエッジ検知 (entering_battle) が
@@ -2132,14 +2138,46 @@ def compute_ranked_stats(matches: list[db.Match], user_id: str) -> dict[str, Any
     }
 
 
-async def host_rank_for_post(owner_user_id: str) -> tuple[str, Optional[float]]:
-    """募集作成時に Post.rank / Post.rating を決める。"""
-    rank_info = await db.get_user_rank(owner_user_id)
+async def host_rank_for_post(owner_user_id: str) -> dict[str, Any]:
+    """Server-owned rank evidence; never infer intent from an initial choice."""
+    rank_info = (
+        await db.get_user_rank_evidence(owner_user_id)
+        if owner_user_id and db.is_configured() else None
+    )
     if rank_info is None:
-        return "normal", None
-    rank, mu, sigma = rank_info
+        return {"rank": "normal", "rating": None, "rank_status": "unknown", "ranked_games": None}
+    rank, mu, sigma, locked, games = rank_info
     rating = display_rating(mu, sigma) if rank == "ph" else None
-    return rank, rating
+    status = (
+        "ranked" if games >= RANKED_EVAL_MIN_GAMES else
+        "provisional" if games > 0 else
+        "initial" if locked else "unset"
+    )
+    return {"rank": rank, "rating": rating, "rank_status": status, "ranked_games": games}
+
+
+def apply_post_rank(rec: PostRecord, details: dict[str, Any]) -> bool:
+    changed = any(getattr(rec.post, key) != value for key, value in details.items())
+    old_rank = rec.post.rank
+    for key, value in details.items():
+        setattr(rec.post, key, value)
+    if old_rank != rec.post.rank:
+        refresh_ranked_active(rec)
+    return changed
+
+
+async def refresh_active_post_ranks(user_ids: set[str]) -> None:
+    """Publish choices/results immediately without renewing a host's lease."""
+    for user_id in user_ids - {""}:
+        records = [r for r in RECORDS.values() if r.monitor is None and r.owner_user_id == user_id]
+        if not records:
+            continue
+        details = await host_rank_for_post(user_id)
+        for rec in records:
+            if RECORDS.get(rec.post.id) is rec and apply_post_rank(rec, details):
+                await _persist_record(rec)
+                if RECORDS.get(rec.post.id) is rec:
+                    await HUB.publish("upsert", asdict(rec.post))
 
 
 def _match_user_view(
@@ -3652,6 +3690,7 @@ async def choose_initial_rank(body: ChooseRankIn, request: Request) -> dict[str,
         raise HTTPException(status_code=401, detail="invalid or expired session")
     if not await db.choose_initial_rank(sess["id"], body.rank):
         raise HTTPException(status_code=409, detail="rank already locked")
+    await refresh_active_post_ranks({sess["id"]})
     return {"ok": True, "rank": body.rank}
 
 
@@ -3713,15 +3752,14 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
 
     LAST_CREATE_AT[ip] = now
 
-    host_rank, host_rating = await host_rank_for_post(owner_user_id)
+    rank_details = await host_rank_for_post(owner_user_id)
 
     # Registration can be accepted while the native client's probe is running.
     if any(r.monitor is not None and udp_probe.same_address(r.post.addr, body.addr) for r in RECORDS.values()):
         raise HTTPException(409, "this host already has a listing")
     post = Post(
-        rank=host_rank,
+        **rank_details,
         post_type=body.post_type,
-        rating=host_rating,
         addr=body.addr,
         comment=body.comment,
         stream_url=body.stream_url,
@@ -3868,13 +3906,7 @@ async def _update_post_inner(body: UpdatePostIn) -> dict[str, Any]:
     p.updated_at = now
     geoip.apply_country_from_addr(p, addr=p.addr)
     if rec.owner_user_id:
-        host_rank, host_rating = await host_rank_for_post(rec.owner_user_id)
-        if p.rank != host_rank:
-            p.rank = host_rank
-            p.rating = host_rating
-            refresh_ranked_active(rec)
-        elif p.rank == "ph":
-            p.rating = host_rating
+        apply_post_rank(rec, await host_rank_for_post(rec.owner_user_id))
     entering_battle = (
         body.net_status in (NET_CHECKING, NET_BATTLE)
         and old_net_status not in (NET_CHECKING, NET_BATTLE)
@@ -4611,6 +4643,7 @@ async def _report_result_inner(body: ReportResultIn) -> dict[str, Any]:
                     body.host_char,
                     body.guest_char,
                 )
+            await refresh_active_post_ranks({rec.owner_user_id, rec.guest_user_id})
 
     await _persist_record(rec)
     result_path = "promote" if promoted else "insert"

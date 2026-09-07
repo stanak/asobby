@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import socket
 import struct
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -20,6 +21,7 @@ os.environ.setdefault("ASOBBY_DISCORD_CLIENT_SECRET", "t")
 os.environ.setdefault("ASOBBY_SESSION_SECRET", "sec")
 
 import db
+import integrations
 import main
 
 
@@ -212,3 +214,127 @@ async def test_ranked_game_locks_both_users():
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert locked.status_code == 409
+
+        # First confirmed ranked result updates the public listing immediately.
+        assert rec.post.rank_status == "provisional"
+        assert rec.post.ranked_games == 1
+        guest_details = await main.host_rank_for_post("888")
+        assert guest_details["rank_status"] == "provisional"
+        assert guest_details["ranked_games"] == 1
+
+
+async def add_rank_history(user_id, games, *, ranked=True, winner="host", guest_side=False):
+    async with db.session() as s:
+        s.add_all([
+            db.Match(
+                host_user_id=None if guest_side else user_id,
+                guest_user_id=user_id if guest_side else None,
+                ranked=ranked, winner=winner, played_at=db.utcnow(), match_rank="normal" if ranked else None,
+            )
+            for _ in range(games)
+        ])
+        await s.commit()
+
+
+@pytest.mark.asyncio
+async def test_rank_evidence_same_normal_choice_updates_lobby_api_and_sse():
+    async with app_client() as client:
+        await create_user("111")
+        headers = {"Authorization": "Bearer " + bearer_token("111")}
+        created = await client.post("/posts", headers=headers, json={"addr": "1.2.3.4:10800"})
+        assert created.status_code == 200
+        post = created.json()["post"]
+        assert (post["rank"], post["rank_status"], post["ranked_games"]) == ("normal", "unset", 0)
+        cred = await main.INTEGRATIONS.create(integrations.IntegrationInput(name="rank-reader"))
+        api_headers = {"Authorization": "Bearer " + cred["api_key"]}
+        before = await client.get("/api/v1/lobby", headers=api_headers)
+        assert before.json()["posts"][0]["rank_status"] == "unset"
+        q = await main.HUB.subscribe()
+        try:
+            choice = await client.post("/rank/initial", headers=headers, json={"rank": "normal"})
+            assert choice.status_code == 200
+            event = q.get_nowait()
+            assert '"rank_status":"initial"' in event and '"ranked_games":0' in event
+        finally:
+            await main.HUB.unsubscribe(q)
+        lobby = (await client.get("/posts", headers=headers)).json()[0]
+        assert (lobby["rank"], lobby["rank_status"], lobby["ranked_games"]) == ("normal", "initial", 0)
+        assert lobby["updated_at"] == post["updated_at"]  # no heartbeat lease renewal
+        after = await client.get("/api/v1/lobby", headers={**api_headers, "If-None-Match": before.headers["etag"]})
+        assert after.status_code == 200
+        assert after.json()["posts"][0]["rank_status"] == "initial"
+        assert not {"owner_user_id", "rank_locked", "owner_token"} & after.json()["posts"][0].keys()
+        assert after.json()["revision"] != before.json()["revision"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("games,status", [(0, "initial"), (1, "provisional"), (49, "provisional"), (50, "ranked"), (51, "ranked")])
+async def test_rank_evidence_boundaries_and_both_player_sides(games, status):
+    async with app_client():
+        await create_user("111", rank_locked=True)
+        await add_rank_history("111", games // 2)
+        await add_rank_history("111", games - games // 2, guest_side=True, winner="draw")
+        await add_rank_history("111", 60, ranked=False)
+        await add_rank_history("111", 60, winner="")
+        details = await main.host_rank_for_post("111")
+        assert details["rank"] == "normal"
+        assert details["rank_status"] == status and details["ranked_games"] == games
+
+
+@pytest.mark.asyncio
+async def test_rank_evidence_survives_promotion_and_unknown_is_not_zero():
+    async with app_client():
+        await create_user("111", rank="luna", rank_locked=True)
+        await add_rank_history("111", 50)
+        await db.set_user_rank("111", "ph")
+        assert not await db.fetch_ranked_matches_at_current_rank("111")
+        details = await main.host_rank_for_post("111")
+        assert details["rank"] == "ph" and details["rating"] is not None
+        assert details["rank_status"] == "ranked" and details["ranked_games"] == 50
+        unknown = await main.host_rank_for_post("missing")
+        assert unknown["rank_status"] == "unknown" and unknown["ranked_games"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_cannot_forge_rank_evidence_and_refreshes_unchanged_rank():
+    async with app_client() as client:
+        await create_user("111", rank_locked=True)
+        headers = {"Authorization": "Bearer " + bearer_token("111")}
+        created = await client.post("/posts", headers=headers, json={
+            "addr": "1.2.3.4:10800", "rank_status": "ranked", "ranked_games": 999,
+        })
+        data = created.json()
+        assert data["post"]["rank_status"] == "initial" and data["post"]["ranked_games"] == 0
+        await add_rank_history("111", 49)
+        updated = await client.post("/posts/update", json={
+            "id": data["post"]["id"], "owner_token": data["owner_token"], "addr": "1.2.3.4:10800",
+            "rank_status": "ranked", "ranked_games": 999,
+        })
+        assert updated.status_code == 200
+        rec = main.RECORDS[data["post"]["id"]]
+        assert rec.post.rank == "normal" and rec.post.rank_status == "provisional"
+        assert rec.post.ranked_games == 49
+        await add_rank_history("111", 1)
+        await main.refresh_active_post_ranks({"111"})
+        assert rec.post.rank == "normal" and rec.post.rank_status == "ranked"
+        assert rec.post.ranked_games == 50
+
+
+@pytest.mark.asyncio
+async def test_hydrate_recomputes_rank_evidence_for_older_records(monkeypatch):
+    async with app_client():
+        await create_user("111", rank_locked=True)
+        await add_rank_history("111", 3)
+        now = time.time()
+        rec = main.PostRecord(
+            post=main.Post(id="old", rank="normal", created_at=now, updated_at=now),
+            owner_token="test", creator_ip="", owner_user_id="111",
+        )
+        data = main.post_record_to_dict(rec)
+        data["post"].pop("rank_status")
+        data["post"].pop("ranked_games")
+        monkeypatch.setattr(main.post_redis, "is_configured", lambda: True)
+        monkeypatch.setattr(main.post_redis, "load_all_record_dicts", lambda: [data])
+        await main._hydrate_records_from_redis()
+        restored = main.RECORDS["old"].post
+        assert restored.rank_status == "provisional" and restored.ranked_games == 3

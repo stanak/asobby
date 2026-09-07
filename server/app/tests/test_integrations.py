@@ -263,6 +263,31 @@ async def test_heartbeat_suppression_zero_list_retry_and_coalescing(service, mon
 
 
 @pytest.mark.asyncio
+async def test_rank_evidence_alone_triggers_webhook_and_snapshot_revision(service):
+    instance, posts, _ = service
+    posts[0].update(rank="normal", rank_status="initial", ranked_games=0)
+    cred = await instance.create(mod.IntegrationInput(name="test", webhook_url="https://receiver.example/hook"))
+    ident = cred["integration"]["id"]
+    try:
+        await instance.tick()
+        previous_id = instance.pending[ident].event["id"]
+        previous_revision = instance.snapshot()["revision"]
+        for status, games in [("provisional", 1), ("provisional", 2), ("ranked", 50)]:
+            posts[0].update(rank_status=status, ranked_games=games)
+            await instance.tick()
+            snapshot = instance.snapshot()
+            assert snapshot["posts"][0]["rank"] == "normal"
+            assert snapshot["posts"][0]["rank_status"] == status
+            assert snapshot["posts"][0]["ranked_games"] == games
+            assert snapshot["revision"] != previous_revision
+            assert instance.pending[ident].event["id"] != previous_id
+            previous_revision = snapshot["revision"]
+            previous_id = instance.pending[ident].event["id"]
+    finally:
+        await instance.stop()
+
+
+@pytest.mark.asyncio
 async def test_failed_delivery_reuses_event_id(service, monkeypatch):
     instance, _, _ = service
     result = await instance.create(mod.IntegrationInput(name="test", webhook_url="https://receiver.example/hook"))

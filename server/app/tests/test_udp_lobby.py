@@ -84,6 +84,7 @@ async def test_api_scope_pending_hidden_until_checked_and_casual_publication(ser
         assert response.json()["state"] == "active"
         post = response.json()["post"]
         assert post["post_type"] == "casual" and post["rank"] == ""
+        assert post["rank_status"] == "unknown" and post["ranked_games"] is None
         assert not post["supports_messages"] and not post["ping_warn_enabled"]
         assert not {"owner_token", "monitor", "external_user_id", "integration_id"} & post.keys()
         assert s.records[ident].owner_user_id == "" and s.records[ident].creator_ip == ""
@@ -116,7 +117,10 @@ async def test_foreign_status_is_hidden_and_no_identity_forging_fields(service):
     cred, other = await credential(s), await credential(s)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_for(s)), base_url="https://asobby.test") as client:
         headers = {"Authorization": "Bearer " + cred["api_key"]}
-        for extra in [{"post_type": "ranked"}, {"owner_user_id": "victim"}, {"net_status": 4}, {"giuroll": True}, {"autopunch": True}]:
+        for extra in [
+            {"post_type": "ranked"}, {"owner_user_id": "victim"}, {"net_status": 4},
+            {"giuroll": True}, {"autopunch": True}, {"rank_status": "ranked"}, {"ranked_games": 999},
+        ]:
             assert (await client.post("/api/v1/posts", json={**body().model_dump(), **extra}, headers=headers)).status_code == 422
         response = await client.post("/api/v1/posts", json=body().model_dump(), headers=headers)
         ident = response.json()["id"]
@@ -353,6 +357,10 @@ def test_monitor_roundtrip_and_normal_post_defaults():
     restored = main.post_record_from_dict(main.post_record_to_dict(rec))
     assert asdict(restored.monitor) == asdict(monitor)
     assert restored.post.supports_messages is False
+    forged = main.post_record_to_dict(rec)
+    forged["post"].update(rank_status="ranked", ranked_games=500)
+    sanitized = main.post_record_from_dict(forged)
+    assert sanitized.post.rank_status == "unknown" and sanitized.post.ranked_games is None
     normal = main.post_record_from_dict({"post": {"id": "normal"}})
     assert normal.monitor is None and normal.post.supports_messages
     assert main.post_record_ttl(normal) == 20

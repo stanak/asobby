@@ -63,7 +63,39 @@ const { chromium } = require(process.argv[2] || "playwright");
     assert.equal(await row.locator(".msg-btn").count(), 1);
     await page.evaluate(() => window.mockSse.handlers.close({ data: JSON.stringify({ id: "udp" }) }));
     assert.equal(await row.count(), 0);
+    // Same normal rank, different evidence: both lobby tables and languages.
+    for (const lang of ["ja", "en"]) {
+      await page.goto(`https://asobby.test/?lang=${lang}`);
+      await page.waitForFunction(() => window.mockSse?.handlers.snapshot);
+      const cases = lang === "ja" ? [
+        ["unset", 0, "未設定"], ["initial", 0, "初期設定"],
+        ["provisional", 49, "暫定・49戦"], ["ranked", 50, "ランク戦50戦"],
+        ["unknown", null, "実績不明"],
+      ] : [
+        ["unset", 0, "Not set"], ["initial", 0, "Initial rank"],
+        ["provisional", 49, "Provisional · 49 games"], ["ranked", 50, "50 ranked games"],
+        ["unknown", null, "History unknown"],
+      ];
+      for (const post_type of ["casual", "ranked"]) {
+        for (const [rank_status, ranked_games, label] of cases) {
+          const p = { ...post, rank: "normal", post_type, rank_status, ranked_games };
+          await page.evaluate(p => window.mockSse.handlers.snapshot({ data: JSON.stringify([p]) }), p);
+          const cell = page.locator(`#${post_type}-rows .rank-cell`);
+          assert.match(await cell.innerText(), /^N/);
+          assert.equal(await cell.locator(".rank-status").innerText(), label);
+          assert.equal(await cell.locator(".rank-status").getAttribute("data-rank-status"), rank_status);
+          assert.ok(await cell.locator(".rank-status").getAttribute("aria-label"));
+        }
+      }
+      // Ph still displays its numeric rating, and missing rank stays blank.
+      await page.evaluate(p => window.mockSse.handlers.snapshot({ data: JSON.stringify([p]) }), {
+        ...post, rank: "ph", rating: 123.5, rank_status: "ranked", ranked_games: 100,
+      });
+      assert.match(await page.locator("#casual-rows .rank-cell").innerText(), /Ph \(123\.5\)/i);
+      await page.evaluate(p => window.mockSse.handlers.upsert({ data: JSON.stringify(p) }), post);
+      assert.equal(await page.locator("#casual-rows .rank-cell").innerText(), "");
+    }
     assert.deepEqual(errors, []);
-    console.log("UDP lobby UI passed: normal casual table, badges, states, safe text, message capability, SSE removal.");
+    console.log("Lobby UI passed: UDP listings, JA/EN rank evidence in both tables, Ph rating, unknown history, safe text, messages and SSE.");
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
