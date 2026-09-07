@@ -970,6 +970,7 @@ const pingBannerBodyEl = document.getElementById("ping-banner-body");
 const pingBannerRetryEl = document.getElementById("ping-banner-retry");
 
 function rankLabel(p) {
+  if (!p.rank) return "";
   const key = (p.rank || "easy").toLowerCase();
   const label = RANK_LABEL[key] || p.rank || "";
   if (key === "ph" && p.rating != null) {
@@ -1076,6 +1077,7 @@ async function sendMessage(postId, type, statusEl, btn) {
 }
 
 function messageOptionsForPost(p) {
+  if (p.supports_messages === false) return [];
   return [
     {
       type: "giuroll_request",
@@ -1391,7 +1393,8 @@ function buildRow(p) {
   if (p.net_status === NET_BATTLE) tr.classList.add("battle");
   if (p.reachability_lost) tr.classList.add("unreachable");
 
-  tr.appendChild(td(p.match_status || ""));
+  const stateKey = ({ 3: "common.hostWaiting", 2: "common.hostConnected", 0: "common.hostUnknown" })[p.net_status];
+  tr.appendChild(td(p.match_status || (stateKey ? t(stateKey) : "")));
 
   const userCell = document.createElement("td");
   userCell.className = "user-cell";

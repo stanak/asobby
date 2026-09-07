@@ -146,8 +146,9 @@
 
   <section class="panel" id="integrations-panel" hidden>
     <h2>外部連携（募集一覧 API・Webhook）</h2>
-    <p class="muted">管理者が許可したサービスに募集一覧を提供します。Webhook を設定すると、募集の変更を通知します。登録・再開時にも通知が送られます。</p>
+    <p class="muted">管理者が許可したサービスに募集一覧を提供します。Webhook を設定すると、募集の変更を通知します。登録・再開時にも通知が送られます。募集作成は連携ごとに追加で許可できます。</p>
     <p class="muted">一覧 API: <code id="integration-api-url">/api/v1/lobby</code></p>
+    <p class="muted">募集登録 API: <code>POST /api/v1/posts</code>（作成権限が必要）</p>
     <form id="integration-form">
       <label>連携名
         <input id="integration-name" type="text" maxlength="80" required placeholder="例: コミュニティの募集一覧">
@@ -159,6 +160,8 @@
       <p class="muted" id="integration-edit-note" hidden>保存済み URL は秘密情報保護のため表示しません。変更するときだけ入力してください。</p>
       <label><input id="integration-enabled" type="checkbox" checked> この連携を有効にする</label>
       <label><input id="integration-address" type="checkbox"> 一覧 API に対戦用 IP・ポートを含める</label>
+      <label><input id="integration-posting" type="checkbox"> カジュアル募集の登録を許可する（サーバーが UDP で維持）</label>
+      <p class="muted">募集作成を許可する連携は、投稿者の確認と IP 掲載への同意を取得してください。登録後はホストの生存確認で掲載を維持し、固定の掲載期限・手動終了操作はありません。この権限を外すか連携を停止・削除すると、その連携の募集も取り下げます。</p>
       <p class="muted">IP を含めない場合も、表示名・コメント・対戦状態などは連携先が取得できます。API キーの共有先と、一覧の掲載先を確認してください。</p>
       <div class="row">
         <button class="primary" id="integration-save" type="submit">登録してキーを発行</button>
@@ -167,7 +170,7 @@
     </form>
     <div id="integration-credentials" hidden>
       <strong>キーは今回だけ表示します。連携先に保存してください。</strong>
-      <p class="muted">API キーは一覧取得用、署名シークレットは Webhook の送信元確認用です。紛失した場合は再発行できます。</p>
+      <p class="muted">API キーは一覧取得と、許可した場合は募集登録に使います。署名シークレットは Webhook の送信元確認用です。紛失した場合は再発行できます。</p>
       <label>API キー<input id="integration-api-key" type="text" readonly autocomplete="off"></label>
       <button type="button" id="integration-copy-api">API キーをコピー</button>
       <label>署名シークレット<input id="integration-signing-secret" type="text" readonly autocomplete="off"></label>

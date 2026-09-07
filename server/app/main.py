@@ -44,6 +44,8 @@ import geoip
 import post_redis
 import client_release
 import integrations
+import udp_lobby
+import udp_probe
 
 ALLOWED_STREAM_DOMAINS = {
     "youtube.com",
@@ -605,6 +607,8 @@ async def _link_guest_to_active_posts(
     if hp and gp:
         candidates: list[PostRecord] = []
         for rec in list(RECORDS.values()):
+            if getattr(rec, "monitor", None) is not None:
+                continue
             if rec.owner_user_id == user.id:
                 continue
             if rec.post.net_status not in (NET_CHECKING, NET_BATTLE):
@@ -638,6 +642,8 @@ async def _link_guest_to_active_posts(
     # 2) 従来の IP 照合フォールバック
     linked: Optional[PostRecord] = None
     for rec in list(RECORDS.values()):
+        if getattr(rec, "monitor", None) is not None:
+            continue
         if rec.owner_user_id == user.id:
             continue
         if not rec.guest_ip and ip:
@@ -931,6 +937,7 @@ class Post:
     ping_warn_giuroll_ms: int = PING_WARN_GIUROLL_MS_DEFAULT  # Giuroll ホスト向け警告しきい値
     country_code: str = ""  # addr の IP から推定した ISO 3166-1 alpha-2
     country_name: str = ""  # 表示用国名（日本語優先）
+    supports_messages: bool = True
 
 
 @dataclass
@@ -954,6 +961,7 @@ class PostRecord:
     sent_log: dict[str, dict] = field(default_factory=dict)
     last_hostcheck_at: float = 0.0
     hostcheck_fail_streak: int = 0  # 募集中再検証の連続失敗回数 (到達性喪失検知用)
+    monitor: Optional[udp_lobby.Monitor] = None
 
 
 POST_REDIS_TTL_SEC = POST_TTL_SEC + 30
@@ -964,13 +972,22 @@ def post_is_in_battle(rec: PostRecord) -> bool:
 
 
 def post_record_ttl(rec: PostRecord) -> float:
+    if getattr(rec, "monitor", None) is not None:
+        return float("inf")  # server UDP checks, not a client heartbeat lease
     if post_is_in_battle(rec):
         return POST_BATTLE_TTL_SEC
     return POST_TTL_SEC
 
 
-def post_record_redis_ttl(rec: PostRecord) -> int:
+def post_record_redis_ttl(rec: PostRecord) -> Optional[int]:
+    if getattr(rec, "monitor", None) is not None:
+        return None
     return int(post_record_ttl(rec) + 30)
+
+
+def record_is_listed(rec: PostRecord) -> bool:
+    monitor = getattr(rec, "monitor", None)
+    return monitor is None or monitor.published
 
 
 def post_record_to_dict(rec: PostRecord) -> dict[str, Any]:
@@ -991,6 +1008,7 @@ def post_record_to_dict(rec: PostRecord) -> dict[str, Any]:
         "sent_log": dict(rec.sent_log),
         "last_hostcheck_at": rec.last_hostcheck_at,
         "hostcheck_fail_streak": rec.hostcheck_fail_streak,
+        "monitor": asdict(rec.monitor) if rec.monitor is not None else None,
     }
 
 
@@ -1014,7 +1032,17 @@ def post_record_from_dict(data: dict[str, Any]) -> PostRecord:
         sent_log=dict(data.get("sent_log") or {}),
         last_hostcheck_at=float(data.get("last_hostcheck_at", 0) or 0),
         hostcheck_fail_streak=int(data.get("hostcheck_fail_streak", 0) or 0),
+        monitor=udp_lobby.Monitor(**data["monitor"]) if data.get("monitor") else None,
     )
+    if rec.monitor is not None:
+        udp_probe.public_address(rec.post.addr)
+        rec.owner_user_id = ""
+        rec.post.post_type = "casual"
+        rec.post.rank = ""
+        rec.post.rating = None
+        rec.post.ranked_active = False
+        rec.post.supports_messages = False
+        rec.post.ping_warn_enabled = False
     if not rec.post.guest_user_id and rec.guest_user_id:
         rec.post.guest_user_id = rec.guest_user_id
     return rec
@@ -1498,7 +1526,7 @@ async def _hydrate_records_from_redis() -> None:
     for data in rows:
         try:
             rec = post_record_from_dict(data)
-        except (TypeError, KeyError):
+        except (TypeError, KeyError, ValueError):
             post_id = str((data.get("post") or {}).get("id", ""))
             if post_id:
                 await _delete_persisted_post(post_id)
@@ -1512,7 +1540,8 @@ async def _hydrate_records_from_redis() -> None:
         # 対戦中の再起動では「対戦開始」のエッジ検知 (entering_battle) が
         # 失われるため、ゲスト未同定なら強制プローブを再実行して復元する
         if (
-            rec.post.net_status in (NET_CHECKING, NET_BATTLE)
+            rec.monitor is None
+            and rec.post.net_status in (NET_CHECKING, NET_BATTLE)
             and not rec.guest_ip
         ):
             asyncio.get_running_loop().create_task(
@@ -1686,11 +1715,14 @@ async def lifespan(app: FastAPI):
     guest_probe_task = asyncio.create_task(guest_probe_loop())
     try:
         await INTEGRATIONS.start()
+        await UDP_LOBBY.start()
         yield
     finally:
         cleanup_task.cancel()
         guest_probe_task.cancel()
+        await UDP_LOBBY.stop()
         await INTEGRATIONS.stop()
+        await asyncio.gather(cleanup_task, guest_probe_task, return_exceptions=True)
         if db.is_configured():
             await db.dispose()
 
@@ -1700,12 +1732,40 @@ def integration_posts() -> list[dict[str, Any]]:
     now = time.time()
     return [
         asdict(rec.post) for rec in list(RECORDS.values())
-        if now - rec.post.updated_at < post_record_ttl(rec)
+        if record_is_listed(rec) and now - rec.post.updated_at < post_record_ttl(rec)
     ]
 
 
 INTEGRATIONS = integrations.IntegrationService(integration_posts, PUBLIC_BASE_URL)
+
+
+def make_udp_record(body: udp_lobby.Registration, monitor: udp_lobby.Monitor) -> PostRecord:
+    now = now_ts()
+    post = Post(
+        rank="", post_type="casual", addr=body.addr, owner_name=body.owner_name,
+        comment=body.comment, stream_url=body.stream_url,
+        created_at=now, updated_at=now, supports_messages=False, ping_warn_enabled=False,
+    )
+    geoip.apply_country_from_addr(post, addr=post.addr)
+    # external_user_id is namespaced by the trusted integration, NOT an asobby
+    # account/Discord identity. Do not touch user IP history or rank tables.
+    return PostRecord(post=post, owner_token=secrets.token_urlsafe(24), creator_ip="", monitor=monitor)
+
+
+UDP_LOBBY = udp_lobby.Service(
+    records=RECORDS, integrations=INTEGRATIONS, make_record=make_udp_record,
+    save=lambda rec: post_redis.save_record_dict(post_record_to_dict(rec), ttl_sec=None),
+    delete=post_redis.delete_record, publish=HUB.publish,
+    probe=lambda addr, **kwargs: udp_probe.check(
+        addr, echo=soku_echo_packet(), lock=_probe_lock,
+        bind_host=_probe_bind_addr(), bind_port=PROBE_BIND_PORT,
+        relay=AUTOPUNCH_RELAY, **kwargs,
+    ),
+    enabled=lambda: HOSTCHECK_ENABLED,
+    stream_allowed=lambda value: is_allowed_stream_url(value),
+)
 app = FastAPI(title="asobby api", version="0.2", lifespan=lifespan)
+app.include_router(udp_lobby.build_router(UDP_LOBBY))
 app.include_router(integrations.build_router(
     INTEGRATIONS,
     lambda request: resolve_session(request),
@@ -1827,13 +1887,13 @@ def sorted_public_posts() -> list[dict[str, Any]]:
         RECORDS.values(),
         key=lambda r: (-r.post.created_at, r.post.id),
     )
-    return [asdict(r.post) for r in records]
+    return [asdict(r.post) for r in records if record_is_listed(r)]
 
 
 def user_has_other_posts(user_id: str) -> bool:
     if not user_id:
         return False
-    return any(rec.owner_user_id != user_id for rec in RECORDS.values())
+    return any(record_is_listed(rec) and rec.owner_user_id != user_id for rec in RECORDS.values())
 
 
 def is_other_post(rec: PostRecord, user_id: str, user_name: str) -> bool:
@@ -1895,6 +1955,8 @@ def compute_favicon_badges(
     casual_any = False
     pings = ping_by_post_id or {}
     for rec in RECORDS.values():
+        if not record_is_listed(rec):
+            continue
         if not is_other_post(rec, user_id, user_name):
             continue
         ping_ms = pings.get(rec.post.id)
@@ -3632,6 +3694,8 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=429, detail="too many active posts")
 
     check_addr = probe_addr_for_hostcheck(body.addr, fallback_host=ip)
+    if any(r.monitor is not None and udp_probe.same_address(r.post.addr, body.addr) for r in RECORDS.values()):
+        raise HTTPException(409, "this host already has a listing")
     try:
         direct_reachable, autopunch_effective, reachability_uncertain = (
             await verify_hostable_for_create(
@@ -3651,6 +3715,9 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
 
     host_rank, host_rating = await host_rank_for_post(owner_user_id)
 
+    # Registration can be accepted while the native client's probe is running.
+    if any(r.monitor is not None and udp_probe.same_address(r.post.addr, body.addr) for r in RECORDS.values()):
+        raise HTTPException(409, "this host already has a listing")
     post = Post(
         rank=host_rank,
         post_type=body.post_type,
@@ -3719,6 +3786,8 @@ async def _update_post_inner(body: UpdatePostIn) -> dict[str, Any]:
     p = rec.post
     now = now_ts()
 
+    if any(r is not rec and r.monitor is not None and udp_probe.same_address(r.post.addr, body.addr) for r in RECORDS.values()):
+        raise HTTPException(409, "this host already has a listing")
     reverify = should_reverify_host_on_update(
         rec,
         addr=body.addr,
@@ -3772,6 +3841,8 @@ async def _update_post_inner(body: UpdatePostIn) -> dict[str, Any]:
                 p.reachability_uncertain = reachability_uncertain
         rec.last_hostcheck_at = now
 
+    if any(r is not rec and r.monitor is not None and udp_probe.same_address(r.post.addr, body.addr) for r in RECORDS.values()):
+        raise HTTPException(409, "this host already has a listing")
     if body.autopunch and not p.direct_reachable:
         p.autopunch = True
         p.reachability_uncertain = True
@@ -3859,6 +3930,8 @@ async def post_message(post_id: str, body: PostMessageIn, request: Request) -> d
         raise HTTPException(status_code=400, detail="cannot message your own post")
 
     post = rec.post
+    if not post.supports_messages:
+        raise HTTPException(status_code=409, detail="host cannot receive messages")
     if body.type == "giuroll_request":
         if post.giuroll:
             raise HTTPException(status_code=409, detail="giuroll is already enabled")
@@ -4810,6 +4883,8 @@ def guest_probe_paused(rec: PostRecord) -> bool:
 def probe_target_records() -> list[PostRecord]:
     out: list[PostRecord] = []
     for rec in RECORDS.values():
+        if getattr(rec, "monitor", None) is not None:
+            continue  # UDP_LOBBY owns all monitoring, including after a match
         if RECORDS.get(rec.post.id) is not rec:
             continue
         if parse_probe_addr(rec.post) is None:
@@ -4853,7 +4928,7 @@ def probe_post_status(
 
 async def probe_guest_for_record(rec: PostRecord, *, force: bool = False) -> None:
     """募集 1 件に対して echo プローブを 1 回実行する (heartbeat 用)。"""
-    if rec.guest_ip and not force:
+    if getattr(rec, "monitor", None) is not None or rec.guest_ip and not force:
         return
     parsed = parse_probe_addr(rec.post)
     if parsed is None:

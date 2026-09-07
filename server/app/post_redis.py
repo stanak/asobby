@@ -99,7 +99,7 @@ def _post_key(post_id: str) -> str:
     return f"{POST_KEY_PREFIX}{post_id}"
 
 
-def _local_save_record_dict(data: dict[str, Any], *, ttl_sec: int) -> None:
+def _local_save_record_dict(data: dict[str, Any], *, ttl_sec: int | None) -> None:
     post_id = str((data.get("post") or {}).get("id", ""))
     if not post_id:
         return
@@ -228,7 +228,7 @@ def _local_append_chat_message(msg: dict[str, Any], *, max_messages: int) -> Non
         _atomic_write_text(path, "[" + ",".join(payloads) + "]")
 
 
-def save_record_dict(data: dict[str, Any], *, ttl_sec: int) -> None:
+def save_record_dict(data: dict[str, Any], *, ttl_sec: int | None) -> None:
     """PostRecord の dict 表現を保存する (TTL は hydrate 側で判定)。"""
     if is_redis_configured():
         post_id = str((data.get("post") or {}).get("id", ""))
@@ -236,7 +236,12 @@ def save_record_dict(data: dict[str, Any], *, ttl_sec: int) -> None:
             return
         payload = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
         redis = _client()
-        redis.set(_post_key(post_id), payload, ex=max(ttl_sec, 1))
+        if ttl_sec is None:
+            # UDP-managed listings have no publication deadline. Only their
+            # monitor decides when they end, including across server restarts.
+            redis.set(_post_key(post_id), payload)
+        else:
+            redis.set(_post_key(post_id), payload, ex=max(ttl_sec, 1))
         redis.sadd(POST_INDEX_KEY, post_id)
         return
     if _local_store_enabled():

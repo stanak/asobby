@@ -106,6 +106,7 @@ class IntegrationInput(BaseModel):
     webhook_url: str = ""
     enabled: bool = True
     include_address: bool = False
+    allow_posting: bool = False
 
     @field_validator("name")
     @classmethod
@@ -126,6 +127,7 @@ class IntegrationPatch(BaseModel):
     webhook_url: str | None = None
     enabled: bool | None = None
     include_address: bool | None = None
+    allow_posting: bool | None = None
 
 
 class Integration(IntegrationInput):
@@ -144,6 +146,7 @@ class Integration(IntegrationInput):
         return {
             "id": self.id, "name": self.name, "enabled": self.enabled,
             "include_address": self.include_address,
+            "allow_posting": self.allow_posting,
             "webhook_host": httpx.URL(self.webhook_url).host if self.webhook_url else "",
             "created_at": self.created_at, "last_success_at": self.last_success_at,
             "last_error": self.last_error, "last_status": self.last_status,
