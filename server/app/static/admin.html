@@ -100,6 +100,18 @@
     word-break: break-word;
     font: inherit;
   }
+  #integrations-panel input[type="text"], #integrations-panel input[type="url"] {
+    width: 100%; padding: 8px; margin-top: 4px; font: inherit;
+    background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+  }
+  #integrations-panel form > label { display: block; margin-top: 12px; }
+  #integration-list { display: grid; gap: 12px; margin-top: 14px; }
+  .integration-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .integration-card p { margin: 6px 0; overflow-wrap: anywhere; }
+  #integration-status { white-space: pre-wrap; overflow-wrap: anywhere; }
+  #integration-status[data-error="true"] { color: var(--err); }
+  #integration-credentials { border: 1px solid var(--warn); padding: 12px; margin-top: 14px; border-radius: 8px; }
+  #integration-credentials input { font-family: monospace !important; }
 </style>
 </head>
 <body>
@@ -131,6 +143,41 @@
     <div id="preview" class="preview"></div>
     <p class="muted" id="meta"></p>
   </div>
+
+  <section class="panel" id="integrations-panel" hidden>
+    <h2>外部連携（募集一覧 API・Webhook）</h2>
+    <p class="muted">管理者が許可したサービスに募集一覧を提供します。Webhook を設定すると、募集の変更を通知します。登録・再開時にも通知が送られます。</p>
+    <p class="muted">一覧 API: <code id="integration-api-url">/api/v1/lobby</code></p>
+    <form id="integration-form">
+      <label>連携名
+        <input id="integration-name" type="text" maxlength="80" required placeholder="例: コミュニティの募集一覧">
+      </label>
+      <label><input id="integration-api-only" type="checkbox"> Webhook を使わず API のみ利用する</label>
+      <label>送信先 URL（HTTPS）
+        <input id="integration-url" type="url" maxlength="2048" autocomplete="off" placeholder="https://…">
+      </label>
+      <p class="muted" id="integration-edit-note" hidden>保存済み URL は秘密情報保護のため表示しません。変更するときだけ入力してください。</p>
+      <label><input id="integration-enabled" type="checkbox" checked> この連携を有効にする</label>
+      <label><input id="integration-address" type="checkbox"> 一覧 API に対戦用 IP・ポートを含める</label>
+      <p class="muted">IP を含めない場合も、表示名・コメント・対戦状態などは連携先が取得できます。API キーの共有先と、一覧の掲載先を確認してください。</p>
+      <div class="row">
+        <button class="primary" id="integration-save" type="submit">登録してキーを発行</button>
+        <button id="integration-cancel" type="button" hidden>編集をやめる</button>
+      </div>
+    </form>
+    <div id="integration-credentials" hidden>
+      <strong>キーは今回だけ表示します。連携先に保存してください。</strong>
+      <p class="muted">API キーは一覧取得用、署名シークレットは Webhook の送信元確認用です。紛失した場合は再発行できます。</p>
+      <label>API キー<input id="integration-api-key" type="text" readonly autocomplete="off"></label>
+      <button type="button" id="integration-copy-api">API キーをコピー</button>
+      <label>署名シークレット<input id="integration-signing-secret" type="text" readonly autocomplete="off"></label>
+      <button type="button" id="integration-copy-secret">署名シークレットをコピー</button>
+      <button type="button" id="integration-hide-credentials">キーを閉じる</button>
+    </div>
+    <p id="integration-status" role="status" aria-live="polite"></p>
+    <button id="integration-refresh" type="button">配信状況を更新</button>
+    <div id="integration-list"></div>
+  </section>
 
   <div class="panel" id="feedback-panel" style="display:none">
     <h2>意見・報告</h2>
@@ -199,15 +246,21 @@
       const dt = e.ts ? new Date(e.ts * 1000).toLocaleString() : "";
       const cat = FEEDBACK_CAT[e.category] || e.category || "?";
       const client = e.client_version || "不明";
-      item.innerHTML =
-        `<div class="meta">` +
-        `<span class="cat">${cat}</span>` +
-        `<span>${dt}</span>` +
-        `<span>${e.user_name || "?"} (${e.user_id || "?"})</span>` +
-        `<span>client: ${client}</span>` +
-        `</div>` +
-        `<pre></pre>`;
-      item.querySelector("pre").textContent = e.text || "";
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      for (const [text, className] of [
+        [cat, "cat"], [dt, ""],
+        [(e.user_name || "?") + " (" + (e.user_id || "?") + ")", ""],
+        ["client: " + client, ""],
+      ]) {
+        const span = document.createElement("span");
+        span.className = className;
+        span.textContent = text;
+        meta.appendChild(span);
+      }
+      const content = document.createElement("pre");
+      content.textContent = e.text || "";
+      item.append(meta, content);
       list.appendChild(item);
     }
   }
@@ -240,5 +293,6 @@
   $("clear").addEventListener("click", () => { $("text").value = ""; post("", "info"); });
 })();
 </script>
+<script src="/static/admin-integrations.js" defer></script>
 </body>
 </html>

@@ -2,6 +2,138 @@
 
 FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧用 Web ページ（`GET /`）を配信する。
 
+## 外部連携（募集一覧 API・Webhook）
+
+管理者が `/admin` の「外部連携」から登録します。特定の Bot やサービスには依存せず、
+任意の公開 HTTPS エンドポイントに JSON を送信できます。登録がなければ外部送信はありません。
+管理権限は既存の `ASOBBY_ADMIN_USER_IDS`（Discord ID、カンマ区切り）を利用します。
+
+- 登録・編集・停止/再開・削除・キー再発行・テスト通知・最終配信状況の確認に対応。
+- 通知先なしの **API 専用連携** も作成可能。最大 20 連携。
+- 連携ごとに読み取り専用 API キーと署名シークレットを発行。表示は登録/再発行時のみ。
+- 停止・削除すると API キーも利用不可。再発行すると旧 API キーは即時失効し、以後の通知は新しい署名シークレットで署名する。
+- 対戦用 IP:port は既定で API に含めない。必要な連携だけ管理者が許可する。
+  表示名・コメント・対戦状態・配信 URL などは取得可能なため、掲載先にも注意する。
+- 通知先 URL は資格情報を含むことがあるため、管理一覧でもホスト名だけを表示。
+  編集時に URL 欄を空にすると既存 URL を維持。「API のみ」を選択すると送信先を解除する。
+
+### 募集一覧 API
+
+`GET /api/v1/lobby` に `Authorization: Bearer <APIキー>` を付ける。
+Discord のセッション・URL クエリに入れたキーは利用できない。
+このキーでは募集の作成/変更/終了や管理操作はできない。既存 `/posts` のログイン要件は維持する。
+
+```http
+GET /api/v1/lobby HTTP/1.1
+Host: asobby.com
+Authorization: Bearer <APIキー>
+```
+
+```json
+{
+  "schema_version": 1,
+  "revision": "<表示内容のSHA-256>",
+  "count": 1,
+  "posts": [{
+    "id": "<募集ID>",
+    "owner_name": "プレイヤー",
+    "post_type": "casual",
+    "rank": "normal",
+    "comment": "対戦募集",
+    "status": "waiting"
+  }],
+  "lobby_url": "https://asobby.com/"
+}
+```
+
+`posts` の例は主要項目のみ。状態は `waiting`（ホスト待ち）・`connecting`（接続/準備中）・
+`playing`（対戦中）・`unknown`。作成時刻の新しい順。同定済みの対戦相手名や接続補助ツール、
+到達性、国情報なども含む。ユーザー ID、投稿操作トークン、受信メッセージ、ハートビート時刻は含めない。
+IP 提供を許可した連携にだけ `addr` を追加する。API は期限切れの募集を除外し、0 件は `posts: []` で返す。
+
+レスポンスの `ETag` を次回の `If-None-Match` に指定できる（変化なしは 304）。
+`revision` は内容比較用の値であり、時系列順の番号ではない。IP の提供権限が異なる場合は値も異なる。
+認証後に条件付き取得を判定し、失効済みキーには 304 を返さない。
+1 キーあたり 60 回/分まで。超過は 429 と `Retry-After` を返す。
+
+### Webhook の形式と配送
+
+登録・再開・再起動時、および一覧に表示する内容が変化したときに通知する。
+5 秒ごとのハートビートだけでは通知しない。短時間の変化はまとめ、1 送信先につき同時 1 件、
+通常は 5 秒以上の間隔で送る。既存の募集処理から外部 HTTP 応答を待たない。
+
+```json
+{
+  "schema_version": 1,
+  "id": "<通知ID>",
+  "type": "lobby.changed",
+  "occurred_at": "2026-09-07T12:00:00+00:00",
+  "source": "https://asobby.com",
+  "data": {
+    "count": 0,
+    "snapshot_url": "https://asobby.com/api/v1/lobby"
+  }
+}
+```
+
+通知には募集内容や IP、API キーを載せない。受信側は設定済みの一覧 API から最新状態を取得する。
+テスト通知も同じ形式で、トップレベルに `test: true` が付く。
+通常の JSON Webhook であり、Discord Incoming Webhook 専用のメッセージ形式ではない。
+
+- 2xx を配送成功とする。これは受信側が処理を受け付けたことを表し、その先の Discord 表示成功までは保証しない。
+- エラーは 5 秒から最大 300 秒まで間隔を延ばして再試行。`Retry-After` は最大 1 時間まで尊重する。
+- 再試行では同じ通知 ID を使用する。待機中に一覧が変われば、最新状態の通知に置き換える。
+- 送信は 15 秒で打ち切る。リダイレクトは追わず、プロキシ環境変数は利用しない。
+  登録時と毎送信時に DNS を確認し、公開 IP に固定して TLS 検証付きで接続する。
+  localhost、プライベート/リンクローカル IP などへの送信は拒否する。
+
+この機能は **最新の募集一覧を同期するための通知**。全変更の履歴・厳密な一度だけの配送は保証しない。
+受信側は初回と数分ごとにも一覧を取得し、通知の重複・一時停止から復旧できるようにする。
+同じ Discord メッセージの更新は定期実行分も含めて直列化し、内容が変わった場合だけ編集する。
+API 取得失敗を「0 件」と扱わず、古い情報であることを表示するか、再試行する。
+
+### 署名検証
+
+以下のヘッダーを付与する。
+
+| ヘッダー | 値 |
+| --- | --- |
+| `X-Asobby-Event` | `lobby.changed` |
+| `X-Asobby-Delivery` | JSON 内の通知 ID と同じ値 |
+| `X-Asobby-Timestamp` | 送信時刻（Unix 秒） |
+| `X-Asobby-Signature` | `sha256=<HMACの16進表記>` |
+
+HMAC-SHA256 の鍵は連携ごとの署名シークレット。対象バイト列は
+`timestamp + "." + HTTPリクエストの生body`（UTF-8）。JSON を再シリアライズせずに検証する。
+受信側では時刻差（例: 5 分以内）と定時間比較で署名を確認し、同じ通知 ID の再送を安全に扱う。
+署名の時刻は再試行のたびに更新される。TLS に加えて送信元を確認するための署名であり、API キーとは別物。
+
+### dpalette との接続例
+
+1. dpalette で Webhook トリガーのワークフローを作り、公開後の受信用 URL を取得する。
+2. asobby の `/admin` で、その URL を通知先として登録。発行した API キーを dpalette の Secret に保存する。
+3. `trigger.webhook` → `http.request`（一覧取得）→ 一覧を整形 → `discord.message.sync` を接続する。
+   HTTP ヘッダー例: `Authorization: Bearer {{secret.asobby_api_key}}`。
+   一覧の取得先には自分で設定した asobby の URL を使う。
+4. 一覧 0 件のときも「現在募集中のホストはいません」と同期する。同じ `message_key` を使い続ける。
+5. 初回実行と定期的な再同期を設定し、asobby 管理画面からテスト通知を送る。
+
+dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
+上記 HMAC の自動検証を備えていることは前提にしていない。署名検証を必須にする場合は受信側に追加する。
+この機能の導入だけでは、dpalette のワークフロー作成や Discord への投稿は行われない。
+
+### 永続化と運用
+
+既存の保存方式に合わせ、ローカルなら `ASOBBY_STORE_DIR/integrations.json`（権限 0600）、
+Redis 利用時は `asobby:integrations:v1` に設定と最終配送状況を保存する。
+API キーはハッシュのみ保存。送信 URL と署名シークレットは配信に必要なため保存する。
+保存先・バックアップは秘密情報として管理する。
+
+再起動時は保存済み連携を読み込み、復元された最新一覧の通知を送り直す。
+設定を読めない場合は連携機能を停止し、壊れた設定を空の設定で上書きしない。
+`ASOBBY_STORE=memory` では永続化しない。現在のロビーと同様、**単一アプリケーションプロセス**が前提。
+複数 worker/複数インスタンスから同時に配信する構成は未対応。
+
 ## API 概要 (v0.2)
 
 | Method/Path | 説明 |
@@ -16,7 +148,7 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `GET /replays/{match_id}` | リプレイ (.rep) をダウンロード（公開・ログイン不要） |
 | `POST /matches/sync` | クライアントのローカル戦績を一括登録（最大 500 件） |
 | `GET /myip` | クライアントのグローバル IP を返す |
-| `GET /posts` | 募集一覧（公開フィールドのみ） |
+| `GET /posts` | 募集一覧（Discord ログイン必須、閲覧用フィールドのみ） |
 | `POST /posts` | 募集の新規作成（Discord ログイン必須）。レスポンスで `owner_token` を発行 |
 | `POST /posts/update` | 募集の更新。`id` + `owner_token` が必須。応答に `messages`（閲覧者からの未読定型メッセージ）を含み、返却後キューはクリア |
 | `POST /posts/{id}/message` | Web ロビー閲覧者がホストへ定型メッセージを送る（Discord ログイン必須） |
@@ -26,7 +158,7 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 | `POST /matches/report` | ゲスト側クライアントからの対戦結果補完報告。`Authorization: Bearer` 必須 |
 | `POST /replays/upload` | リプレイ (.rep) のアップロード。`Authorization: Bearer` 必須。body は生バイト |
 | `POST /import/tensokukan` | 天則観 (tsk) 戦績 DB (.db) のインポート。`Authorization: Bearer` またはクッキー必須。body は生バイト |
-| `GET /sse/posts` | SSE。接続直後に `snapshot`、以後 `upsert` / `close` / `message_reply` |
+| `GET /sse/posts` | SSE（Discord ログイン必須）。接続直後に `snapshot`、以後 `upsert` / `close` / `message_reply` |
 | `POST /auth/device` | Discord ログイン開始。`device_code` と `verify_url` を返す |
 | `GET /auth/discord/start` | (ブラウザ用) Discord の認可画面へリダイレクト |
 | `GET /auth/discord/web` | (Web 閲覧用) Discord ログイン。完了後クッキーセッションを発行 |
@@ -133,7 +265,8 @@ DATABASE_URL=... ../bin/alembic revision --autogenerate -m "add xxx"
 ログインすると投稿に Discord の表示名（`owner_name`）が載り、
 ロビーの User 列に表示される。
 
-**ロビー閲覧（`GET /posts`, `GET /sse/posts`）はログイン不要。**
+**ロビーの募集一覧閲覧（`GET /posts`, `GET /sse/posts`）は Discord ログイン必須。**
+外部サービスからは、管理者が発行した連携キーで `GET /api/v1/lobby` を利用する。
 Web ページのログインはクッキーセッション（`asobby_session`、有効期限 30 日）。
 
 クライアントのログインはブラウザセッション引き継ぎ（ハンドオフ）方式:

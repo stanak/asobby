@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import threading
 import time
 from pathlib import Path
@@ -26,6 +27,7 @@ PRESENCE_ZSET_KEY = "asobby:presence"
 PRESENCE_TTL_SEC = 90
 
 ANNOUNCEMENT_KEY = "asobby:announcement"
+INTEGRATIONS_KEY = "asobby:integrations:v1"
 FEEDBACK_LIST_KEY = "asobby:feedback:entries"
 FEEDBACK_COOLDOWN_PREFIX = "asobby:feedback:cooldown:"
 FEEDBACK_MAX_ENTRIES = 500
@@ -544,6 +546,45 @@ def load_announcement() -> dict[str, Any] | None:
             except (OSError, json.JSONDecodeError, TypeError, ValueError):
                 return None
     return None
+
+
+def load_integrations() -> list[dict[str, Any]]:
+    """Load integration credentials. Corruption must fail closed, not reset keys."""
+    if is_redis_configured():
+        raw = _client().get(INTEGRATIONS_KEY)
+    elif _local_store_enabled():
+        with _LOCAL_LOCK:
+            path = _store_dir() / "integrations.json"
+            raw = path.read_text(encoding="utf-8") if path.is_file() else None
+    else:
+        raw = None
+    if raw is None:
+        return []
+    data = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+    if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
+        raise ValueError("invalid integration store")
+    return data
+
+
+def save_integrations(items: list[dict[str, Any]]) -> None:
+    """Atomic single-process store; local URL/credential files are owner-only."""
+    payload = json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+    if is_redis_configured():
+        _client().set(INTEGRATIONS_KEY, payload)
+    elif _local_store_enabled():
+        with _LOCAL_LOCK:
+            path = _store_dir() / "integrations.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(f"integrations.{secrets.token_hex(8)}.tmp")
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as output:
+                    output.write(payload)
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
 
 
 def _local_feedback_path() -> Path:

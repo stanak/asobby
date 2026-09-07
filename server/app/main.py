@@ -43,6 +43,7 @@ import db
 import geoip
 import post_redis
 import client_release
+import integrations
 
 ALLOWED_STREAM_DOMAINS = {
     "youtube.com",
@@ -1684,15 +1685,32 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(cleanup_loop())
     guest_probe_task = asyncio.create_task(guest_probe_loop())
     try:
+        await INTEGRATIONS.start()
         yield
     finally:
         cleanup_task.cancel()
         guest_probe_task.cancel()
+        await INTEGRATIONS.stop()
         if db.is_configured():
             await db.dispose()
 
 
+def integration_posts() -> list[dict[str, Any]]:
+    """Do not export expired listings while waiting for the cleanup tick."""
+    now = time.time()
+    return [
+        asdict(rec.post) for rec in list(RECORDS.values())
+        if now - rec.post.updated_at < post_record_ttl(rec)
+    ]
+
+
+INTEGRATIONS = integrations.IntegrationService(integration_posts, PUBLIC_BASE_URL)
 app = FastAPI(title="asobby api", version="0.2", lifespan=lifespan)
+app.include_router(integrations.build_router(
+    INTEGRATIONS,
+    lambda request: resolve_session(request),
+    lambda user_id: is_admin_user(user_id),
+))
 
 CANONICAL_HOST = (urlparse(PUBLIC_BASE_URL).hostname or "").lower()
 
@@ -3399,7 +3417,7 @@ async def set_announcement(body: AnnouncementIn, request: Request) -> dict[str, 
 
 @app.get("/admin")
 async def admin_page() -> FileResponse:
-    """管理ページ (お知らせ管理)。権限チェックは API 側で行う。"""
+    """管理ページ (お知らせ・外部連携管理)。権限チェックは API 側で行う。"""
     return FileResponse(STATIC_DIR / "admin.html")
 
 
