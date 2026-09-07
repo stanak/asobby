@@ -17,7 +17,7 @@ import secrets
 import socket
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Callable
@@ -34,7 +34,8 @@ import post_redis
 MAX_INTEGRATIONS = 20
 MIN_DELIVERY_INTERVAL = 5.0
 API_REQUESTS_PER_MINUTE = 60
-# Explicit allowlist: no owner credentials, Discord IDs, heartbeat timestamps,
+MAX_PENDING_CREATED = 200
+# Explicit allowlist: no owner credentials, guest Discord IDs, heartbeat timestamps,
 # guest IPs, private message queues or user settings leave this API.
 LOBBY_FIELDS = (
     "id", "owner_name", "rank", "post_type", "rating", "comment", "created_at",
@@ -42,7 +43,19 @@ LOBBY_FIELDS = (
     "stream_url", "giuroll", "autopunch", "direct_reachable",
     "reachability_uncertain", "reachability_lost", "match_status", "guest_name",
     "ranked_active", "country_code", "country_name",
+    "discord_user_id", "discord_user_id_source",
 )
+
+
+def author_fields(rec) -> dict[str, str | None]:
+    """Public attribution only; never grant account authority to an integration."""
+    if rec.monitor is not None:
+        ident = rec.monitor.discord_user_id
+        source = "integration"
+    else:
+        ident = rec.owner_user_id
+        source = "oauth"
+    return {"discord_user_id": ident or None, "discord_user_id_source": source if ident else None}
 
 
 def encode_json(value: Any) -> bytes:
@@ -157,8 +170,17 @@ class Integration(IntegrationInput):
 @dataclass
 class Pending:
     event: dict[str, Any] | None = None
+    created: deque[dict[str, Any]] = field(default_factory=deque)
+    last_event_type: str | None = None
     attempts: int = 0
     next_at: float = 0
+
+    def next_event(self) -> dict[str, Any] | None:
+        # Alternate with snapshot signals so a busy creation queue cannot
+        # starve consumers that still subscribe only to lobby.changed.
+        if self.created and (self.event is None or self.last_event_type != "post.created"):
+            return self.created[0]
+        return self.event
 
 
 def retry_after_seconds(raw: str) -> float:
@@ -248,6 +270,29 @@ class IntegrationService:
                 "snapshot_url": self.base_url + "/api/v1/lobby",
             },
         }
+
+    def post_created(self, post_id: str) -> None:
+        """Called once at first publication, never inferred from snapshot diffs.
+
+        Keep creation signals separate from coalesced state updates. This is a
+        bounded in-memory queue, not a durable event log or exactly-once API.
+        """
+        recipients = [item for item in self.items.values() if item.enabled and item.webhook_url]
+        if not self.available or not recipients:
+            return
+        event = self.event()
+        event["type"] = "post.created"
+        event["data"]["post_id"] = post_id
+        for item in recipients:
+            pending = self.pending.setdefault(item.id, Pending())
+            if pending.next_event() is None:
+                pending.next_at = max(pending.next_at, time.monotonic() + MIN_DELIVERY_INTERVAL)
+            if len(pending.created) >= MAX_PENDING_CREATED:
+                # Preserve the head, which may be in flight or retrying.
+                # Drop the oldest waiting entry, retaining the latest signal.
+                del pending.created[1]
+                print("integration creation notification queue full; oldest waiting event dropped")
+            pending.created.append(event)
 
     async def start(self) -> None:
         self.pending.clear()
@@ -427,13 +472,14 @@ class IntegrationService:
                         pending.next_at = time.monotonic() + MIN_DELIVERY_INTERVAL
         for item in list(self.items.values()):
             pending = self.pending.get(item.id)
+            event = pending.next_event() if pending else None
             if (
                 len(self._jobs) < 4 and item.id not in self._jobs
-                and item.enabled and item.webhook_url and pending and pending.event
+                and item.enabled and item.webhook_url and pending and event
                 and pending.next_at <= time.monotonic()
             ):
                 self._jobs[item.id] = asyncio.create_task(
-                    self._send(item, pending, pending.event), name=f"webhook-{item.id}",
+                    self._send(item, pending, event), name=f"webhook-{item.id}",
                 )
 
     async def _send(self, item: Integration, pending: Pending, event: dict[str, Any]) -> None:
@@ -462,7 +508,10 @@ class IntegrationService:
                 error = "delivery status could not be persisted"
             if error is None:
                 pending.attempts = 0
-                if pending.event and pending.event["id"] == event["id"]:
+                pending.last_event_type = event["type"]
+                if pending.created and pending.created[0]["id"] == event["id"]:
+                    pending.created.popleft()
+                elif pending.event and pending.event["id"] == event["id"]:
                     pending.event = None
                 pending.next_at = time.monotonic() + MIN_DELIVERY_INTERVAL
             else:

@@ -169,7 +169,8 @@ async def test_private_dns_and_mixed_answers_are_blocked(monkeypatch, address):
 
 
 @pytest.mark.asyncio
-async def test_pinned_signed_request_never_follows_redirect_or_reads_body(monkeypatch):
+@pytest.mark.parametrize("event_type", ["lobby.changed", "post.created"])
+async def test_pinned_signed_request_never_follows_redirect_or_reads_body(monkeypatch, event_type):
     async def resolve(*args, **kwargs):
         return [(0, 0, 0, "", ("8.8.8.8", 443))]
     monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", resolve)
@@ -177,7 +178,9 @@ async def test_pinned_signed_request_never_follows_redirect_or_reads_body(monkey
         id="a" * 32, name="test", webhook_url="https://receiver.example/secret?key=abc",
         api_key_hash="x", signing_secret="test-signing-key", generation="g", created_at=0,
     )
-    event = {"id": "event1", "type": "lobby.changed", "data": {"count": 0}}
+    event = {"id": "event1", "type": event_type, "data": {"count": 0}}
+    if event_type == "post.created":
+        event["data"]["post_id"] = "post1"
     calls = []
 
     class UnreadBody(httpx.AsyncByteStream):
@@ -198,6 +201,7 @@ async def test_pinned_signed_request_never_follows_redirect_or_reads_body(monkey
         ).hexdigest()
         assert request.headers["x-asobby-signature"] == "sha256=" + expected
         assert request.headers["x-asobby-delivery"] == "event1"
+        assert request.headers["x-asobby-event"] == event_type
         assert json.loads(request.content) == event
         return httpx.Response(302, headers={"Location": "http://127.0.0.1/private"}, stream=UnreadBody())
 
@@ -466,3 +470,119 @@ async def test_cancelled_admin_request_finishes_atomic_save_before_unlock(servic
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_creation_queue_survives_changes_retries_and_concurrent_creation(service, monkeypatch):
+    instance, posts, _ = service
+    cred = await instance.create(mod.IntegrationInput(name="hook", webhook_url="https://receiver.example/hook"))
+    ident = cred["integration"]["id"]
+    await instance.tick()
+    pending = instance.pending[ident]
+    assert not pending.created  # Existing snapshots never count as new listings.
+    instance.post_created("new1")
+    first = pending.created[0]
+    assert first["type"] == "post.created" and first["data"]["post_id"] == "new1"
+    assert set(first["data"]) == {"post_id", "count", "snapshot_url"}
+    calls = []
+    async def fail(item, event):
+        calls.append(event)
+        return 503, 120
+    monkeypatch.setattr(mod, "deliver", fail)
+    pending.next_at = 0
+    await instance.tick()
+    await asyncio.gather(*instance._jobs.values())
+    posts[0]["net_status"] = 4
+    instance.queue_test(ident)
+    instance.post_created("new2")
+    await instance.tick()
+    assert pending.created[0] == first and pending.next_at > time.monotonic() + 110
+    assert len(calls) == 1
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def slow(item, event):
+        calls.append(event)
+        entered.set()
+        await release.wait()
+        return 204, 0
+    monkeypatch.setattr(mod, "deliver", slow)
+    pending.next_at = 0
+    await instance.tick()
+    await entered.wait()
+    instance.post_created("new3")
+    posts.clear()  # Closing a host does not erase its creation notification.
+    await instance.tick()
+    release.set()
+    await asyncio.gather(*instance._jobs.values())
+    assert calls[0]["id"] == calls[1]["id"] == first["id"]
+    assert [event["data"]["post_id"] for event in pending.created] == ["new2", "new3"]
+    assert pending.next_event()["type"] == "lobby.changed"  # Fairness.
+    for _ in range(3):
+        pending.next_at = 0
+        await instance.tick()
+        await asyncio.gather(*instance._jobs.values())
+    assert [event["type"] for event in calls[2:]] == ["lobby.changed", "post.created", "post.created"]
+    assert not pending.created and pending.event is None
+    await instance.stop()
+
+
+@pytest.mark.asyncio
+async def test_creation_queue_bounds_scope_and_config_reset(service, monkeypatch):
+    instance, _, _ = service
+    hook = await instance.create(mod.IntegrationInput(name="hook", webhook_url="https://receiver.example/hook"))
+    api = await instance.create(mod.IntegrationInput(name="api"))
+    disabled = await instance.create(mod.IntegrationInput(name="off", webhook_url="https://receiver.example/hook", enabled=False))
+    ident = hook["integration"]["id"]
+    monkeypatch.setattr(mod, "MAX_PENDING_CREATED", 2)
+    for post_id in ["first", "second", "third"]:
+        instance.post_created(post_id)
+    pending = instance.pending[ident]
+    assert [event["data"]["post_id"] for event in pending.created] == ["first", "third"]
+    for cred in (api, disabled):
+        assert not instance.pending[cred["integration"]["id"]].created
+    await instance.rotate(ident)
+    assert not instance.pending[ident].created
+    assert instance.pending[ident].event["type"] == "lobby.changed"
+
+
+@pytest.mark.asyncio
+async def test_native_author_and_creation_hook_are_not_called_for_updates(service, monkeypatch):
+    import main
+    from starlette.requests import Request
+    instance, _, _ = service
+    records = {}
+    monkeypatch.setattr(main, "RECORDS", records)
+    monkeypatch.setattr(main, "INTEGRATIONS", instance)
+    monkeypatch.setattr(main, "LAST_CREATE_AT", {})
+    instance.read_posts = main.integration_posts
+    async def session(request):
+        return {"id": "123456789012345678", "name": "host", "avatar": ""}
+    async def noop(*args, **kwargs):
+        pass
+    async def reachable(*args, **kwargs):
+        return True, False, False
+    async def rank(*args):
+        return {}
+    monkeypatch.setattr(main, "resolve_session", session)
+    monkeypatch.setattr(main, "enforce_min_client_version", noop)
+    monkeypatch.setattr(main, "verify_hostable_for_create", reachable)
+    monkeypatch.setattr(main, "host_rank_for_post", rank)
+    monkeypatch.setattr(main, "_persist_record", noop)
+    monkeypatch.setattr(main.HUB, "publish", noop)
+    monkeypatch.setattr(main.geoip, "apply_country_from_addr", lambda *args, **kwargs: None)
+    cred = await instance.create(mod.IntegrationInput(name="hook", webhook_url="https://receiver.example/hook"))
+    request = Request({"type": "http", "method": "POST", "path": "/posts", "headers": [], "client": ("93.184.216.34", 1234)})
+    result = await main.create_post(main.CreatePostIn(addr="93.184.216.34:10800", net_status=3), request)
+    pending = instance.pending[cred["integration"]["id"]]
+    assert len(pending.created) == 1 and pending.created[0]["data"]["post_id"] == result["post"]["id"]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_for(instance)), base_url="https://test") as client:
+        response = await client.get("/api/v1/lobby", headers={"Authorization": "Bearer " + cred["api_key"]})
+    post = response.json()["posts"][0]
+    assert post["discord_user_id"] == "123456789012345678" and post["discord_user_id_source"] == "oauth"
+    assert not {"owner_token", "owner_user_id", "guest_user_id", "external_user_id", "addr"} & post.keys()
+    restored = main.post_record_from_dict(main.post_record_to_dict(records[post["id"]]))
+    assert mod.author_fields(restored) == {"discord_user_id": "123456789012345678", "discord_user_id_source": "oauth"}
+    for state in (4, 3):
+        records[post["id"]].post.net_status = state
+        await instance.tick()
+    assert len(pending.created) == 1

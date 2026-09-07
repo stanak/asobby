@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import threading
 import time
 from dataclasses import asdict
@@ -76,6 +77,7 @@ async def test_api_scope_pending_hidden_until_checked_and_casual_publication(ser
         assert response.status_code == 202 and response.headers["cache-control"] == "no-store"
         ident = response.json()["id"]
         assert response.json()["state"] == "checking" and response.json()["post"] is None
+        assert response.json()["external_user_id"] == body().external_user_id
         assert ident in saved and not events
         assert main.sorted_public_posts() == [] and main.integration_posts() == []
         assert not main.user_has_other_posts("viewer")
@@ -85,6 +87,7 @@ async def test_api_scope_pending_hidden_until_checked_and_casual_publication(ser
         post = response.json()["post"]
         assert post["post_type"] == "casual" and post["rank"] == ""
         assert post["rank_status"] == "unknown" and post["ranked_games"] is None
+        assert post["discord_user_id"] is None and post["discord_user_id_source"] is None
         assert not post["supports_messages"] and not post["ping_warn_enabled"]
         assert not {"owner_token", "monitor", "external_user_id", "integration_id"} & post.keys()
         assert s.records[ident].owner_user_id == "" and s.records[ident].creator_ip == ""
@@ -92,6 +95,7 @@ async def test_api_scope_pending_hidden_until_checked_and_casual_publication(ser
         snapshot = (await client.get("/api/v1/lobby", headers=headers)).json()
         assert snapshot["count"] == 1 and snapshot["posts"][0]["status"] == "waiting"
         assert "addr" not in snapshot["posts"][0]
+        assert snapshot["posts"][0]["discord_user_id"] is None
         assert (await client.delete(url + "/" + ident, headers=headers)).status_code == 405
         assert (await client.patch(url + "/" + ident, headers=headers, json={})).status_code == 405
 
@@ -109,6 +113,75 @@ async def test_duplicate_retry_and_same_request_different_content(service):
     with pytest.raises(HTTPException) as error:
         await s.register(item, body(request_id="new", external_user_id="other"))
     assert error.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_discord_attribution_roundtrip_and_only_first_publication_emits_created(service):
+    s, saved, _ = service
+    cred = await credential(s)
+    ident = cred["integration"]["id"]
+    # Queue only; never resolve or contact a real webhook destination.
+    s.integrations.items[ident] = s.integrations.get(ident).model_copy(update={"webhook_url": "https://receiver.example/hook"})
+    request = body(discord_user_id="123456789012345678")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_for(s)), base_url="https://asobby.test") as client:
+        headers = {"Authorization": "Bearer " + cred["api_key"]}
+        first = (await client.post("/api/v1/posts", json=request.model_dump(), headers=headers)).json()
+        post_id = first["id"]
+        assert not s.integrations.pending[ident].created
+        await s.tick()
+        active = (await client.get("/api/v1/posts/" + post_id, headers=headers)).json()
+        snapshot = (await client.get("/api/v1/lobby", headers=headers)).json()["posts"][0]
+        assert active["external_user_id"] == request.external_user_id
+        for post in (active["post"], snapshot):
+            assert post["discord_user_id"] == request.discord_user_id
+            assert post["discord_user_id_source"] == "integration"
+            assert post["rank"] == "" and post["rank_status"] == "unknown"
+            assert "external_user_id" not in post and "owner_user_id" not in post
+        retried = (await client.post("/api/v1/posts", json=request.model_dump(), headers=headers)).json()
+        assert retried == active
+        assert (await client.post("/api/v1/posts", json={**request.model_dump(), "discord_user_id": "987654321098765432"}, headers=headers)).status_code == 409
+    pending = s.integrations.pending[ident]
+    assert len(pending.created) == 1 and pending.created[0]["data"]["post_id"] == post_id
+    restored = main.post_record_from_dict(saved[post_id])
+    assert restored.owner_user_id == ""  # Attribution never becomes account authority.
+    assert integrations.author_fields(restored) == {
+        "discord_user_id": request.discord_user_id, "discord_user_id_source": "integration",
+    }
+    s.records[post_id] = restored
+    for result in (Result(alive=True, direct=True, state="connecting"), Result(), Result(alive=True, direct=True, state="waiting")):
+        s.probe = lambda *a, **kw: result
+        due(s)
+        await s.tick()
+    assert len(pending.created) == 1  # Restoration/updates/recovery are not new.
+    pending.created.clear()
+    s.integrations._revision = None
+    await s.integrations.tick()
+    assert not pending.created  # A restart snapshot cannot synthesize creation.
+
+
+@pytest.mark.parametrize("value", [123456789012345678, "", "0", "0123", "abc", " 123", "123 ", "１２３", "18446744073709551616", "1" * 21])
+def test_discord_id_requires_unsigned_snowflake_string(value):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        body(discord_user_id=value)
+
+
+@pytest.mark.asyncio
+async def test_legacy_retry_fingerprint_and_numeric_external_id_do_not_infer_discord(service):
+    s, saved, _ = service
+    cred = await credential(s)
+    item = s.integrations.get(cred["integration"]["id"])
+    request = body(external_user_id="123456789012345678")
+    reg = await s.register(item, request)
+    rec = s.records[reg["id"]]
+    old_body = request.model_dump(exclude={"discord_user_id"})
+    assert rec.monitor.fingerprint == hashlib.sha256(integrations.encode_json(old_body)).hexdigest()
+    legacy = copy.deepcopy(saved[reg["id"]])
+    legacy["monitor"].pop("discord_user_id")
+    s.records[reg["id"]] = main.post_record_from_dict(legacy)
+    assert (await s.register(item, request))["id"] == reg["id"]
+    await s.tick()
+    assert s.status(s.records[reg["id"]])["post"]["discord_user_id"] is None
 
 
 @pytest.mark.asyncio
@@ -192,6 +265,54 @@ async def test_three_consecutive_misses_not_age_end_listing(service, monkeypatch
             assert reg["id"] in s.records
     assert reg["id"] not in s.records and not saved
     assert events[-1][1]["reason"] == "host_unreachable"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_failure_rechecks_each_second_and_closes_after_two_seconds(service, monkeypatch):
+    s, saved, _ = service
+    cred = await credential(s)
+    reg = await s.register(s.integrations.get(cred["integration"]["id"]), body())
+    await s.tick()
+    clock = [time.time()]
+    monkeypatch.setattr(mod.time, "time", lambda: clock[0])
+    due(s)
+    calls = []
+    def fail(*args, **kwargs):
+        calls.append(clock[0])
+        return Result()
+    s.probe = fail
+    assert mod.FAILURE_GRACE == 2 and mod.FAILURES_TO_CLOSE == 3
+    await s.tick()
+    monitor = s.records[reg["id"]].monitor
+    assert monitor.failures == 1 and monitor.next_check_at == clock[0] + 1
+    await s.tick()
+    assert len(calls) == 1  # Cannot busy-loop retries.
+    clock[0] += 1
+    await s.tick()
+    assert s.records[reg["id"]].monitor.failures == 2
+    clock[0] += 1
+    await s.tick()
+    assert len(calls) == 3 and reg["id"] not in s.records and reg["id"] not in saved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [Result(alive=True, direct=True), Result(inconclusive=True)])
+async def test_recovery_or_inconclusive_result_restores_normal_check_interval(service, monkeypatch, result):
+    s, _, _ = service
+    cred = await credential(s)
+    reg = await s.register(s.integrations.get(cred["integration"]["id"]), body())
+    await s.tick()
+    clock = [time.time()]
+    monkeypatch.setattr(mod.time, "time", lambda: clock[0])
+    due(s)
+    s.probe = lambda *a, **kw: Result()
+    await s.tick()
+    clock[0] += 1
+    s.probe = lambda *a, **kw: result
+    await s.tick()
+    monitor = s.records[reg["id"]].monitor
+    assert monitor.failures == 0 and monitor.first_failure_at == 0
+    assert monitor.next_check_at == clock[0] + mod.CHECK_INTERVAL
 
 
 @pytest.mark.asyncio

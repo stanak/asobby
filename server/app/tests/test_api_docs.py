@@ -58,6 +58,7 @@ def test_lobby_schema_fields_and_types_match_public_allowlist():
     assert schema["type"] == item["type"] == "object"
     assert schema["properties"]["posts"]["type"] == "array"
     hints = get_type_hints(main.Post)
+    hints.update(discord_user_id=str | None, discord_user_id_source=str | None)
     for field in set(integrations.LOBBY_FIELDS) | {"addr"}:
         assert schema_types(item["properties"][field]) == schema_types(TypeAdapter(hints[field]).json_schema()), field
     assert set(item["properties"]["rank"]["enum"]) == {""} | set(main.RANK_LADDER)
@@ -67,11 +68,12 @@ def test_lobby_schema_fields_and_types_match_public_allowlist():
     assert schema["properties"]["schema_version"] == {"type": "integer", "const": 1}
     assert schema["properties"]["count"] == {"type": "integer", "minimum": 0}
     assert item["properties"]["ranked_games"]["minimum"] == 0
+    assert set(item["properties"]["discord_user_id_source"]["enum"]) == {"oauth", "integration", None}
 
 
 @pytest.mark.asyncio
 async def test_readme_complete_lobby_example_matches_http_and_ip_permissions():
-    posts = [asdict(sample_post())]
+    posts = [{**asdict(sample_post()), "discord_user_id": "123456789012345678", "discord_user_id_source": "oauth"}]
     service = integrations.IntegrationService(lambda: posts, "https://asobby.com")
     credentials = await service.create(integrations.IntegrationInput(name="docs"))
     async def no_session(request):
@@ -127,13 +129,14 @@ async def test_readme_webhook_matches_event_and_test_notification():
     assert set(schema["properties"]) == set(event) | {"test"}
     assert event["data"] == example["data"]
     data_schema = schema["properties"]["data"]
-    assert set(event["data"]) == set(data_schema["properties"]) == set(data_schema["required"])
+    assert set(event["data"]) == set(data_schema["required"])
+    assert set(data_schema["properties"]) == set(event["data"]) | {"post_id"}
     for key in ("schema_version", "type", "source"):
         assert event[key] == example[key]
     assert datetime.fromisoformat(example["occurred_at"]).utcoffset().total_seconds() == 0
     assert datetime.fromisoformat(event["occurred_at"]).utcoffset().total_seconds() == 0
     assert schema["properties"]["test"] == {"type": "boolean", "const": True}
-    assert schema["properties"]["type"] == {"type": "string", "const": event["type"]}
+    assert set(schema["properties"]["type"]["enum"]) == {"lobby.changed", "post.created"}
     credentials = await service.create(integrations.IntegrationInput(name="docs"))
     ident = credentials["integration"]["id"]
     # Queue-only: do not resolve a real webhook destination or start delivery.
@@ -142,6 +145,14 @@ async def test_readme_webhook_matches_event_and_test_notification():
     test_event = service.pending[ident].event
     assert test_event["test"] is True and set(test_event) == set(schema["properties"])
     assert test_event["data"] == event["data"]
+    created_example = doc_block("webhook-created-example")
+    service.post_created(created_example["data"]["post_id"])
+    created = service.pending[ident].created[0]
+    assert set(created) == set(created_example) == set(schema["required"])
+    assert set(created["data"]) == set(created_example["data"]) == set(data_schema["properties"])
+    assert created["type"] == created_example["type"] == "post.created"
+    assert created["data"]["post_id"] == created_example["data"]["post_id"]
+    assert created["data"]["snapshot_url"] == created_example["data"]["snapshot_url"]
 
 
 def test_readme_registration_examples_are_full_raw_posts_not_lobby_projection(monkeypatch):
@@ -155,11 +166,11 @@ def test_readme_registration_examples_are_full_raw_posts_not_lobby_projection(mo
     )
     rec = main.PostRecord(
         post=post, owner_token="not-public", creator_ip="",
-        monitor=udp_lobby.Monitor("test", "test", "test", "test", published=True),
+        monitor=udp_lobby.Monitor("test", "player-456", "test", "test", published=True, discord_user_id="123456789012345678"),
     )
     monkeypatch.setattr(main.UDP_LOBBY.integrations, "base_url", "https://asobby.com")
     assert main.UDP_LOBBY.status(rec) == active
-    assert set(active["post"]) == set(asdict(main.Post()))
+    assert set(active["post"]) == set(asdict(main.Post())) | {"discord_user_id", "discord_user_id_source"}
     assert TypeAdapter(main.Post).validate_python(active["post"]).ranked_games is None
     rec.monitor.published = False
     assert main.UDP_LOBBY.status(rec) == checking

@@ -14,7 +14,7 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 - 「カジュアル募集の登録を許可する」を有効にした連携だけ、募集登録 API も利用可能。既存のキーに自動で作成権限は付かない。
 - 停止・削除すると API キーも利用不可。再発行すると旧 API キーは即時失効し、以後の通知は新しい署名シークレットで署名する。
 - 対戦用 IP:port は既定で API に含めない。必要な連携だけ管理者が許可する。
-  表示名・コメント・対戦状態・配信 URL などは取得可能なため、掲載先にも注意する。
+  表示名・投稿者の Discord ID・コメント・対戦状態・配信 URL などは取得可能なため、掲載先にも注意する。
 - 通知先 URL は資格情報を含むことがあるため、管理一覧でもホスト名だけを表示。
   編集時に URL 欄を空にすると既存 URL を維持。「API のみ」を選択すると送信先を解除する。
 
@@ -44,11 +44,13 @@ Authorization: Bearer <APIキー>
 ```json
 {
   "schema_version": 1,
-  "revision": "db859eea912ff8aa38cf8b8da42e8305f14d247da8ed1ade1c81e2e4fcd0ecb1",
+  "revision": "1cea436035507df3bda498bd7d99e9b702cdf1bfd708716d08e32c14c251211f",
   "count": 1,
   "posts": [{
     "id": "0123456789abcdef0123456789abcdef",
     "owner_name": "プレイヤー",
+    "discord_user_id": "123456789012345678",
+    "discord_user_id_source": "oauth",
     "rank": "normal",
     "post_type": "casual",
     "rating": null,
@@ -75,7 +77,7 @@ Authorization: Bearer <APIキー>
 
 `include_address: true` の連携では、各 `posts[]` に `"addr": "203.0.113.10:10800"` のような
 文字列フィールドが1つ追加される（ここでの IP は説明用アドレス）。権限がなければ **キー自体を省略**し、
-`null` や空文字でマスクする方式ではない。他の21フィールドは常に存在する。
+`null` や空文字でマスクする方式ではない。他の23フィールドは常に存在する。
 
 #### JSON Schema（一覧 API の200本文専用）
 
@@ -104,11 +106,14 @@ Draft 2020-12。IP 提供あり・なしの両方を表現するため、`addr` 
           "id", "owner_name", "rank", "post_type", "rating", "comment", "created_at",
           "rank_status", "ranked_games", "stream_url", "giuroll", "autopunch",
           "direct_reachable", "reachability_uncertain", "reachability_lost",
-          "match_status", "guest_name", "ranked_active", "country_code", "country_name", "status"
+          "match_status", "guest_name", "ranked_active", "country_code", "country_name", "status",
+          "discord_user_id", "discord_user_id_source"
         ],
         "properties": {
           "id": {"type": "string"},
           "owner_name": {"type": "string"},
+          "discord_user_id": {"type": ["string", "null"]},
+          "discord_user_id_source": {"type": ["string", "null"], "enum": ["oauth", "integration", null]},
           "rank": {"type": "string", "enum": ["", "easy", "normal", "ex", "hard", "luna", "ph"]},
           "post_type": {"type": "string", "enum": ["casual", "ranked"]},
           "rating": {"type": ["number", "null"]},
@@ -147,6 +152,8 @@ Draft 2020-12。IP 提供あり・なしの両方を表現するため、`addr` 
 | `lobby_url` | string | ロビーの URL。以下の URL 例は既定の `ASOBBY_BASE_URL=https://asobby.com` の場合 |
 | `posts[].id` | string | 募集 ID。操作権限を与えるトークンではない |
 | `posts[].owner_name` | string | ホスト表示名。値がなければ `""` |
+| `posts[].discord_user_id` | string または null | 投稿者の Discord ユーザー ID。数値に変換せず文字列として扱う。不明は `null`。IP 提供権限には依存しない |
+| `posts[].discord_user_id_source` | string または null | `oauth`: asobby の Discord ログイン由来、`integration`: 登録元の連携が申告、ID 不明は `null` |
 | `posts[].rank` | string | `easy` / `normal` / `ex` / `hard` / `luna` / `ph`。未紐付けの API 登録募集では `""` |
 | `posts[].rank_status` | string | `unset` / `initial` / `provisional` / `ranked` / `unknown`。下記「ランクの設定・実績表示」を参照 |
 | `posts[].ranked_games` | integer または null | 累計の確定ランク戦数。不明は `null`、確認済み0戦は `0` |
@@ -177,6 +184,12 @@ Draft 2020-12。IP 提供あり・なしの両方を表現するため、`addr` 
 `ping_warn_enabled`、`ping_warn_ms`、`ping_warn_giuroll_ms` は返さない。
 `owner_token`、内部監視情報、受信メッセージ、API キーも含めない。
 
+`discord_user_id` は表示・紐付け用で、認証やランク判定には使わない。
+API 登録で `discord_user_id` を省略した募集は `null`。`external_user_id` が数字だけでも、
+Discord ID であると推測して転記しない。`integration` は asobby 自身が OAuth で本人確認した意味ではない。
+`external_user_id` は連携固有の ID のため一覧 API には出さず、登録元だけが状態取得 API で確認できる。
+今回の追加後も `schema_version` は `1`。厳密なスキーマ検証をする連携先は、この README の最新版へ更新する。
+
 #### HTTP ステータス・キャッシュ・認証エラー
 
 レスポンスの `ETag` を次回の `If-None-Match` に指定できる（変化なしは 304）。
@@ -200,7 +213,7 @@ HTTP エラーの本文は一覧スキーマではない。権限や入力によ
 
 ### Webhook の形式と配送
 
-登録・再開・再起動時、および一覧に表示する内容が変化したときに通知する。
+`lobby.changed` は連携の登録・再開・再起動時、および一覧に表示する内容が変化したときに通知する。
 5 秒ごとのハートビートだけでは通知しない。短時間の変化はまとめ、1 送信先につき同時 1 件、
 通常は 5 秒以上の間隔で送る。既存の募集処理から外部 HTTP 応答を待たない。
 
@@ -219,8 +232,32 @@ HTTP エラーの本文は一覧スキーマではない。権限や入力によ
 }
 ```
 
-通知には募集内容や IP、API キーを載せない。受信側は設定済みの一覧 API から最新状態を取得する。
-テスト通知も同じ形式で、トップレベルに `test: true` が付く。
+新しい募集が初めて公開されたときは、上記とは別に **`post.created`** を1募集につき1通知生成する。
+通常のクライアント募集と API 登録募集の両方が対象。API 登録は POST 受付時ではなく、UDP 確認後の初回掲載時。
+既存募集の更新・接続状態の変化・再起動による復元・連携の登録/再開では生成しない。
+API の同一登録の再送でも二重通知せず、終了後に改めて登録された別 ID の募集は新規として扱う。
+
+<!-- api-doc:webhook-created-example -->
+```json
+{
+  "schema_version": 1,
+  "id": "22222222222222222222222222222222",
+  "type": "post.created",
+  "occurred_at": "2026-09-07T12:00:00+00:00",
+  "source": "https://asobby.com",
+  "data": {
+    "count": 1,
+    "snapshot_url": "https://asobby.com/api/v1/lobby",
+    "post_id": "0123456789abcdef0123456789abcdef"
+  }
+}
+```
+
+`data.post_id` は新規募集の ID。トップレベルの `id` は通知 ID なので取り違えない。
+受信側は一覧 API の `posts[]` から `id == data.post_id` を探せば、投稿者の Discord ID 等を取得できる。
+配送待ちの間に募集が終了している場合は、一覧に存在しないこともある。
+通知には募集本文・Discord ID・IP・API キーを載せない。受信側は設定済みの一覧 API から最新状態を取得する。
+管理画面のテスト通知は `lobby.changed` の形式で、トップレベルに `test: true` が付く。
 通常の JSON Webhook であり、Discord Incoming Webhook 専用のメッセージ形式ではない。
 `data.count` は通知を作った時点の件数なので、受信後に取得する一覧 API の件数とは異なる場合がある。
 `occurred_at` はタイムゾーン付き ISO 8601 文字列（UTC、小数秒が付く場合もある）で、
@@ -232,14 +269,14 @@ Webhook 受信用の JSON Schema は以下。一覧 API のスキーマをここ
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AsobbyLobbyChanged",
+  "title": "AsobbyLobbyEvent",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "id", "type", "occurred_at", "source", "data"],
   "properties": {
     "schema_version": {"type": "integer", "const": 1},
     "id": {"type": "string"},
-    "type": {"type": "string", "const": "lobby.changed"},
+    "type": {"type": "string", "enum": ["lobby.changed", "post.created"]},
     "occurred_at": {"type": "string", "format": "date-time"},
     "source": {"type": "string"},
     "test": {"type": "boolean", "const": true},
@@ -249,10 +286,19 @@ Webhook 受信用の JSON Schema は以下。一覧 API のスキーマをここ
       "required": ["count", "snapshot_url"],
       "properties": {
         "count": {"type": "integer", "minimum": 0},
-        "snapshot_url": {"type": "string"}
+        "snapshot_url": {"type": "string"},
+        "post_id": {"type": "string"}
       }
     }
-  }
+  },
+  "allOf": [{
+    "if": {"properties": {"type": {"const": "post.created"}}},
+    "then": {
+      "properties": {"data": {"required": ["post_id"]}},
+      "not": {"required": ["test"]}
+    },
+    "else": {"properties": {"data": {"properties": {"post_id": false}}}}
+  }]
 }
 ```
 
@@ -260,12 +306,18 @@ Webhook 受信用の JSON Schema は以下。一覧 API のスキーマをここ
 
 - 2xx を配送成功とする。これは受信側が処理を受け付けたことを表し、その先の Discord 表示成功までは保証しない。
 - エラーは 5 秒から最大 300 秒まで間隔を延ばして再試行。`Retry-After` は最大 1 時間まで尊重する。
-- 再試行では同じ通知 ID を使用する。待機中に一覧が変われば、最新状態の通知に置き換える。
+- 再試行では同じ通知 ID を使用する。`lobby.changed` は待機中に一覧が変われば最新状態の通知に置き換える。
+- `post.created` は別の待ち行列に保持し、一覧更新やテスト通知で上書きしない。
+  両種の通知がある場合は交互に配送し、送信間隔・再試行待ち・1送信先1件の同時送信制限は共有する。
+  1送信先あたり最大200件。上限では先頭の送信/再試行対象を残し、古い待機通知から間引く。
+  この待ち行列はメモリ上のみで、再起動・連携設定の変更/キー再発行/停止/削除では消える。
+  設定の変更/再起動後は `lobby.changed` で再同期し、過去の募集を新規通知として再送しない。
 - 送信は 15 秒で打ち切る。リダイレクトは追わず、プロキシ環境変数は利用しない。
   登録時と毎送信時に DNS を確認し、公開 IP に固定して TLS 検証付きで接続する。
   localhost、プライベート/リンクローカル IP などへの送信は拒否する。
 
-この機能は **最新の募集一覧を同期するための通知**。全変更の履歴・厳密な一度だけの配送は保証しない。
+この機能は **最新の募集一覧を同期するための通知**に、新規募集の識別を加えたもの。
+全変更の履歴・新規通知の永続的な配送保証・厳密な一度だけの配送は保証しない。
 受信側は初回と数分ごとにも一覧を取得し、通知の重複・一時停止から復旧できるようにする。
 同じ Discord メッセージの更新は定期実行分も含めて直列化し、内容が変わった場合だけ編集する。
 API 取得失敗を「0 件」と扱わず、古い情報であることを表示するか、再試行する。
@@ -304,7 +356,7 @@ API 取得失敗を「0 件」と扱わず、古い情報であることを表�
 
 | ヘッダー | 値 |
 | --- | --- |
-| `X-Asobby-Event` | `lobby.changed` |
+| `X-Asobby-Event` | JSON の `type` と同じ（`lobby.changed` / `post.created`） |
 | `X-Asobby-Delivery` | JSON 内の通知 ID と同じ値 |
 | `X-Asobby-Timestamp` | 送信時刻（Unix 秒） |
 | `X-Asobby-Signature` | `sha256=<HMACの16進表記>` |
@@ -319,10 +371,16 @@ HMAC-SHA256 の鍵は連携ごとの署名シークレット。対象バイト�
 1. dpalette で Webhook トリガーのワークフローを作り、公開後の受信用 URL を取得する。
 2. asobby の `/admin` で、その URL を通知先として登録。発行した API キーを dpalette の Secret に保存する。
 3. `trigger.webhook` → `http.request`（一覧取得）→ 一覧を整形 → `discord.message.sync` を接続する。
-   HTTP ヘッダー例: `Authorization: Bearer {{secret.asobby_api_key}}`。
-   一覧の取得先には自分で設定した asobby の URL を使う。
+   HTTP ノードはメソッド `GET`、URL `https://asobby.com/api/v1/lobby`、クエリ `{}`、JSON本文 `null`。
+   「ヘッダー」欄は JSON で `{"Authorization":"Bearer {{ secret.asobby_api_key }}"}` と入力する。
+   Secret 名は `asobby_api_key`、保存する値は `Bearer ` を付けない API キー本体。
+   バックスラッシュで `_` をエスケープしない。ドライランでは実際の HTTP 通信はしない。
+   一覧の取得先には自分で設定した asobby の URL を使い、通知本文から無条件で転記しない。
 4. 一覧 0 件のときも「現在募集中のホストはいません」と同期する。同じ `message_key` を使い続ける。
 5. 初回実行と定期的な再同期を設定し、asobby 管理画面からテスト通知を送る。
+
+新規募集専用の処理は `trigger.webhook` の `body.type == "post.created"` で分岐し、
+`body.data.post_id` を利用する。既存一覧の同期は `lobby.changed` だけで引き続き利用できる。
 
 dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
 上記 HMAC の自動検証を備えていることは前提にしていない。署名検証を必須にする場合は受信側に追加する。
@@ -339,6 +397,7 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
 {
   "request_id": "recruitment-message-123",
   "external_user_id": "player-456",
+  "discord_user_id": "123456789012345678",
   "owner_name": "プレイヤー",
   "addr": "<本人の公開IPv4>:10800",
   "comment": "対戦募集",
@@ -348,11 +407,16 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
 
 - 必須: `request_id`・`external_user_id`（各128文字以内）、`owner_name`（80文字以内）、`addr`。
 - 任意: `comment`（200文字以内）、`stream_url`（300文字以内。YouTube/Twitch/ニコニコのみ）。
-- 全フィールドの型は string。`null` は不可。任意フィールドを省略した場合の既定値は `""`。
+- 上記6フィールドの型は string。`null` は不可。`comment`・`stream_url` の省略時は `""`。
   `request_id`・`external_user_id`・`owner_name` は入力時1文字以上で、前後空白を除去した結果も空でないこと、
   U+0000〜U+001F の制御文字を含まないことを検証する。長さ上限は前後空白を除去する前の入力に適用される。
   `addr` は64文字以内。本文に列挙していない余分なキーがあれば422。
   例の `<本人の公開IPv4>` は置換必須で、文字どおり送信すると422になる。
+- 任意: `discord_user_id`（string または null、省略時 `null`）。1〜20桁の半角数字で、
+  先頭0なし、1〜18446744073709551615 の範囲。JSON の数値ではなく文字列で送信する。
+  Discord 連携では認証済みのコマンド投稿者の ID を設定する。asobby 側では連携元の申告として扱い、
+  Discord アカウントへのログイン権限・既存戦績との紐付け・ランク設定には使用しない。
+  従来の `external_user_id` だけの POST はそのまま使え、既存の再送判定も維持する。
 - `request_id` は Discord の募集操作・メッセージなどを一意に識別する ID。
   確認中・掲載中に同じ ID と内容を再送しても二重登録しない。内容が違えば409。
   終了した登録の再送は新規登録になるため、202受信後に404になった場合は自動で再登録しない。
@@ -375,6 +439,7 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
   "id": "fedcba9876543210fedcba9876543210",
   "state": "checking",
   "status_url": "https://asobby.com/api/v1/posts/fedcba9876543210fedcba9876543210",
+  "external_user_id": "player-456",
   "post": null
 }
 ```
@@ -383,7 +448,7 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
 この GET にも `allow_posting=true` が必要。成功時は200で、POST の202と本文の形は同じ。
 どちらも `Cache-Control: no-store` を付ける。**`state` は `checking` / `active` の2種類だけ**で、
 `closed` / `expired` などの終了状態は返さず、終了後は404になる。
-`state=checking` なら `post=null`、`state=active` なら `post` は31フィールドの募集オブジェクト。
+`state=checking` なら `post=null`、`state=active` なら `post` は33フィールドの募集オブジェクト。
 `active` は「公開済み」を意味し、その瞬間の接続可否・募集中・対戦中を保証しない。
 未応答の猶予期間でも `active` のまま `reachability_lost=true` / `net_status=0` になることがある。
 
@@ -395,6 +460,7 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
   "id": "fedcba9876543210fedcba9876543210",
   "state": "active",
   "status_url": "https://asobby.com/api/v1/posts/fedcba9876543210fedcba9876543210",
+  "external_user_id": "player-456",
   "post": {
     "id": "fedcba9876543210fedcba9876543210",
     "rank": "",
@@ -415,6 +481,8 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
     "match_status": "",
     "net_status": 3,
     "owner_name": "プレイヤー",
+    "discord_user_id": "123456789012345678",
+    "discord_user_id_source": "integration",
     "owner_avatar": "",
     "guest_name": "",
     "guest_avatar": "",
@@ -431,8 +499,9 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
 }
 ```
 
-`post` は内部の公開用 `Post` 全体を返すため、**一覧 API の `posts[]` と同じスキーマではない**。
-共通20フィールドの型は一覧 API と同じだが、合成フィールド `status` は存在しない。
+`post` は公開用 `Post` の31フィールドに Discord ID 関連の2フィールドを加えたもので、
+**一覧 API の `posts[]` と同じスキーマではない**。
+共通22フィールドの型は一覧 API と同じだが、合成フィールド `status` は存在しない。
 代わりに、一覧 API では常に除外される以下の10フィールドと、常に存在する `addr` がある。
 
 | フィールド | 型 | 登録結果での内容 |
@@ -449,8 +518,9 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
 | `ping_warn_giuroll_ms` | integer | Giuroll 向けの警告しきい値（ms）。API 登録では未使用 |
 | `supports_messages` | boolean | API 登録では `false` |
 
-登録結果は `{id: string, state: string, status_url: string, post: object | null}` の4キーを常に返す。
-`post` がある場合は上記31キーを省略せず返す。`id` は `post.id` と一致する。
+登録結果は `{id: string, state: string, status_url: string, external_user_id: string, post: object | null}` の5キーを常に返す。
+`external_user_id` は POST で指定した連携内の投稿者 ID。公開前の `checking` でも返し、別連携からは取得できない。
+`post` がある場合は上記33キーを省略せず返す。`id` は `post.id` と一致する。
 `status_url` は状態取得の URL であり、それ自体に認証情報は含まない。
 `post` の IP は登録した連携には返すが、一覧 API の `include_address` 権限とは独立。
 未確認の募集はロビー・一覧 API・募集通知には出さない。別の連携の登録や終了済み登録は404。
@@ -482,9 +552,10 @@ Pydantic/FastAPI の入力検証エラーでは `detail` が文字列ではな�
 #### 生存確認と自動検出
 
 - クライアントの定期更新は不要。**手動終了 API・固定の掲載期限は設けない。**
-  応答が続く限り掲載を維持し、確認済みの未応答が3回連続、かつ最初の失敗から30秒以上で掲載を終了する。
-  確認間隔の目標は15秒。全体を最低1秒間隔で分散し、既存プローブと共有する固定 UDP ポートで直列実行するため、
-  件数や応答時間によって実際の間隔・終了検知は長くなる。
+  応答が続く限り掲載を維持し、確認済みの未応答が3回連続、かつ最初の失敗から2秒以上で掲載を終了する。
+  通常の確認間隔の目標は15秒、確認済みの未応答後は1秒間隔で再確認する。
+  全体を最低1秒間隔で分散し、既存プローブと共有する固定 UDP ポートで直列実行するため、
+  件数・確認待ち・応答時間によって実際の間隔や終了検知は長くなる。ホスト停止から2秒以内の削除を保証するものではない。
 - 検証されたゲーム応答、または Giuroll 専用応答が生存の根拠。単なる AutoPunch 登録や任意の UDP 返信では掲載しない。
   未応答中は到達性警告を表示する。ローカルソケット異常・仲介サーバーの障害は判定不能とし、終了用の失敗回数に数えない。
 - `0x07` の理由1は待機相当、理由0（観戦無効）は状態不明、`0x08`（転送）／`0x06`（観戦初期化応答）は接続中として扱う。

@@ -1737,7 +1737,7 @@ def integration_posts() -> list[dict[str, Any]]:
     """Do not export expired listings while waiting for the cleanup tick."""
     now = time.time()
     return [
-        asdict(rec.post) for rec in list(RECORDS.values())
+        {**asdict(rec.post), **integrations.author_fields(rec)} for rec in list(RECORDS.values())
         if record_is_listed(rec) and now - rec.post.updated_at < post_record_ttl(rec)
     ]
 
@@ -3786,6 +3786,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         last_hostcheck_at=now,
     )
     RECORDS[post.id] = rec
+    INTEGRATIONS.post_created(post.id)
 
     await _persist_record(rec)
     await HUB.publish("upsert", asdict(post))

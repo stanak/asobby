@@ -24,7 +24,8 @@ CHECK_INTERVAL = 15.0
 MIN_TICK = 1.0
 GIUROLL_CHECK_INTERVAL = 60.0
 FAILURES_TO_CLOSE = 3
-FAILURE_GRACE = 30.0  # consecutive silence, NOT a publication lifetime
+FAILURE_GRACE = 2.0  # consecutive silence, NOT a publication lifetime
+FAILURE_RECHECK_INTERVAL = 1.0
 MAX_LISTINGS = 50
 MAX_PER_INTEGRATION = 10
 MAX_PER_USER = 1
@@ -39,6 +40,14 @@ class Registration(BaseModel):
     addr: str = Field(max_length=64)
     comment: str = Field(default="", max_length=200)
     stream_url: str = Field(default="", max_length=300)
+    discord_user_id: str | None = Field(default=None, min_length=1, max_length=20, pattern=r"^[1-9][0-9]{0,19}$")
+
+    @field_validator("discord_user_id")
+    @classmethod
+    def discord_snowflake(cls, value):
+        if value is not None and int(value) > 2**64 - 1:
+            raise ValueError("discord_user_id must be a positive unsigned 64-bit ID string")
+        return value
 
     @field_validator("request_id", "external_user_id", "owner_name")
     @classmethod
@@ -68,6 +77,7 @@ class Monitor:
     next_check_at: float = 0
     failures: int = 0
     first_failure_at: float = 0
+    discord_user_id: str | None = None
 
 
 class Service:
@@ -105,7 +115,8 @@ class Service:
             "id": rec.post.id,
             "state": "active" if rec.monitor.published else "checking",
             "status_url": self.integrations.base_url + "/api/v1/posts/" + rec.post.id,
-            "post": asdict(rec.post) if rec.monitor.published else None,
+            "external_user_id": rec.monitor.external_user_id,
+            "post": {**asdict(rec.post), **integrations.author_fields(rec)} if rec.monitor.published else None,
         }
 
     async def _durable(self, operation, commit):
@@ -130,7 +141,8 @@ class Service:
             raise HTTPException(503, "UDP host verification is disabled")
         if not self.stream_allowed(body.stream_url):
             raise HTTPException(422, "stream_url must be youtube, twitch, or niconico")
-        fingerprint = hashlib.sha256(integrations.encode_json(body.model_dump())).hexdigest()
+        # Omitting the new optional field must retain pre-upgrade retry hashes.
+        fingerprint = hashlib.sha256(integrations.encode_json(body.model_dump(exclude_none=True))).hexdigest()
         async with self._lock:
             if not self.permitted(item.id):
                 raise HTTPException(403, "listing creation is not allowed for this integration")
@@ -158,6 +170,7 @@ class Service:
             rec = self.make_record(body, Monitor(
                 integration_id=item.id, external_user_id=body.external_user_id,
                 request_id=body.request_id, fingerprint=fingerprint,
+                discord_user_id=body.discord_user_id,
             ))
             # Reserve the endpoint before the async disk write so a native
             # client finishing its probe cannot publish the same host midway.
@@ -258,15 +271,19 @@ class Service:
                     if monitor.failures == 0:
                         monitor.first_failure_at = now
                     monitor.failures += 1
+                    monitor.next_check_at = now + FAILURE_RECHECK_INTERVAL
                     if monitor.failures >= FAILURES_TO_CLOSE and now - monitor.first_failure_at >= FAILURE_GRACE:
                         await self.remove(rec, "host_unreachable")
                         return
             changed = asdict(rec.post) != asdict(post) or not rec.monitor.published and monitor.published
             if changed:
                 post.updated_at = now
-            await self._durable(
-                lambda: self.save(updated), lambda: self.records.__setitem__(post.id, updated),
-            )
+            def committed():
+                self.records[post.id] = updated
+                if monitor.published and not rec.monitor.published:
+                    self.integrations.post_created(post.id)
+
+            await self._durable(lambda: self.save(updated), committed)
             if changed and monitor.published:
                 await self.publish("upsert", asdict(post))
 
