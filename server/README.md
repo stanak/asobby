@@ -25,40 +25,178 @@ Discord のセッション・URL クエリに入れたキーは利用できな�
 既定では募集の作成/変更/終了や管理操作はできない。管理者が作成を許可した場合に限り、
 下記の登録 API が使える。既存 `/posts` のログイン要件は維持する。
 
+以下は `GET /api/v1/lobby` の **HTTP 200 レスポンス本文**の仕様。
+Webhook の受信本文や `GET /api/v1/posts/{id}` の登録状態とは別の形式である。
+`/openapi.json` には現在、これらのレスポンスの全フィールドが定義されていないため、
+連携先の出力スキーマには下記の JSON Schema を使う。
+
 ```http
 GET /api/v1/lobby HTTP/1.1
 Host: asobby.com
 Authorization: Bearer <APIキー>
 ```
 
+#### 完全なレスポンス例（IP 提供なし）
+
+この例はフィールドを省略していない。ID・日時・表示内容は説明用で、`revision` はこの `posts` から計算した値。
+
+<!-- api-doc:lobby-example -->
 ```json
 {
   "schema_version": 1,
-  "revision": "<表示内容のSHA-256>",
+  "revision": "db859eea912ff8aa38cf8b8da42e8305f14d247da8ed1ade1c81e2e4fcd0ecb1",
   "count": 1,
   "posts": [{
-    "id": "<募集ID>",
+    "id": "0123456789abcdef0123456789abcdef",
     "owner_name": "プレイヤー",
-    "post_type": "casual",
     "rank": "normal",
+    "post_type": "casual",
+    "rating": null,
+    "comment": "対戦募集",
+    "created_at": 1788825600.0,
     "rank_status": "unset",
     "ranked_games": 0,
-    "comment": "対戦募集",
+    "stream_url": "",
+    "giuroll": false,
+    "autopunch": false,
+    "direct_reachable": true,
+    "reachability_uncertain": false,
+    "reachability_lost": false,
+    "match_status": "",
+    "guest_name": "",
+    "ranked_active": false,
+    "country_code": "",
+    "country_name": "",
     "status": "waiting"
   }],
   "lobby_url": "https://asobby.com/"
 }
 ```
 
-`posts` の例は主要項目のみ。状態は `waiting`（ホスト待ち）・`connecting`（接続/準備中）・
-`playing`（対戦中）・`unknown`。作成時刻の新しい順。同定済みの対戦相手名や接続補助ツール、
-到達性、国情報なども含む。ユーザー ID、投稿操作トークン、受信メッセージ、ハートビート時刻は含めない。
-IP 提供を許可した連携にだけ `addr` を追加する。API は期限切れの募集を除外し、0 件は `posts: []` で返す。
+`include_address: true` の連携では、各 `posts[]` に `"addr": "203.0.113.10:10800"` のような
+文字列フィールドが1つ追加される（ここでの IP は説明用アドレス）。権限がなければ **キー自体を省略**し、
+`null` や空文字でマスクする方式ではない。他の21フィールドは常に存在する。
+
+#### JSON Schema（一覧 API の200本文専用）
+
+Draft 2020-12。IP 提供あり・なしの両方を表現するため、`addr` だけは必須にしていない。
+これは JSON Schema オブジェクトであり、上のレスポンス例そのものとは異なる。
+
+<!-- api-doc:lobby-schema -->
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AsobbyLobbySnapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "revision", "count", "posts", "lobby_url"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "revision": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "count": {"type": "integer", "minimum": 0},
+    "lobby_url": {"type": "string"},
+    "posts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "owner_name", "rank", "post_type", "rating", "comment", "created_at",
+          "rank_status", "ranked_games", "stream_url", "giuroll", "autopunch",
+          "direct_reachable", "reachability_uncertain", "reachability_lost",
+          "match_status", "guest_name", "ranked_active", "country_code", "country_name", "status"
+        ],
+        "properties": {
+          "id": {"type": "string"},
+          "owner_name": {"type": "string"},
+          "rank": {"type": "string", "enum": ["", "easy", "normal", "ex", "hard", "luna", "ph"]},
+          "post_type": {"type": "string", "enum": ["casual", "ranked"]},
+          "rating": {"type": ["number", "null"]},
+          "comment": {"type": "string"},
+          "created_at": {"type": "number"},
+          "rank_status": {"type": "string", "enum": ["unset", "initial", "provisional", "ranked", "unknown"]},
+          "ranked_games": {"type": ["integer", "null"], "minimum": 0},
+          "stream_url": {"type": "string"},
+          "giuroll": {"type": "boolean"},
+          "autopunch": {"type": "boolean"},
+          "direct_reachable": {"type": "boolean"},
+          "reachability_uncertain": {"type": "boolean"},
+          "reachability_lost": {"type": "boolean"},
+          "match_status": {"type": "string"},
+          "guest_name": {"type": "string"},
+          "ranked_active": {"type": "boolean"},
+          "country_code": {"type": "string"},
+          "country_name": {"type": "string"},
+          "status": {"type": "string", "enum": ["waiting", "connecting", "playing", "unknown"]},
+          "addr": {"type": "string"}
+        }
+      }
+    }
+  }
+}
+```
+
+#### フィールドの意味・空値・省略条件
+
+| フィールド | 型 | 内容 |
+| --- | --- | --- |
+| `schema_version` | integer | 現在は `1`。サーバー全体の API バージョン `v0.2` とは別 |
+| `revision` | string | 返却する `posts` の内容から計算した64桁の SHA-256（小文字16進） |
+| `count` | integer | `posts.length` と同じ。0件でも本文は返り、`posts: []` になる |
+| `posts` | array of object | 公開中で期限切れでない募集。`created_at` 降順、同時刻は `id` 昇順 |
+| `lobby_url` | string | ロビーの URL。以下の URL 例は既定の `ASOBBY_BASE_URL=https://asobby.com` の場合 |
+| `posts[].id` | string | 募集 ID。操作権限を与えるトークンではない |
+| `posts[].owner_name` | string | ホスト表示名。値がなければ `""` |
+| `posts[].rank` | string | `easy` / `normal` / `ex` / `hard` / `luna` / `ph`。未紐付けの API 登録募集では `""` |
+| `posts[].rank_status` | string | `unset` / `initial` / `provisional` / `ranked` / `unknown`。下記「ランクの設定・実績表示」を参照 |
+| `posts[].ranked_games` | integer または null | 累計の確定ランク戦数。不明は `null`、確認済み0戦は `0` |
+| `posts[].post_type` | string | `casual` または `ranked`。現在の対戦がランク戦として成立したかとは別 |
+| `posts[].rating` | number または null | Ph の表示レート。それ以外・未紐付けは `null` |
+| `posts[].comment` | string | 募集コメント。未設定は `""` |
+| `posts[].created_at` | number | Unix 時刻（秒、小数可）。日時文字列・ミリ秒ではない |
+| `posts[].stream_url` | string | 配信 URL。未設定は `""` |
+| `posts[].giuroll` | boolean | Giuroll フラグ。UDP 監視募集の `false` は未検出であって不使用の保証ではない |
+| `posts[].autopunch` | boolean | AutoPunch フラグ。ロビーの AP 表示条件はこれが `true` かつ `direct_reachable` が `false` |
+| `posts[].direct_reachable` | boolean | サーバーから直接 UDP 到達を確認したか |
+| `posts[].reachability_uncertain` | boolean | 到達性が不確実であることを示すフラグ |
+| `posts[].reachability_lost` | boolean | 到達性の喪失を検知したフラグ。`status` とは独立 |
+| `posts[].match_status` | string | クライアントの表示用文字列。空文字もある。状態の enum ではない |
+| `posts[].guest_name` | string | 同定できた対戦相手の表示名。未同定は `""`。接続していないとは限らない |
+| `posts[].ranked_active` | boolean | 現在の相手とのランク戦成立フラグ。個々の結果がランク戦として記録される保証ではない（連戦上限等は別判定） |
+| `posts[].country_code` | string | 国コード（例 `JP`）。未取得は `""` |
+| `posts[].country_name` | string | 国名。未取得は `""` |
+| `posts[].status` | string | 下記の優先順で算出した状態 |
+| `posts[].addr` | string、省略あり | IP:port。`include_address=true` の場合のみ存在。`null` にはならない |
+
+`status` の算出順は、元の募集の `net_status=4` → `playing`、それ以外で
+`guest_connected=true` または `net_status=2` → `connecting`、それ以外で `net_status=3` → `waiting`、
+それ以外 → `unknown`。`guest_name` や `match_status` の空・非空から状態を推測しない。
+
+一覧 API はこのスキーマにあるフィールドだけを返す。特に `net_status`、`updated_at`、
+`owner_avatar`、`guest_avatar`、`guest_user_id`、`guest_connected`、`supports_messages`、
+`ping_warn_enabled`、`ping_warn_ms`、`ping_warn_giuroll_ms` は返さない。
+`owner_token`、内部監視情報、受信メッセージ、API キーも含めない。
+
+#### HTTP ステータス・キャッシュ・認証エラー
 
 レスポンスの `ETag` を次回の `If-None-Match` に指定できる（変化なしは 304）。
-`revision` は内容比較用の値であり、時系列順の番号ではない。IP の提供権限が異なる場合は値も異なる。
+200 の `ETag` は `revision` を二重引用符で囲んだ値。**304 の本文は空**なので JSON としてパースしない。
+200 / 304 とも `Cache-Control: private, no-store` と `Vary: Authorization` を付ける。
+`revision` は内容比較用の値であり、時系列順の番号ではない。
+IP 提供の有無で返却する `posts` が変われば値も変わるが、0件の場合はどちらも `[]` なので同じ値になる。
 認証後に条件付き取得を判定し、失効済みキーには 304 を返さない。
 1 キーあたり 60 回/分まで。超過は 429 と `Retry-After` を返す。
+この枠は `GET /api/v1/lobby` と登録 API の POST / GET で共有し、304 も消費する。
+
+| HTTP | 条件・本文 |
+| --- | --- |
+| 200 | 上記の一覧 JSON |
+| 304 | 変更なし。本文なし |
+| 401 | キー未指定・不正・失効・連携停止。`{"detail":"invalid integration key"}`、`WWW-Authenticate: Bearer` |
+| 429 | API 呼出上限。`{"detail":"too many requests"}`、`Retry-After: 60` |
+| 503 | 連携ストレージ利用不可。`{"detail":"integration storage unavailable"}` |
+
+HTTP エラーの本文は一覧スキーマではない。権限や入力によるエラーの優先順に依存する実装は避ける。
 
 ### Webhook の形式と配送
 
@@ -66,10 +204,11 @@ IP 提供を許可した連携にだけ `addr` を追加する。API は期限�
 5 秒ごとのハートビートだけでは通知しない。短時間の変化はまとめ、1 送信先につき同時 1 件、
 通常は 5 秒以上の間隔で送る。既存の募集処理から外部 HTTP 応答を待たない。
 
+<!-- api-doc:webhook-example -->
 ```json
 {
   "schema_version": 1,
-  "id": "<通知ID>",
+  "id": "11111111111111111111111111111111",
   "type": "lobby.changed",
   "occurred_at": "2026-09-07T12:00:00+00:00",
   "source": "https://asobby.com",
@@ -83,6 +222,41 @@ IP 提供を許可した連携にだけ `addr` を追加する。API は期限�
 通知には募集内容や IP、API キーを載せない。受信側は設定済みの一覧 API から最新状態を取得する。
 テスト通知も同じ形式で、トップレベルに `test: true` が付く。
 通常の JSON Webhook であり、Discord Incoming Webhook 専用のメッセージ形式ではない。
+`data.count` は通知を作った時点の件数なので、受信後に取得する一覧 API の件数とは異なる場合がある。
+`occurred_at` はタイムゾーン付き ISO 8601 文字列（UTC、小数秒が付く場合もある）で、
+一覧の `created_at` の数値形式とは異なる。
+
+Webhook 受信用の JSON Schema は以下。一覧 API のスキーマをここに流用しない。
+
+<!-- api-doc:webhook-schema -->
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AsobbyLobbyChanged",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "type", "occurred_at", "source", "data"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "id": {"type": "string"},
+    "type": {"type": "string", "const": "lobby.changed"},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "source": {"type": "string"},
+    "test": {"type": "boolean", "const": true},
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "snapshot_url"],
+      "properties": {
+        "count": {"type": "integer", "minimum": 0},
+        "snapshot_url": {"type": "string"}
+      }
+    }
+  }
+}
+```
+
+通常通知は `test` を省略し、テスト通知だけ `test: true` を返す。`test: false` は送らない。
 
 - 2xx を配送成功とする。これは受信側が処理を受け付けたことを表し、その先の Discord 表示成功までは保証しない。
 - エラーは 5 秒から最大 300 秒まで間隔を延ばして再試行。`Retry-After` は最大 1 時間まで尊重する。
@@ -160,6 +334,7 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
 `POST /api/v1/posts` に同じ Bearer API キーを付け、次の JSON を送信する。
 `addr` のプレースホルダーは、募集する本人の公開 IPv4 に置き換える。
 
+<!-- api-doc:registration-request -->
 ```json
 {
   "request_id": "recruitment-message-123",
@@ -173,6 +348,11 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
 
 - 必須: `request_id`・`external_user_id`（各128文字以内）、`owner_name`（80文字以内）、`addr`。
 - 任意: `comment`（200文字以内）、`stream_url`（300文字以内。YouTube/Twitch/ニコニコのみ）。
+- 全フィールドの型は string。`null` は不可。任意フィールドを省略した場合の既定値は `""`。
+  `request_id`・`external_user_id`・`owner_name` は入力時1文字以上で、前後空白を除去した結果も空でないこと、
+  U+0000〜U+001F の制御文字を含まないことを検証する。長さ上限は前後空白を除去する前の入力に適用される。
+  `addr` は64文字以内。本文に列挙していない余分なキーがあれば422。
+  例の `<本人の公開IPv4>` は置換必須で、文字どおり送信すると422になる。
 - `request_id` は Discord の募集操作・メッセージなどを一意に識別する ID。
   確認中・掲載中に同じ ID と内容を再送しても二重登録しない。内容が違えば409。
   終了した登録の再送は新規登録になるため、202受信後に404になった場合は自動で再登録しない。
@@ -186,19 +366,92 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
 - 接続先は公開 IPv4 の数値表記のみ。内部・予約・マルチキャストなどのアドレス、ホスト名は不可。
   UDP 送信時と復元時にも検証する。
 
-受付は UDP 検証を待たず、永続化後に **202 Accepted** を返す。
+新規受付は UDP 検証を待たず、永続化後に **202 Accepted** を返す。
+登録 POST は同じリクエストの再送でも202。その登録が既に公開済みなら、下記の `active` 形式を返す。
 
+<!-- api-doc:registration-checking -->
 ```json
 {
-  "id": "<募集ID>",
+  "id": "fedcba9876543210fedcba9876543210",
   "state": "checking",
-  "status_url": "https://asobby.com/api/v1/posts/<募集ID>",
+  "status_url": "https://asobby.com/api/v1/posts/fedcba9876543210fedcba9876543210",
   "post": null
 }
 ```
 
 `GET /api/v1/posts/{id}` に同じ連携のキーを付けると状態を取得できる。
-確認できた後は `state: "active"` と通常の募集形式の `post` を返す。
+この GET にも `allow_posting=true` が必要。成功時は200で、POST の202と本文の形は同じ。
+どちらも `Cache-Control: no-store` を付ける。**`state` は `checking` / `active` の2種類だけ**で、
+`closed` / `expired` などの終了状態は返さず、終了後は404になる。
+`state=checking` なら `post=null`、`state=active` なら `post` は31フィールドの募集オブジェクト。
+`active` は「公開済み」を意味し、その瞬間の接続可否・募集中・対戦中を保証しない。
+未応答の猶予期間でも `active` のまま `reachability_lost=true` / `net_status=0` になることがある。
+
+公開済みの完全な本文例（ID・IP・日時は説明用）:
+
+<!-- api-doc:registration-active -->
+```json
+{
+  "id": "fedcba9876543210fedcba9876543210",
+  "state": "active",
+  "status_url": "https://asobby.com/api/v1/posts/fedcba9876543210fedcba9876543210",
+  "post": {
+    "id": "fedcba9876543210fedcba9876543210",
+    "rank": "",
+    "rank_status": "unknown",
+    "ranked_games": null,
+    "post_type": "casual",
+    "rating": null,
+    "addr": "203.0.113.10:10800",
+    "comment": "対戦募集",
+    "updated_at": 1788825600.0,
+    "created_at": 1788825600.0,
+    "stream_url": "",
+    "giuroll": false,
+    "autopunch": false,
+    "direct_reachable": true,
+    "reachability_uncertain": false,
+    "reachability_lost": false,
+    "match_status": "",
+    "net_status": 3,
+    "owner_name": "プレイヤー",
+    "owner_avatar": "",
+    "guest_name": "",
+    "guest_avatar": "",
+    "guest_user_id": "",
+    "guest_connected": false,
+    "ranked_active": false,
+    "ping_warn_enabled": false,
+    "ping_warn_ms": 60,
+    "ping_warn_giuroll_ms": 100,
+    "country_code": "",
+    "country_name": "",
+    "supports_messages": false
+  }
+}
+```
+
+`post` は内部の公開用 `Post` 全体を返すため、**一覧 API の `posts[]` と同じスキーマではない**。
+共通20フィールドの型は一覧 API と同じだが、合成フィールド `status` は存在しない。
+代わりに、一覧 API では常に除外される以下の10フィールドと、常に存在する `addr` がある。
+
+| フィールド | 型 | 登録結果での内容 |
+| --- | --- | --- |
+| `addr` | string | 登録した IP:port。`include_address` に関係なく返る |
+| `updated_at` | number | Unix 時刻（秒、小数可）。登録時または募集内容が変化した時刻で、毎回の UDP 確認時刻ではない |
+| `net_status` | integer | UDP 監視では `0` 不明 / `2` 接続中 / `3` 待機相当。試合中を確定できないので `4` は設定しない |
+| `owner_avatar` | string | API 登録では `""` |
+| `guest_avatar` | string | API 登録では `""` |
+| `guest_user_id` | string | API 登録では `""`。既存アカウントに推測で紐付けない |
+| `guest_connected` | boolean | UDP の応答から接続中と判定したか。対戦相手の同定済みとは限らない |
+| `ping_warn_enabled` | boolean | API 登録では `false` |
+| `ping_warn_ms` | integer | 通常ホスト向けの警告しきい値（ms）。API 登録では警告無効なので未使用 |
+| `ping_warn_giuroll_ms` | integer | Giuroll 向けの警告しきい値（ms）。API 登録では未使用 |
+| `supports_messages` | boolean | API 登録では `false` |
+
+登録結果は `{id: string, state: string, status_url: string, post: object | null}` の4キーを常に返す。
+`post` がある場合は上記31キーを省略せず返す。`id` は `post.id` と一致する。
+`status_url` は状態取得の URL であり、それ自体に認証情報は含まない。
 `post` の IP は登録した連携には返すが、一覧 API の `include_address` 権限とは独立。
 未確認の募集はロビー・一覧 API・募集通知には出さない。別の連携の登録や終了済み登録は404。
 定期確認する場合は15秒以上の間隔にし、429の `Retry-After` に従う。
@@ -207,6 +460,24 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
 asobby のランクが確認できないのでランク欄は空欄。
 ホスト側クライアントがないため、定型メッセージと高 Ping 警告は無効。
 `supports_messages: false` は受信機能の有無を表す。
+
+#### 登録 API のエラー
+
+一覧 API と同じ401・429・連携ストレージの503に加えて、以下を返す。
+HTTPException の本文は `{"detail":"説明文字列"}`。
+Pydantic/FastAPI の入力検証エラーでは `detail` が文字列ではなく配列になるため、別扱いにする。
+
+| HTTP | 条件 |
+| --- | --- |
+| 403 | 作成権限がない（状態取得 GET にも必要） |
+| 404 | 状態取得で、存在しない・終了した・別連携の登録 ID を指定 |
+| 409 | 同じ `request_id` で内容が異なる、または同じ IP:port の募集が既に存在 |
+| 422 | 必須キー不足・型/長さ/アドレス検証・余分なキー・不許可の配信 URL 等 |
+| 429 | 同時募集数上限（`Retry-After: 30`）、新規登録6件/分または API 全体60回/分（`Retry-After: 60`） |
+| 503 | UDP 監視無効、または募集/連携ストレージ利用不可 |
+
+422 の検証エラー要素には `type`・`loc`・`msg` があり、`input` や `ctx` が含まれる場合もある。
+登録の変更・手動終了用 PATCH / DELETE API はない。
 
 #### 生存確認と自動検出
 
@@ -253,6 +524,9 @@ API キーはハッシュのみ保存。送信 URL と署名シークレット�
 
 | Method/Path | 説明 |
 | --- | --- |
+| `GET /api/v1/lobby` | 連携キーで取得する一覧オブジェクト。IP は権限次第。上記 JSON Schema を参照 |
+| `POST /api/v1/posts` | 作成権限付き連携キーで UDP 監視募集を登録。202、状態取得と同じ本文 |
+| `GET /api/v1/posts/{id}` | 同じ連携・作成権限付きキーで登録状態を取得。200、`checking` / `active` |
 | `GET /` | 閲覧用 Web ページ（SSE でリアルタイム更新） |
 | `GET /stats` | 戦績閲覧用 Web ページ |
 | `GET /replays` | リプレイ検索 Web ページ |
@@ -285,9 +559,11 @@ API キーはハッシュのみ保存。送信 URL と署名シークレット�
 | `GET /auth/logout` | Web クッキーセッションを削除して `/` へリダイレクト |
 
 - 投稿の更新・削除には作成時に発行される `owner_token` が必要（他人の投稿は操作不可）
-- 投稿は TTL 20 秒。クライアントは 5 秒間隔のハートビート（update）で維持する
+- 通常クライアントの投稿は通常 TTL 20 秒、ゲスト IP を取得済み、または `guest_connected=true` の場合は600秒。
+  `net_status` だけでは延長されない。クライアントは5秒間隔のハートビートで維持する。
+  API 登録の UDP 監視募集には、この TTL やクライアントのハートビート要件は適用しない
 - 新規作成時とアドレス変更時にホスト到達性を検証する。通常ホストは UDP soku echo で直接プローブする
-- autopunch ホストは AutoPunch リレー経由で検証する（リレー lookup → hole punch → soku echo）。リレー先は環境変数 `ASOBBY_AUTOPUNCH_RELAY` で変更可能（既定 `delthas.fr:14763`）。リレー自体に到達できない場合は検証をスキップする（fail-open）
+- 通常クライアントの autopunch ホストは AutoPunch リレー経由で検証する（リレー lookup → hole punch → soku echo）。リレー先は環境変数 `ASOBBY_AUTOPUNCH_RELAY` で変更可能（既定 `delthas.fr:14763`）。通常クライアントの新規登録はリレー到達不能時に検証をスキップする（fail-open）。API 登録はゲーム応答の確認まで掲載しない
 - 作成レート制限: IP あたり 2 秒間隔・同時 2 件まで
 - 旧 `POST /posts/upsert` は 410 Gone を返す（旧クライアントへの更新案内）
 - 募集の `addr` IP から国コードを推定し、Web ロビーのアドレス横に国旗を表示する（マウスオーバーで国名）。MaxMind GeoLite2-Country を使用
