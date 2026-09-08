@@ -43,8 +43,8 @@ primary_region = 'nrt'
     soft_limit = 200
 
 [[vm]]
-  # fly.io 上の専用 CPU (旧称 dedicated)。shared-cpu-* ではなく performance-* を使う。
-  size = 'performance-1x'
+  # 共有 CPU 2 vCPU。メモリは従来どおり 2GB を維持する。
+  size = 'shared-cpu-2x'
   memory = '2gb'
-  cpus = 1
+  cpus = 2
   memory_mb = 2048
