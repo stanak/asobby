@@ -91,7 +91,11 @@ def check(
 
     def host_check(sock, target, *, direct=False, autopunch=False):
         reply = exchange(sock, target, echo, lambda data: game_state(data) is not None)
-        giuroll = bool(detect_giuroll and exchange(
+        # A host may enable Giuroll between periodic capability checks and
+        # stop answering the ordinary spectator probe. Before counting that
+        # silence as a failure, try its pong on this same verified endpoint.
+        # Healthy ordinary hosts still keep the slower discovery cadence.
+        giuroll = bool((detect_giuroll or reply is None) and exchange(
             sock, target, b"\x6c\x00", lambda data: data == b"\x6d\x61",
         ))
         return Result(

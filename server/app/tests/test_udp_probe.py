@@ -114,6 +114,42 @@ def test_absent_giuroll_reply_does_not_fail_normal_host(monkeypatch):
     assert result.alive and not result.giuroll
 
 
+@pytest.mark.parametrize("ap,prefer_ap", [(False, False), (True, False), (True, True)])
+def test_new_giuroll_is_detected_on_silence_between_periodic_checks(monkeypatch, ap, prefer_ap):
+    sock = Socket(direct=not ap, ap=ap, giu=True, echo=False)
+    result = run(monkeypatch, sock, detect_giuroll=False, prefer_autopunch=prefer_ap)
+    assert result == mod.Result(alive=True, giuroll=True, direct=not ap, autopunch=ap)
+    target = (HOST, 19000) if ap else TARGET
+    assert (b"\x6c\x00", target) in sock.sent
+    if not ap:
+        assert all(destination == TARGET for _, destination in sock.sent)
+    elif prefer_ap:
+        assert (ECHO, TARGET) not in sock.sent
+
+
+def test_healthy_host_keeps_periodic_giuroll_detection_cadence(monkeypatch):
+    sock = Socket(direct=True, giu=True)
+    result = run(monkeypatch, sock, detect_giuroll=False)
+    assert result.alive and not result.giuroll
+    assert sock.sent == [(ECHO, TARGET)]
+
+
+@pytest.mark.parametrize("sender,payload", [
+    ((HOST, 1), b"\x6d\x61"), (("1.1.1.1", 10800), b"\x6d\x61"),
+    (TARGET, b"\x6d"), (TARGET, b"\x6d\x61\x00"), (TARGET, b"\x07\x01\x00\x00\x00"),
+])
+def test_fallback_requires_exact_pong_from_requested_endpoint(monkeypatch, sender, payload):
+    sock = Socket(registered=False)
+    original = sock.sendto
+    def send(data, target):
+        original(data, target)
+        if data == b"\x6c\x00":
+            sock.responses.append((payload, sender))
+    sock.sendto = send
+    result = run(monkeypatch, sock, detect_giuroll=False)
+    assert not result.alive and not result.giuroll and not result.inconclusive
+
+
 def test_ap_lookup_and_game_probe_share_socket_and_direct_goes_first(monkeypatch):
     sock = Socket(ap=True, giu=True)
     result = run(monkeypatch, sock)

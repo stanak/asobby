@@ -7,6 +7,7 @@ import hashlib
 import threading
 import time
 from dataclasses import asdict
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ import integrations
 import main
 import post_redis
 import udp_lobby as mod
+import udp_probe
 from udp_probe import Result
 
 
@@ -242,6 +244,65 @@ async def test_giuroll_busy_return_to_waiting_and_no_heartbeat_events(service):
         assert post.net_status == expected and post.guest_connected == connected
         assert post.giuroll  # no response is not evidence of absence
     assert len(events) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ordinary_reply_after_switch", [False, True])
+async def test_enabling_giuroll_after_registration_updates_same_listing(service, monkeypatch, ordinary_reply_after_switch):
+    s, saved, events = service
+    cred = await credential(s)
+    item = s.integrations.get(cred["integration"]["id"])
+    s.integrations.items[item.id] = item.model_copy(update={"webhook_url": "https://receiver.example/hook"})
+    reg = await s.register(item, body())
+    ident = reg["id"]
+    clock = [time.time()]
+    giuroll_running = [False]
+    attempts = []
+    monkeypatch.setattr(mod.time, "time", lambda: clock[0])
+    monkeypatch.setattr(udp_probe.socket, "socket", MagicMock())
+    echo = b"ordinary-probe"
+    def exchange(sock, target, payload, accept, timeout=0.35):
+        assert target == ("93.184.216.34", 10800)  # No real socket or relay traffic.
+        packet = None
+        if payload == echo and (not giuroll_running[0] or ordinary_reply_after_switch):
+            packet = b"\x07\x01\x00\x00\x00"
+        elif payload == b"\x6c\x00" and giuroll_running[0]:
+            packet = b"\x6d\x61"
+        return packet if packet is not None and accept(packet) else None
+    monkeypatch.setattr(udp_probe, "exchange", exchange)
+    def probe(addr, **kwargs):
+        attempts.append(kwargs["detect_giuroll"])
+        return udp_probe.check(addr, echo=echo, lock=threading.Lock(), bind_host=None,
+                               bind_port=10800, relay="relay.example:14763", **kwargs)
+    s.probe = probe
+    await s.tick()
+    assert not s.records[ident].post.giuroll
+    previous_revision = s.integrations.snapshot()["revision"]
+    giuroll_running[0] = True
+    clock[0] += mod.CHECK_INTERVAL
+    await s.tick()
+    assert attempts == [True, False]  # Switch occurs before the next 60s discovery.
+    if ordinary_reply_after_switch:
+        assert not s.records[ident].post.giuroll
+        clock[0] += mod.GIUROLL_CHECK_INTERVAL - mod.CHECK_INTERVAL
+        await s.tick()
+        assert attempts[-1] is True
+    rec = s.records[ident]
+    assert rec.monitor.published and rec.monitor.failures == 0
+    assert rec.post.giuroll and not rec.post.reachability_lost
+    assert rec.post.net_status == (3 if ordinary_reply_after_switch else 0)
+    assert s.integrations.snapshot()["revision"] != previous_revision
+    assert saved[ident]["post"]["giuroll"] is True
+    assert main.post_record_from_dict(saved[ident]).post.giuroll is True
+    assert events[-1] == ("upsert", asdict(rec.post))
+    assert not any(kind == "close" for kind, _ in events)
+    assert len(s.integrations.pending[item.id].created) == 1  # Not a new recruitment.
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_for(s)), base_url="https://asobby.test") as client:
+        headers = {"Authorization": "Bearer " + cred["api_key"]}
+        status = (await client.get("/api/v1/posts/" + ident, headers=headers)).json()
+        lobby = (await client.get("/api/v1/lobby", headers=headers)).json()
+        assert status["id"] == ident and status["post"]["giuroll"] is True
+        assert lobby["posts"][0]["id"] == ident and lobby["posts"][0]["giuroll"] is True
 
 
 @pytest.mark.asyncio
