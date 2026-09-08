@@ -604,6 +604,7 @@
     object-fit: cover;
   }
   .chat-meta .chat-name { color: var(--accent); font-weight: 600; }
+  .chat-origin { border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; font-size: 10px; }
   .chat-body {
     font-size: 14px;
     white-space: pre-wrap;
@@ -1768,6 +1769,12 @@ function renderChatList() {
     nameSpan.className = "chat-name";
     nameSpan.textContent = msg.name || "?";
     meta.appendChild(nameSpan);
+    if (msg.source === "integration") {
+      const origin = document.createElement("span");
+      origin.className = "chat-origin";
+      origin.textContent = t("lobby.chatExternal");
+      meta.appendChild(origin);
+    }
     meta.appendChild(document.createTextNode(formatChatTime(msg.ts || 0)));
 
     const body = document.createElement("div");

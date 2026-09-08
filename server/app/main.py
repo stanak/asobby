@@ -44,6 +44,7 @@ import geoip
 import post_redis
 import client_release
 import integrations
+import chat_sync
 import udp_lobby
 import udp_probe
 
@@ -1489,6 +1490,7 @@ HUB = SSEHub()
 # 永続化キーは互換のため "ja" チャンネルを使い続ける。
 LOBBY_CHAT_STORE_LANG = "ja"
 LOBBY_CHAT: deque[dict[str, Any]] = deque(maxlen=LOBBY_CHAT_MAX_MESSAGES)
+LOBBY_CHAT_LOCK = asyncio.Lock()
 RECORDS: Dict[str, PostRecord] = {}
 LAST_CREATE_AT: Dict[str, float] = {}
 SERVER_STARTED_AT: float = 0.0
@@ -1614,10 +1616,29 @@ def _trim_lobby_chat_by_age() -> bool:
     return changed
 
 
-def lobby_chat_snapshot() -> list[dict[str, Any]]:
-    """チャット全メッセージ (単一チャンネル)。旧ページはフラット配列も解釈できる。"""
+def _lobby_chat_records() -> list[dict[str, Any]]:
     _trim_lobby_chat_by_age()
     return list(LOBBY_CHAT)
+
+
+def lobby_chat_snapshot() -> list[dict[str, Any]]:
+    """Public messages only; integration retry receipts stay server-side."""
+    return [chat_sync.public_message(raw) for raw in _lobby_chat_records()]
+
+
+async def _append_lobby_chat(msg: dict[str, Any]) -> None:
+    # Caller holds LOBBY_CHAT_LOCK and shields the full publication operation.
+    if post_redis.is_configured():
+        try:
+            await asyncio.to_thread(post_redis.append_chat_message, msg, max_messages=LOBBY_CHAT_MAX_MESSAGES)
+        except Exception:
+            raise HTTPException(503, "chat storage unavailable") from None
+    LOBBY_CHAT.append(msg)
+    if _trim_lobby_chat_by_age():
+        await _sync_chat_to_redis()
+    public = chat_sync.public_message(msg)
+    INTEGRATIONS.chat_created(public)
+    await HUB.publish("chat_message", public)
 
 
 def _normalize_chat_text(text: str) -> str:
@@ -1771,6 +1792,11 @@ UDP_LOBBY = udp_lobby.Service(
     stream_allowed=lambda value: is_allowed_stream_url(value),
 )
 app = FastAPI(title="asobby api", version="0.2", lifespan=lifespan)
+CHAT_SYNC = chat_sync.Service(
+    integrations=INTEGRATIONS, read=_lobby_chat_records, append=_append_lobby_chat,
+    validate=_validate_chat_text, lock=LOBBY_CHAT_LOCK,
+)
+app.include_router(chat_sync.build_router(CHAT_SYNC))
 app.include_router(udp_lobby.build_router(UDP_LOBBY))
 app.include_router(integrations.build_router(
     INTEGRATIONS,
@@ -4708,7 +4734,15 @@ async def post_lobby_chat(body: ChatMessageIn, request: Request) -> dict[str, An
     sess = await resolve_session(request)
     if sess is None:
         raise HTTPException(status_code=401, detail="invalid or expired session")
+    return await chat_sync.durable(_post_lobby_chat(body, sess))
 
+
+async def _post_lobby_chat(body: ChatMessageIn, sess: dict[str, Any]) -> dict[str, Any]:
+    async with LOBBY_CHAT_LOCK:
+        return await _post_lobby_chat_locked(body, sess)
+
+
+async def _post_lobby_chat_locked(body: ChatMessageIn, sess: dict[str, Any]) -> dict[str, Any]:
     text = _validate_chat_text(body.text)
     uid = sess["id"]
     now = time.time()
@@ -4747,20 +4781,12 @@ async def post_lobby_chat(body: ChatMessageIn, request: Request) -> dict[str, An
         "lang": LOBBY_CHAT_STORE_LANG,
         "ts": now,
     }
-    LOBBY_CHAT.append(msg)
+    await _append_lobby_chat(msg)
     if post_redis.is_configured():
-        await asyncio.to_thread(
-            post_redis.append_chat_message,
-            msg,
-            max_messages=LOBBY_CHAT_MAX_MESSAGES,
-        )
         await asyncio.to_thread(post_redis.chat_cooldown_mark, uid, LOBBY_CHAT_COOLDOWN_SEC)
     else:
         LOBBY_CHAT_LAST_SENT[uid] = now
-    if _trim_lobby_chat_by_age():
-        await _sync_chat_to_redis()
-    await HUB.publish("chat_message", msg)
-    return {"ok": True, "message": msg}
+    return {"ok": True, "message": chat_sync.public_message(msg)}
 
 
 @app.get("/sse/posts")

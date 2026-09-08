@@ -145,6 +145,7 @@
     "lobby.chatHide": "ロビーチャットを隠す",
     "lobby.chatShow": "ロビーチャットを表示",
     "lobby.chatEmpty": "まだメッセージはありません",
+    "lobby.chatExternal": "外部連携",
     "lobby.chatCooldown": "しばらく待ってから送ってください",
     "lobby.pingUnavailable": "—",
     "lobby.pingClientRequired":
@@ -768,6 +769,7 @@
     "lobby.chatHide": "Hide lobby chat",
     "lobby.chatShow": "Show lobby chat",
     "lobby.chatEmpty": "No messages yet",
+    "lobby.chatExternal": "External",
     "lobby.chatCooldown": "Please wait before sending another message",
     "lobby.pingUnavailable": "—",
     "lobby.pingClientRequired":

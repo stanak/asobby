@@ -67,6 +67,21 @@ const { chromium } = require(process.argv[2] || "playwright");
     for (const lang of ["ja", "en"]) {
       await page.goto(`https://asobby.test/?lang=${lang}`);
       await page.waitForFunction(() => window.mockSse?.handlers.snapshot);
+      const nativeChat = { id: "native-chat", user_id: "123", name: "Native", text: "hello", ts: 1, mentions: [] };
+      const externalChat = {
+        id: "external-chat", user_id: "", source: "integration", ts: 2, mentions: [],
+        name: "<img src=x onerror=alert(1)>", text: "<script>alert(1)</script> @everyone",
+      };
+      await page.evaluate(messages => window.mockSse.handlers.chat_snapshot({ data: JSON.stringify(messages) }), [nativeChat, externalChat]);
+      const chatRows = page.locator("#lobby-chat-messages .chat-row");
+      assert.equal(await chatRows.count(), 2);
+      assert.equal(await chatRows.nth(0).locator(".chat-origin").count(), 0);
+      assert.equal(await chatRows.nth(1).locator(".chat-origin").innerText(), lang === "ja" ? "外部連携" : "External");
+      assert.equal(await chatRows.nth(1).locator(".chat-name img, .chat-body script").count(), 0);
+      assert.equal(await chatRows.nth(1).locator(".chat-name").innerText(), externalChat.name);
+      assert.equal(await chatRows.nth(1).locator(".chat-body").innerText(), externalChat.text);
+      await page.evaluate(message => window.mockSse.handlers.chat_message({ data: JSON.stringify(message) }), externalChat);
+      assert.equal(await chatRows.count(), 2, "SSE retries must upsert, not duplicate chat");
       const cases = lang === "ja" ? [
         ["unset", 0, "未設定"], ["initial", 0, "初期設定"],
         ["provisional", 49, "暫定・49戦"], ["ranked", 50, "ランク戦50戦"],

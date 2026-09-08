@@ -35,6 +35,7 @@ MAX_INTEGRATIONS = 20
 MIN_DELIVERY_INTERVAL = 5.0
 API_REQUESTS_PER_MINUTE = 60
 MAX_PENDING_CREATED = 200
+MAX_PENDING_CHAT = 200
 RANK_SYMBOLS = {
     "easy": "E", "normal": "N", "ex": "Ex",
     "hard": "H", "luna": "L", "ph": "Ph",
@@ -125,6 +126,8 @@ class IntegrationInput(BaseModel):
     enabled: bool = True
     include_address: bool = False
     allow_posting: bool = False
+    include_chat: bool = False
+    allow_chat_posting: bool = False
 
     @field_validator("name")
     @classmethod
@@ -146,6 +149,8 @@ class IntegrationPatch(BaseModel):
     enabled: bool | None = None
     include_address: bool | None = None
     allow_posting: bool | None = None
+    include_chat: bool | None = None
+    allow_chat_posting: bool | None = None
 
 
 class Integration(IntegrationInput):
@@ -165,6 +170,8 @@ class Integration(IntegrationInput):
             "id": self.id, "name": self.name, "enabled": self.enabled,
             "include_address": self.include_address,
             "allow_posting": self.allow_posting,
+            "include_chat": self.include_chat,
+            "allow_chat_posting": self.allow_chat_posting,
             "webhook_host": httpx.URL(self.webhook_url).host if self.webhook_url else "",
             "created_at": self.created_at, "last_success_at": self.last_success_at,
             "last_error": self.last_error, "last_status": self.last_status,
@@ -175,16 +182,18 @@ class Integration(IntegrationInput):
 class Pending:
     event: dict[str, Any] | None = None
     created: deque[dict[str, Any]] = field(default_factory=deque)
+    chat: deque[dict[str, Any]] = field(default_factory=deque)
     last_event_type: str | None = None
     attempts: int = 0
     next_at: float = 0
 
     def next_event(self) -> dict[str, Any] | None:
-        # Alternate with snapshot signals so a busy creation queue cannot
-        # starve consumers that still subscribe only to lobby.changed.
-        if self.created and (self.event is None or self.last_event_type != "post.created"):
-            return self.created[0]
-        return self.event
+        # Round-robin across event kinds; preserve order within each queue.
+        kinds = ["post.created", "lobby.changed", "chat.message.created"]
+        events = [self.created[0] if self.created else None,
+                  self.event, self.chat[0] if self.chat else None]
+        start = (kinds.index(self.last_event_type) + 1) % 3 if self.last_event_type in kinds else 0
+        return next((events[(start + i) % 3] for i in range(3) if events[(start + i) % 3]), None)
 
 
 def retry_after_seconds(raw: str) -> float:
@@ -300,6 +309,26 @@ class IntegrationService:
                 del pending.created[1]
                 print("integration creation notification queue full; oldest waiting event dropped")
             pending.created.append(event)
+
+    def chat_created(self, message: dict[str, Any]) -> None:
+        # Imported messages are deliberately never relayed again (echo loop).
+        if not self.available or message.get("source") != "asobby":
+            return
+        event = {
+            "schema_version": 1, "id": uuid4().hex, "type": "chat.message.created",
+            "occurred_at": datetime.now(timezone.utc).isoformat(), "source": self.base_url,
+            "data": {"message": message, "snapshot_url": self.base_url + "/api/v1/chat"},
+        }
+        for item in self.items.values():
+            if not (item.enabled and item.webhook_url and item.include_chat):
+                continue
+            pending = self.pending.setdefault(item.id, Pending())
+            if pending.next_event() is None:
+                pending.next_at = max(pending.next_at, time.monotonic() + MIN_DELIVERY_INTERVAL)
+            if len(pending.chat) >= MAX_PENDING_CHAT:
+                del pending.chat[1]  # Preserve the in-flight/retrying head.
+                print("integration chat notification queue full; oldest waiting event dropped")
+            pending.chat.append(event)
 
     async def start(self) -> None:
         self.pending.clear()
@@ -518,6 +547,8 @@ class IntegrationService:
                 pending.last_event_type = event["type"]
                 if pending.created and pending.created[0]["id"] == event["id"]:
                     pending.created.popleft()
+                elif pending.chat and pending.chat[0]["id"] == event["id"]:
+                    pending.chat.popleft()
                 elif pending.event and pending.event["id"] == event["id"]:
                     pending.event = None
                 pending.next_at = time.monotonic() + MIN_DELIVERY_INTERVAL

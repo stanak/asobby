@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from pydantic import TypeAdapter, ValidationError
 
 import integrations
+import chat_sync
 import main
 import udp_lobby
 
@@ -130,14 +131,14 @@ async def test_readme_webhook_matches_event_and_test_notification():
     assert set(schema["properties"]) == set(event) | {"test"}
     assert event["data"] == example["data"]
     data_schema = schema["properties"]["data"]
-    assert set(event["data"]) == set(data_schema["required"])
-    assert set(data_schema["properties"]) == set(event["data"]) | {"post_id"}
+    assert set(data_schema["required"]) == {"snapshot_url"}
+    assert set(data_schema["properties"]) == set(event["data"]) | {"post_id", "message"}
     for key in ("schema_version", "type", "source"):
         assert event[key] == example[key]
     assert datetime.fromisoformat(example["occurred_at"]).utcoffset().total_seconds() == 0
     assert datetime.fromisoformat(event["occurred_at"]).utcoffset().total_seconds() == 0
     assert schema["properties"]["test"] == {"type": "boolean", "const": True}
-    assert set(schema["properties"]["type"]["enum"]) == {"lobby.changed", "post.created"}
+    assert set(schema["properties"]["type"]["enum"]) == {"lobby.changed", "post.created", "chat.message.created"}
     credentials = await service.create(integrations.IntegrationInput(name="docs"))
     ident = credentials["integration"]["id"]
     # Queue-only: do not resolve a real webhook destination or start delivery.
@@ -150,10 +151,36 @@ async def test_readme_webhook_matches_event_and_test_notification():
     service.post_created(created_example["data"]["post_id"])
     created = service.pending[ident].created[0]
     assert set(created) == set(created_example) == set(schema["required"])
-    assert set(created["data"]) == set(created_example["data"]) == set(data_schema["properties"])
+    assert set(created["data"]) == set(created_example["data"]) == set(data_schema["properties"]) - {"message"}
     assert created["type"] == created_example["type"] == "post.created"
     assert created["data"]["post_id"] == created_example["data"]["post_id"]
     assert created["data"]["snapshot_url"] == created_example["data"]["snapshot_url"]
+
+
+@pytest.mark.asyncio
+async def test_readme_chat_request_message_and_event_match_implementation():
+    body = chat_sync.ChatInput.model_validate(doc_block("chat-request"))
+    assert main._validate_chat_text(body.text) == body.text
+    openapi = main.app.openapi()
+    assert openapi["paths"]["/api/v1/chat"]["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/ChatInput"
+    assert set(openapi["components"]["schemas"]["ChatInput"]["properties"]) == set(chat_sync.ChatInput.model_fields)
+    example = doc_block("chat-webhook-example")
+    message = example["data"]["message"]
+    assert chat_sync.public_message(message) == message
+    message_schema = doc_block("webhook-schema")["$defs"]["ChatMessage"]
+    assert set(message) == set(message_schema["properties"]) == set(message_schema["required"])
+    service = integrations.IntegrationService(lambda: [], "https://asobby.com")
+    credentials = await service.create(integrations.IntegrationInput(name="chat docs", include_chat=True))
+    ident = credentials["integration"]["id"]
+    service.items[ident] = service.items[ident].model_copy(update={"webhook_url": "https://receiver.example/hook"})
+    service.chat_created(message)
+    event = service.pending[ident].chat[0]
+    assert event["data"] == example["data"]
+    assert event["type"] == example["type"]
+    assert set(event) == set(example)
+    for field in ("id", "occurred_at"):
+        event[field] = example[field]
+    assert event == example
 
 
 def test_readme_registration_examples_are_full_raw_posts_not_lobby_projection(monkeypatch):

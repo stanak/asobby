@@ -50,6 +50,7 @@ const { chromium } = require(process.argv[2] || "playwright");
           id: String(creates), name: body.name, enabled: body.enabled,
           include_address: body.include_address, last_success_at: null, last_error: null,
           allow_posting: body.allow_posting,
+          include_chat: body.include_chat, allow_chat_posting: body.allow_chat_posting,
           webhook_host: body.webhook_url ? new URL(body.webhook_url).hostname : "",
         };
         records.push(item);
@@ -85,6 +86,8 @@ const { chromium } = require(process.argv[2] || "playwright");
     await page.locator("#integration-save").click();
     await page.locator("#integration-credentials").waitFor({ state: "visible" });
     assert.equal(records[0].allow_posting, false);
+    assert.equal(records[0].include_chat, false);
+    assert.equal(records[0].allow_chat_posting, false);
     assert.equal(await page.locator("#integration-api-key").inputValue(), "local-api-key");
     await page.locator(".integration-card").waitFor();
     assert.equal(await page.locator(".integration-card img").count(), 0);
@@ -94,16 +97,26 @@ const { chromium } = require(process.argv[2] || "playwright");
     assert.equal(await page.locator("#integration-url").inputValue(), "");
     await page.locator("#integration-name").fill("Renamed");
     await page.locator("#integration-posting").check();
+    await page.locator("#integration-chat").check();
+    await page.locator("#integration-chat-posting").check();
     await page.locator("#integration-save").click();
     await page.waitForFunction(() => document.querySelector(".integration-card strong").textContent === "Renamed");
     assert.equal("webhook_url" in edits.at(-1), false);
     assert.equal(records[0].allow_posting, true);
+    assert.equal(records[0].include_chat, true);
+    assert.equal(records[0].allow_chat_posting, true);
     await card.getByRole("button", { name: "編集", exact: true }).click();
     assert.equal(await page.locator("#integration-posting").isChecked(), true);
+    assert.equal(await page.locator("#integration-chat").isChecked(), true);
+    assert.equal(await page.locator("#integration-chat-posting").isChecked(), true);
     await page.locator("#integration-posting").uncheck();
+    await page.locator("#integration-chat").uncheck();
+    await page.locator("#integration-chat-posting").uncheck();
     await page.locator("#integration-save").click();
     await page.waitForFunction(() => document.querySelector("#integration-list").textContent.includes("一覧取得のみ"));
     assert.equal(records[0].allow_posting, false);
+    assert.equal(records[0].include_chat, false);
+    assert.equal(records[0].allow_chat_posting, false);
     await card.getByRole("button", { name: "停止", exact: true }).click();
     await card.getByRole("button", { name: "再開", exact: true }).waitFor();
     assert.equal(records[0].enabled, false);

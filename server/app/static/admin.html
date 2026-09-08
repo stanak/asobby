@@ -145,10 +145,11 @@
   </div>
 
   <section class="panel" id="integrations-panel" hidden>
-    <h2>外部連携（募集一覧 API・Webhook）</h2>
+    <h2>外部連携（募集・チャット API・Webhook）</h2>
     <p class="muted">管理者が許可したサービスに募集一覧を提供します。Webhook を設定すると、募集の変更を通知します。登録・再開時にも通知が送られます。募集作成は連携ごとに追加で許可できます。</p>
     <p class="muted">一覧 API: <code id="integration-api-url">/api/v1/lobby</code></p>
     <p class="muted">募集登録 API: <code>POST /api/v1/posts</code>（作成権限が必要）</p>
+    <p class="muted">チャット API: <code>GET /api/v1/chat</code>（履歴取得）、<code>POST /api/v1/chat</code>（外部から投稿）。それぞれ下記の許可が必要です。</p>
     <form id="integration-form">
       <label>連携名
         <input id="integration-name" type="text" maxlength="80" required placeholder="例: コミュニティの募集一覧">
@@ -161,6 +162,9 @@
       <label><input id="integration-enabled" type="checkbox" checked> この連携を有効にする</label>
       <label><input id="integration-address" type="checkbox"> 一覧 API に対戦用 IP・ポートを含める</label>
       <label><input id="integration-posting" type="checkbox"> カジュアル募集の登録を許可する（サーバーが UDP で維持）</label>
+      <label><input id="integration-chat" type="checkbox"> チャット履歴の取得・発言時の Webhook 通知を許可する</label>
+      <label><input id="integration-chat-posting" type="checkbox"> 外部サービスからロビーチャットへの投稿を許可する</label>
+      <p class="muted">チャット通知には発言本文・表示名・投稿者の Discord ID が含まれます。公開先を確認し、利用者に同期先を知らせてください。外部からの発言には「外部連携」と表示し、Webhook へ送り返しません。Discord の発言を取り込むには Bot 等が必要です。</p>
       <p class="muted">募集作成を許可する連携は、投稿者の確認と IP 掲載への同意を取得してください。登録後はホストの生存確認で掲載を維持し、固定の掲載期限・手動終了操作はありません。この権限を外すか連携を停止・削除すると、その連携の募集も取り下げます。</p>
       <p class="muted">IP を含めない場合も、表示名・投稿者の Discord ID・コメント・対戦状態などは連携先が取得できます。API キーの共有先と、一覧の掲載先を確認してください。</p>
       <div class="row">
@@ -170,7 +174,7 @@
     </form>
     <div id="integration-credentials" hidden>
       <strong>キーは今回だけ表示します。連携先に保存してください。</strong>
-      <p class="muted">API キーは一覧取得と、許可した場合は募集登録に使います。署名シークレットは Webhook の送信元確認用です。紛失した場合は再発行できます。</p>
+      <p class="muted">API キーは一覧取得と、個別に許可した募集登録・チャット取得/投稿に使います。署名シークレットは Webhook の送信元確認用です。紛失した場合は再発行できます。</p>
       <label>API キー<input id="integration-api-key" type="text" readonly autocomplete="off"></label>
       <button type="button" id="integration-copy-api">API キーをコピー</button>
       <label>署名シークレット<input id="integration-signing-secret" type="text" readonly autocomplete="off"></label>

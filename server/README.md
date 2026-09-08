@@ -2,7 +2,7 @@
 
 FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧用 Web ページ（`GET /`）を配信する。
 
-## 外部連携（募集一覧 API・Webhook）
+## 外部連携（募集・チャット API・Webhook）
 
 管理者が `/admin` の「外部連携」から登録します。特定の Bot やサービスには依存せず、
 任意の公開 HTTPS エンドポイントに JSON を送信できます。登録がなければ外部送信はありません。
@@ -263,7 +263,8 @@ API の同一登録の再送でも二重通知せず、終了後に改めて登�
 `data.post_id` は新規募集の ID。トップレベルの `id` は通知 ID なので取り違えない。
 受信側は一覧 API の `posts[]` から `id == data.post_id` を探せば、投稿者の Discord ID 等を取得できる。
 配送待ちの間に募集が終了している場合は、一覧に存在しないこともある。
-通知には募集本文・Discord ID・IP・API キーを載せない。受信側は設定済みの一覧 API から最新状態を取得する。
+募集通知には募集本文・Discord ID・IP・API キーを載せない。受信側は設定済みの一覧 API から最新状態を取得する。
+チャット通知 `chat.message.created` は明示的に許可した連携のみ対象で、発言本文を含む（後述）。
 管理画面のテスト通知は `lobby.changed` の形式で、トップレベルに `test: true` が付く。
 通常の JSON Webhook であり、Discord Incoming Webhook 専用のメッセージ形式ではない。
 `data.count` は通知を作った時点の件数なので、受信後に取得する一覧 API の件数とは異なる場合がある。
@@ -276,36 +277,232 @@ Webhook 受信用の JSON Schema は以下。一覧 API のスキーマをここ
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AsobbyLobbyEvent",
+  "title": "AsobbyEvent",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "id", "type", "occurred_at", "source", "data"],
+  "required": [
+    "schema_version",
+    "id",
+    "type",
+    "occurred_at",
+    "source",
+    "data"
+  ],
   "properties": {
-    "schema_version": {"type": "integer", "const": 1},
-    "id": {"type": "string"},
-    "type": {"type": "string", "enum": ["lobby.changed", "post.created"]},
-    "occurred_at": {"type": "string", "format": "date-time"},
-    "source": {"type": "string"},
-    "test": {"type": "boolean", "const": true},
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "lobby.changed",
+        "post.created",
+        "chat.message.created"
+      ]
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "string"
+    },
+    "test": {
+      "type": "boolean",
+      "const": true
+    },
     "data": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["count", "snapshot_url"],
+      "required": [
+        "snapshot_url"
+      ],
       "properties": {
-        "count": {"type": "integer", "minimum": 0},
-        "snapshot_url": {"type": "string"},
-        "post_id": {"type": "string"}
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "snapshot_url": {
+          "type": "string"
+        },
+        "post_id": {
+          "type": "string"
+        },
+        "message": {
+          "$ref": "#/$defs/ChatMessage"
+        }
       }
     }
   },
-  "allOf": [{
-    "if": {"properties": {"type": {"const": "post.created"}}},
-    "then": {
-      "properties": {"data": {"required": ["post_id"]}},
-      "not": {"required": ["test"]}
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "chat.message.created"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "required": [
+              "message"
+            ],
+            "properties": {
+              "count": false,
+              "post_id": false,
+              "message": {
+                "properties": {
+                  "source": {
+                    "const": "asobby"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "not": {
+          "required": [
+            "test"
+          ]
+        }
+      },
+      "else": {
+        "properties": {
+          "data": {
+            "required": [
+              "count"
+            ],
+            "properties": {
+              "message": false
+            }
+          }
+        }
+      }
     },
-    "else": {"properties": {"data": {"properties": {"post_id": false}}}}
-  }]
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "post.created"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "required": [
+              "post_id"
+            ]
+          }
+        },
+        "not": {
+          "required": [
+            "test"
+          ]
+        }
+      },
+      "else": {
+        "properties": {
+          "data": {
+            "properties": {
+              "post_id": false
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "ChatMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "user_id",
+        "name",
+        "avatar",
+        "text",
+        "mentions",
+        "lang",
+        "ts",
+        "source",
+        "discord_user_id",
+        "discord_user_id_source"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "user_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "avatar": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "mentions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "user_id",
+              "name"
+            ],
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "lang": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "number"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "asobby",
+            "integration"
+          ]
+        },
+        "discord_user_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "discord_user_id_source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "oauth",
+            "integration",
+            null
+          ]
+        }
+      }
+    }
+  }
 }
 ```
 
@@ -315,7 +512,7 @@ Webhook 受信用の JSON Schema は以下。一覧 API のスキーマをここ
 - エラーは 5 秒から最大 300 秒まで間隔を延ばして再試行。`Retry-After` は最大 1 時間まで尊重する。
 - 再試行では同じ通知 ID を使用する。`lobby.changed` は待機中に一覧が変われば最新状態の通知に置き換える。
 - `post.created` は別の待ち行列に保持し、一覧更新やテスト通知で上書きしない。
-  両種の通知がある場合は交互に配送し、送信間隔・再試行待ち・1送信先1件の同時送信制限は共有する。
+  チャット通知も含め種類ごとに順番に配送し、送信間隔・再試行待ち・1送信先1件の同時送信制限は共有する。
   1送信先あたり最大200件。上限では先頭の送信/再試行対象を残し、古い待機通知から間引く。
   この待ち行列はメモリ上のみで、再起動・連携設定の変更/キー再発行/停止/削除では消える。
   設定の変更/再起動後は `lobby.changed` で再同期し、過去の募集を新規通知として再送しない。
@@ -328,6 +525,121 @@ Webhook 受信用の JSON Schema は以下。一覧 API のスキーマをここ
 受信側は初回と数分ごとにも一覧を取得し、通知の重複・一時停止から復旧できるようにする。
 同じ Discord メッセージの更新は定期実行分も含めて直列化し、内容が変わった場合だけ編集する。
 API 取得失敗を「0 件」と扱わず、古い情報であることを表示するか、再試行する。
+
+### チャットの双方向同期
+
+管理画面で連携ごとに以下を許可する。既存連携を含め、どちらも初期状態では無効。
+
+| 設定（管理 API のフィールド） | 許可する操作 |
+| --- | --- |
+| チャット履歴の取得・発言時の通知（`include_chat`） | `GET /api/v1/chat` と、設定済み送信先への `chat.message.created` 通知 |
+| 外部からチャットへの投稿（`allow_chat_posting`） | `POST /api/v1/chat`。募集登録権限とは独立 |
+
+チャット本文・表示名・投稿者の Discord ID を連携先に提供するため、管理者は公開先を確認し、利用者に同期先を知らせること。
+外部から渡された表示名・Discord ID は連携先の申告であり、asobby のログイン本人確認ではない。
+ロビーでは「外部連携」と表示する。asobby アカウントへの紐付け・権限付与や外部からのメンション通知は行わない。
+
+#### Discord 側から投稿する Incoming Webhook
+
+Bot / dpalette 等から以下の URL に JSON を POST する。Discord の Incoming Webhook URL をここへ登録する方式ではない。
+
+```http
+POST https://asobby.com/api/v1/chat
+Authorization: Bearer <管理画面で発行したAPIキー>
+Content-Type: application/json
+```
+
+<!-- api-doc:chat-request -->
+```json
+{
+  "request_id": "discord-message-123456789",
+  "external_user_id": "123456789012345678",
+  "name": "Discordの表示名",
+  "text": "対戦しませんか？",
+  "discord_user_id": "123456789012345678"
+}
+```
+
+| フィールド | 型・制約 |
+| --- | --- |
+| `request_id` | 必須の文字列、1～128文字。同一連携内で元の発言ごとに一意。Discord メッセージ ID が適する |
+| `external_user_id` | 必須の文字列、1～128文字。連携内の投稿者 ID。Discord ではユーザー ID を指定 |
+| `name` | 必須の文字列、1～80文字。表示名 |
+| `text` | 必須の文字列。入力は1～550文字まで受理した上で、改行を LF に統一し前後の空白を除去。正規化後1～500文字、最大8行 |
+| `discord_user_id` | 省略可、既定 `null`。正の64bit整数を表す10進文字列（先頭ゼロ不可、上限18446744073709551615）。数値型は不可 |
+
+`request_id`・`external_user_id`・`name` は前後の空白を除去し、空文字や途中の制御文字を拒否する。
+未知のフィールド（`user_id`、`avatar`、`mentions`、`source` 等）も拒否する。
+機械可読なリクエストスキーマは `GET /openapi.json` の `components.schemas.ChatInput`。
+
+- 初回成功は `201`、本文は `{"ok":true,"duplicate":false,"message":{...}}`。
+- 同じ連携・`request_id`・正規化後の全入力が一致する再送は `200` と `duplicate:true`。元の `message` を返し、保存・SSE 配信を繰り返さない。
+- 同じ `request_id` で入力を変更した場合は `409`。
+- 二重投稿防止の記録はチャット履歴と一緒に保存する。**直近100件・1時間の履歴内だけ**有効。永続化が有効なら再起動後も維持するが、履歴を外れた古い投稿を再送しないこと。`message.id` は同じ連携・`request_id` なら同じ値となる。
+- 同じ連携・投稿者の新規発言は3秒間隔。`429` の `Retry-After` に従い、同じ `request_id` で再試行する。
+- 認証なし/キー無効は `401`、権限なしは `403`、入力不正は `422`、保存不可は `503`。
+- 既存 API と合わせて1キー毎分60リクエスト。履歴取得・再送もカウントする。
+- 新規発言の同期のみ対応。編集・削除・添付ファイル・Discord の返信スレッドやメンション構文の変換は対象外。
+
+#### asobby のチャット発言時の通知
+
+`include_chat=true` かつ送信先 URL が設定された有効な連携に、次の JSON を POST する。
+ヘッダーは `Content-Type: application/json`、`X-Asobby-Event: chat.message.created`。署名方式は募集通知と同じ。
+
+<!-- api-doc:chat-webhook-example -->
+```json
+{
+  "schema_version": 1,
+  "id": "33333333333333333333333333333333",
+  "type": "chat.message.created",
+  "occurred_at": "2026-09-08T12:00:00+00:00",
+  "source": "https://asobby.com",
+  "data": {
+    "snapshot_url": "https://asobby.com/api/v1/chat",
+    "message": {
+      "id": "44444444444444444444444444444444",
+      "user_id": "123456789012345678",
+      "name": "プレイヤー",
+      "avatar": "",
+      "text": "対戦しませんか？",
+      "mentions": [],
+      "lang": "ja",
+      "ts": 1788868800.0,
+      "source": "asobby",
+      "discord_user_id": "123456789012345678",
+      "discord_user_id_source": "oauth"
+    }
+  }
+}
+```
+
+`data.message` は発言本文を含む。`data.count`・`data.post_id` は付かない。
+送信時点ではなく、発言時点の内容を保持する。停止先への HTTP 応答を通常チャット投稿から待つことはない。
+専用キューは1送信先につき最大200件で、上限では先頭を残して古い待機通知から間引く。
+`post.created`・`lobby.changed`・`chat.message.created` を順番に配送し、5秒以上の送信間隔・再試行待ちを共有する。
+キューはメモリ上のみで、再起動・設定変更・キー再発行・停止/削除では失われる。完全な履歴配送や exactly-once は保証しない。
+
+#### 履歴取得・ループ防止
+
+`GET https://asobby.com/api/v1/chat` に同じ Bearer キーを付けると、
+`{"schema_version":1,"count":件数,"messages":[...]}` を返す。
+履歴は古い順、直近100件かつ1時間以内。各要素および POST 応答の `message` は、
+上の Webhook スキーマの `$defs.ChatMessage` と同じ全フィールドを返す。
+GET と POST の成功応答は `Cache-Control: private, no-store`・`Vary: Authorization` を付ける。
+
+- `source:"asobby"`: asobby で発言。`user_id` と `discord_user_id` はログインユーザー ID、`discord_user_id_source:"oauth"`。
+- `source:"integration"`: 外部から取り込んだ発言。`user_id`・`avatar` は空文字、`mentions` は空配列。
+  Discord ID を渡した場合は `discord_user_id_source:"integration"`、未指定なら両方 `null`。
+- `id` は発言 ID、`ts` はサーバー受信時の Unix 秒、`lang` は旧形式との互換用（新規投稿は常に `ja`、チャンネルは単一）。
+  `avatar` は asobby が保持するアバター値で、常に完全な URL とは限らない。`mentions` は asobby で解決した `user_id` と `name`。
+- 外部発言は **どの連携の送信 Webhook にも再通知しない**。履歴取得には含める。
+- Bot / dpalette 側でも、自身・他の Bot・Webhook の発言を転送対象から除外する。
+  asobby の通知は `data.message.id` で重複排除し、Discord からは元のメッセージ ID を `request_id` にする。
+- 再接続時に履歴を読み、保存済み ID より未処理の `source:"asobby"` のみ同期する。初回接続で過去の発言を一斉転載しないよう、同期開始点を決める。
+- Discord へ表示するときは Bot / dpalette で本文を整形し、意図しない `@everyone` 等を避けるため `allowed_mentions: {"parse":[]}` を指定する。
+  詳細は [Discord のメンション制御](https://docs.discord.com/developers/resources/message#allowed-mentions-object) を参照。
+- Discord Incoming Webhook 単体ではユーザーの発言を収集できない。Discord 側のメッセージ受信ができる Bot / 連携ワークフローが別途必要。
+  [Discord の Webhook 仕様](https://docs.discord.com/developers/resources/webhook) では Incoming Webhook はチャンネルへの投稿用として定義されている。
 
 ### ランクの設定・実績表示
 

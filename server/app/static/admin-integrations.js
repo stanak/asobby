@@ -97,6 +97,7 @@
       card.appendChild(name);
       paragraph(card, (item.enabled ? "有効" : "停止中") + " · " + (item.include_address ? "IP を提供" : "IP を提供しない"));
       paragraph(card, item.allow_posting ? "募集作成を許可" : "一覧取得のみ", "muted");
+      paragraph(card, "チャット: " + (item.include_chat ? "履歴取得・通知を許可" : "履歴取得・通知なし") + " / " + (item.allow_chat_posting ? "外部投稿を許可" : "外部投稿不可"), "muted");
       paragraph(card, item.webhook_host ? "通知先: " + item.webhook_host + "（URL の残りは非表示）" : "API のみ", "muted");
       const last = item.last_success_at ? new Date(item.last_success_at * 1000).toLocaleString() : "まだありません";
       if (item.webhook_host) {
@@ -115,6 +116,8 @@
         byId("integration-enabled").checked = item.enabled;
         byId("integration-address").checked = item.include_address;
         byId("integration-posting").checked = Boolean(item.allow_posting);
+        byId("integration-chat").checked = Boolean(item.include_chat);
+        byId("integration-chat-posting").checked = Boolean(item.allow_chat_posting);
         byId("integration-edit-note").hidden = false;
         byId("integration-cancel").hidden = false;
         byId("integration-save").textContent = "変更を保存";
@@ -183,6 +186,8 @@
         enabled: byId("integration-enabled").checked,
         include_address: byId("integration-address").checked,
         allow_posting: byId("integration-posting").checked,
+        include_chat: byId("integration-chat").checked,
+        allow_chat_posting: byId("integration-chat-posting").checked,
       };
       const url = byId("integration-url").value.trim();
       if (byId("integration-api-only").checked) body.webhook_url = "";

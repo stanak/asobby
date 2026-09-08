@@ -170,7 +170,7 @@ async def test_private_dns_and_mixed_answers_are_blocked(monkeypatch, address):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("event_type", ["lobby.changed", "post.created"])
+@pytest.mark.parametrize("event_type", ["lobby.changed", "post.created", "chat.message.created"])
 async def test_pinned_signed_request_never_follows_redirect_or_reads_body(monkeypatch, event_type):
     async def resolve(*args, **kwargs):
         return [(0, 0, 0, "", ("8.8.8.8", 443))]
@@ -203,6 +203,7 @@ async def test_pinned_signed_request_never_follows_redirect_or_reads_body(monkey
         assert request.headers["x-asobby-signature"] == "sha256=" + expected
         assert request.headers["x-asobby-delivery"] == "event1"
         assert request.headers["x-asobby-event"] == event_type
+        assert request.headers["content-type"] == "application/json"
         assert json.loads(request.content) == event
         return httpx.Response(302, headers={"Location": "http://127.0.0.1/private"}, stream=UnreadBody())
 
