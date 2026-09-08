@@ -44,14 +44,14 @@ Authorization: Bearer <APIキー>
 ```json
 {
   "schema_version": 1,
-  "revision": "1cea436035507df3bda498bd7d99e9b702cdf1bfd708716d08e32c14c251211f",
+  "revision": "b413115ae31a76c4c245919ca9e7c51432f6e6eda2f7aa957eac4b9c752a21a4",
   "count": 1,
   "posts": [{
     "id": "0123456789abcdef0123456789abcdef",
     "owner_name": "プレイヤー",
     "discord_user_id": "123456789012345678",
     "discord_user_id_source": "oauth",
-    "rank": "normal",
+    "rank": "N",
     "post_type": "casual",
     "rating": null,
     "comment": "対戦募集",
@@ -114,7 +114,7 @@ Draft 2020-12。IP 提供あり・なしの両方を表現するため、`addr` 
           "owner_name": {"type": "string"},
           "discord_user_id": {"type": ["string", "null"]},
           "discord_user_id_source": {"type": ["string", "null"], "enum": ["oauth", "integration", null]},
-          "rank": {"type": "string", "enum": ["", "easy", "normal", "ex", "hard", "luna", "ph"]},
+          "rank": {"type": "string", "enum": ["", "E", "N", "Ex", "H", "L", "Ph"]},
           "post_type": {"type": "string", "enum": ["casual", "ranked"]},
           "rating": {"type": ["number", "null"]},
           "comment": {"type": "string"},
@@ -154,7 +154,7 @@ Draft 2020-12。IP 提供あり・なしの両方を表現するため、`addr` 
 | `posts[].owner_name` | string | ホスト表示名。値がなければ `""` |
 | `posts[].discord_user_id` | string または null | 投稿者の Discord ユーザー ID。数値に変換せず文字列として扱う。不明は `null`。IP 提供権限には依存しない |
 | `posts[].discord_user_id_source` | string または null | `oauth`: asobby の Discord ログイン由来、`integration`: 登録元の連携が申告、ID 不明は `null` |
-| `posts[].rank` | string | `easy` / `normal` / `ex` / `hard` / `luna` / `ph`。未紐付けの API 登録募集では `""` |
+| `posts[].rank` | string | 表示用シンボル `E` / `N` / `Ex` / `H` / `L` / `Ph`。未紐付けの API 登録募集など、ランク不明の場合は `""` |
 | `posts[].rank_status` | string | `unset` / `initial` / `provisional` / `ranked` / `unknown`。下記「ランクの設定・実績表示」を参照 |
 | `posts[].ranked_games` | integer または null | 累計の確定ランク戦数。不明は `null`、確認済み0戦は `0` |
 | `posts[].post_type` | string | `casual` または `ranked`。現在の対戦がランク戦として成立したかとは別 |
@@ -174,6 +174,13 @@ Draft 2020-12。IP 提供あり・なしの両方を表現するため、`addr` 
 | `posts[].country_name` | string | 国名。未取得は `""` |
 | `posts[].status` | string | 下記の優先順で算出した状態 |
 | `posts[].addr` | string、省略あり | IP:port。`include_address=true` の場合のみ存在。`null` にはならない |
+
+`GET /api/v1/lobby` の `rank` はシンボルをそのまま表示できる。
+対応は `easy → E`、`normal → N`、`ex → Ex`、`hard → H`、`luna → L`、`ph → Ph`。
+内部の保存値・ランク判定・既存クライアント向け `/posts` / SSE のランクコードは変更しない。
+`rank_status`・`ranked_games`・`rating` も変更しない。
+この API は以前の `"normal"` 等の代わりに `"N"` 等を返すため、連携先でランクを条件分岐・変換していた場合は更新する。
+`schema_version` は `1` のまま。`revision` / `ETag` は変換後の JSON から計算し、変更後の値に切り替わる。
 
 `status` の算出順は、元の募集の `net_status=4` → `playing`、それ以外で
 `guest_connected=true` または `net_status=2` → `connecting`、それ以外で `net_status=3` → `waiting`、
@@ -324,7 +331,7 @@ API 取得失敗を「0 件」と扱わず、古い情報であることを表�
 
 ### ランクの設定・実績表示
 
-`rank` が同じ `normal` でも、開始ランク未選択とランク戦の経験者を区別できるように、
+内部ランクが同じ `normal`（一覧 API の `rank` は `N`）でも、開始ランク未選択とランク戦の経験者を区別できるように、
 ロビー（カジュアル・ランクマ両方）・`GET /posts`・SSE・`GET /api/v1/lobby` に
 `rank_status` と `ranked_games` を追加している。ランク欄の補助表示は日本語・英語に対応。
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import hmac
 import json
@@ -280,7 +281,7 @@ async def test_rank_evidence_alone_triggers_webhook_and_snapshot_revision(servic
             posts[0].update(rank_status=status, ranked_games=games)
             await instance.tick()
             snapshot = instance.snapshot()
-            assert snapshot["posts"][0]["rank"] == "normal"
+            assert snapshot["posts"][0]["rank"] == "N"
             assert snapshot["posts"][0]["rank_status"] == status
             assert snapshot["posts"][0]["ranked_games"] == games
             assert snapshot["revision"] != previous_revision
@@ -586,3 +587,46 @@ async def test_native_author_and_creation_hook_are_not_called_for_updates(servic
         records[post["id"]].post.net_status = state
         await instance.tick()
     assert len(pending.created) == 1
+
+
+@pytest.mark.parametrize("post_type", ["casual", "ranked"])
+@pytest.mark.parametrize("rank,symbol", [
+    ("easy", "E"), ("normal", "N"), ("ex", "Ex"), ("hard", "H"),
+    ("luna", "L"), ("ph", "Ph"), ("", ""), ("invalid-rank", ""),
+])
+def test_snapshot_rank_symbols_preserve_internal_codes_and_evidence(service, post_type, rank, symbol):
+    instance, posts, _ = service
+    posts[0].update(rank=rank, post_type=post_type, rank_status="provisional", ranked_games=3,
+                    rating=1700.5 if rank == "ph" else None)
+    original = copy.deepcopy(posts)
+    for include_address in (False, True):
+        post = instance.snapshot(include_address=include_address)["posts"][0]
+        assert post["rank"] == symbol
+        assert post["post_type"] == post_type and post["rank_status"] == "provisional" and post["ranked_games"] == 3
+        assert post["rating"] == original[0]["rating"]
+    assert posts == original
+
+
+@pytest.mark.asyncio
+async def test_rank_symbol_http_response_and_etag_use_serialized_values(service):
+    instance, posts, _ = service
+    posts[0]["rank"] = "normal"
+    cred = await instance.create(mod.IntegrationInput(name="rank-display"))
+    headers = {"Authorization": "Bearer " + cred["api_key"]}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_for(instance)), base_url="https://test") as client:
+        first = await client.get("/api/v1/lobby", headers=headers)
+        assert first.status_code == 200 and first.json()["posts"][0]["rank"] == "N"
+        revision = hashlib.sha256(mod.encode_json(first.json()["posts"])).hexdigest()
+        assert first.json()["revision"] == revision and first.headers["etag"] == '"' + revision + '"'
+        cached = await client.get("/api/v1/lobby", headers={**headers, "If-None-Match": first.headers["etag"]})
+        assert cached.status_code == 304 and cached.content == b""
+        # Old code-valued snapshots must not receive a 304 after upgrading.
+        legacy = copy.deepcopy(first.json()["posts"])
+        legacy[0]["rank"] = "normal"
+        old_etag = '"' + hashlib.sha256(mod.encode_json(legacy)).hexdigest() + '"'
+        assert (await client.get("/api/v1/lobby", headers={**headers, "If-None-Match": old_etag})).status_code == 200
+        posts[0]["rank"] = "hard"
+        changed = await client.get("/api/v1/lobby", headers={**headers, "If-None-Match": first.headers["etag"]})
+        assert changed.status_code == 200 and changed.json()["posts"][0]["rank"] == "H"
+        assert changed.headers["etag"] != first.headers["etag"]
+        assert posts[0]["rank"] == "hard"

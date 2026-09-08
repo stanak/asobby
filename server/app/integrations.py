@@ -35,6 +35,10 @@ MAX_INTEGRATIONS = 20
 MIN_DELIVERY_INTERVAL = 5.0
 API_REQUESTS_PER_MINUTE = 60
 MAX_PENDING_CREATED = 200
+RANK_SYMBOLS = {
+    "easy": "E", "normal": "N", "ex": "Ex",
+    "hard": "H", "luna": "L", "ph": "Ph",
+}
 # Explicit allowlist: no owner credentials, guest Discord IDs, heartbeat timestamps,
 # guest IPs, private message queues or user settings leave this API.
 LOBBY_FIELDS = (
@@ -242,6 +246,9 @@ class IntegrationService:
         posts = []
         for raw in self.read_posts():
             post = {key: raw[key] for key in LOBBY_FIELDS if key in raw}
+            # Display symbols belong only at the integration API boundary;
+            # stored ranks and the native client protocol keep their codes.
+            post["rank"] = RANK_SYMBOLS.get(raw.get("rank"), "")
             net_status = raw.get("net_status")
             post["status"] = (
                 "playing" if net_status == 4 else

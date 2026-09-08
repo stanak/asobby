@@ -61,7 +61,8 @@ def test_lobby_schema_fields_and_types_match_public_allowlist():
     hints.update(discord_user_id=str | None, discord_user_id_source=str | None)
     for field in set(integrations.LOBBY_FIELDS) | {"addr"}:
         assert schema_types(item["properties"][field]) == schema_types(TypeAdapter(hints[field]).json_schema()), field
-    assert set(item["properties"]["rank"]["enum"]) == {""} | set(main.RANK_LADDER)
+    assert set(integrations.RANK_SYMBOLS) == set(main.RANK_LADDER)
+    assert set(item["properties"]["rank"]["enum"]) == {""} | set(integrations.RANK_SYMBOLS.values())
     assert set(item["properties"]["post_type"]["enum"]) == {"casual", "ranked"}
     assert set(item["properties"]["rank_status"]["enum"]) == {"unset", "initial", "provisional", "ranked", "unknown"}
     assert set(item["properties"]["status"]["enum"]) == {"waiting", "connecting", "playing", "unknown"}
