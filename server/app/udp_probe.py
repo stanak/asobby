@@ -10,6 +10,7 @@ import ipaddress
 import socket
 import struct
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable
 
@@ -22,6 +23,33 @@ class Result:
     direct: bool = False
     autopunch: bool = False
     inconclusive: bool = False  # local/relay outage is not host death
+    timed_out: bool = False  # admission deadline, not proof the host is dead
+
+
+class ProbeDeadline(Exception):
+    pass
+
+
+def remaining_time(deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ProbeDeadline
+    return remaining
+
+
+@contextmanager
+def probe_lock(lock, deadline):
+    if deadline is None:
+        with lock:
+            yield
+    else:
+        if not lock.acquire(timeout=remaining_time(deadline)):
+            raise ProbeDeadline
+        try:
+            remaining_time(deadline)
+            yield
+        finally:
+            lock.release()
 
 
 def public_address(addr: str) -> tuple[str, int]:
@@ -85,19 +113,29 @@ def exchange(sock, target, payload, accept: Callable[[bytes], bool], timeout=0.3
 
 def check(
     addr: str, *, echo: bytes, lock, bind_host: str | None, bind_port: int,
-    relay: str, prefer_autopunch=False, detect_giuroll=True,
+    relay: str, prefer_autopunch=False, detect_giuroll=True, deadline: float | None = None,
 ) -> Result:
     host, port = public_address(addr)  # revalidate restored data before sending
 
+    def attempt(sock, target, payload, accept, timeout=0.35):
+        if deadline is not None:
+            timeout = min(timeout, remaining_time(deadline))
+        return exchange(sock, target, payload, accept, timeout)
+
     def host_check(sock, target, *, direct=False, autopunch=False):
-        reply = exchange(sock, target, echo, lambda data: game_state(data) is not None)
+        reply = attempt(sock, target, echo, lambda data: game_state(data) is not None)
         # A host may enable Giuroll between periodic capability checks and
         # stop answering the ordinary spectator probe. Before counting that
         # silence as a failure, try its pong on this same verified endpoint.
         # Healthy ordinary hosts still keep the slower discovery cadence.
-        giuroll = bool((detect_giuroll or reply is None) and exchange(
-            sock, target, b"\x6c\x00", lambda data: data == b"\x6d\x61",
-        ))
+        try:
+            giuroll = bool((detect_giuroll or reply is None) and attempt(
+                sock, target, b"\x6c\x00", lambda data: data == b"\x6d\x61",
+            ))
+        except ProbeDeadline:
+            if reply is None:
+                raise
+            giuroll = False  # Capability discovery must not invalidate an echo.
         return Result(
             alive=reply is not None or giuroll,
             state=game_state(reply) if reply is not None else "unknown",
@@ -107,8 +145,8 @@ def check(
     # Shared with existing game probes: the fixed Fly UDP port must not have
     # competing readers. A cancelled async caller cannot release this lock
     # while its thread is still sending/receiving.
-    with lock:
-        try:
+    try:
+        with probe_lock(lock, deadline):
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 if bind_host:
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -124,7 +162,7 @@ def check(
 
                 relay_host, relay_port = relay.rsplit(":", 1)
                 relay_addr = (socket.gethostbyname(relay_host), int(relay_port))
-                if not exchange(sock, relay_addr, b"\x00", lambda data: data == b"\x00", 0.7):
+                if not attempt(sock, relay_addr, b"\x00", lambda data: data == b"\x00", 0.7):
                     return Result(inconclusive=True)
                 lookup = struct.pack("!H4sH", sock.getsockname()[1], socket.inet_aton(host), port)
 
@@ -138,7 +176,7 @@ def check(
                         )
                     )
 
-                mapping = exchange(sock, relay_addr, lookup, valid_mapping, 0.7)
+                mapping = attempt(sock, relay_addr, lookup, valid_mapping, 0.7)
                 if mapping is None:
                     return Result()
                 target = (host, int.from_bytes(mapping[2:4], "big"))
@@ -149,5 +187,7 @@ def check(
                     if result.alive:
                         return result
                 return Result()
-        except (OSError, ValueError):
-            return Result(inconclusive=True)
+    except ProbeDeadline:
+        return Result(timed_out=True)
+    except (OSError, ValueError):
+        return Result(inconclusive=True)

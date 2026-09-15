@@ -2,6 +2,7 @@
 import socket
 import struct
 import threading
+import time
 
 import pytest
 
@@ -204,3 +205,63 @@ def test_relay_mapping_for_another_host_never_redirects_probe(monkeypatch):
     result = run(monkeypatch, sock)
     assert not result.alive
     assert all(target in {TARGET, RELAY} for _, target in sock.sent)
+
+
+def test_expired_admission_deadline_never_opens_socket(monkeypatch):
+    sock = Socket(direct=True)
+    assert run(monkeypatch, sock, deadline=time.monotonic() - 1).timed_out
+    assert not sock.sent and sock.bound is None
+
+
+def test_fixed_socket_lock_wait_respects_admission_deadline(monkeypatch):
+    sock = Socket(direct=True)
+    monkeypatch.setattr(socket, "socket", lambda *args: sock)
+    lock = threading.Lock()
+    lock.acquire()
+    before = time.monotonic()
+    try:
+        result = mod.check(HOST + ":10800", echo=ECHO, lock=lock,
+                           bind_host=None, bind_port=10800, relay="relay.example:14763",
+                           deadline=before + 0.03)
+        assert result.timed_out and lock.locked()
+        assert time.monotonic() - before < 0.5
+        assert sock.bound is None and not sock.sent
+    finally:
+        lock.release()
+
+
+def test_each_exchange_uses_remaining_total_budget(monkeypatch):
+    now, timeouts = [100.0], []
+    monkeypatch.setattr(mod.time, "monotonic", lambda: now[0])
+    def exchange(sock, target, payload, accept, timeout):
+        timeouts.append(timeout)
+        now[0] += timeout
+    monkeypatch.setattr(mod, "exchange", exchange)
+    sock = Socket()
+    assert run(monkeypatch, sock, deadline=100.5).timed_out
+    assert timeouts == pytest.approx([0.35, 0.15])
+    assert sock.closed
+
+
+def test_slow_relay_dns_cannot_send_udp_after_deadline(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(mod.time, "monotonic", lambda: now[0])
+    sock = Socket()
+    monkeypatch.setattr(socket, "socket", lambda *args: sock)
+    def resolve(host):
+        now[0] = 104.0
+        return RELAY[0]
+    monkeypatch.setattr(socket, "gethostbyname", resolve)
+    lock = threading.Lock()
+    result = mod.check(HOST + ":10800", echo=ECHO, lock=lock,
+                       bind_host=None, bind_port=10800, relay="relay.example:14763", deadline=103.0)
+    assert result.timed_out and not lock.locked() and sock.closed
+    assert sock.sent == [(ECHO, TARGET), (b"\x6c\x00", TARGET)]
+
+
+@pytest.mark.parametrize("ap,giu", [(False, False), (False, True), (True, False), (True, True)])
+def test_admission_deadline_preserves_direct_ap_and_giuroll_detection(monkeypatch, ap, giu):
+    result = run(monkeypatch, Socket(direct=not ap, ap=ap, giu=giu, echo=not giu),
+                 deadline=time.monotonic() + 3)
+    assert result.alive and not result.timed_out
+    assert result.direct is not ap and result.autopunch is ap and result.giuroll is giu

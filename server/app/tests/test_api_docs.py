@@ -21,6 +21,7 @@ import integrations
 import chat_sync
 import main
 import udp_lobby
+from udp_probe import Result
 
 
 README = Path(__file__).resolve().parents[2] / "README.md"
@@ -215,3 +216,32 @@ def test_registration_request_example_requires_replacing_placeholder():
     # Validation only: never register this endpoint or send a UDP packet.
     valid = udp_lobby.Registration.model_validate({**body, "addr": "8.8.8.8:10800"})
     assert valid.comment == body["comment"] and valid.stream_url == ""
+
+
+@pytest.mark.asyncio
+async def test_readme_registration_timeout_and_openapi_match_http():
+    async def publish(*args):
+        pytest.fail("Failed verification must not publish")
+    def save(rec):
+        pytest.fail("Failed verification must not persist")
+    integration_service = integrations.IntegrationService(lambda: [], "https://asobby.com")
+    credentials = await integration_service.create(integrations.IntegrationInput(name="docs", allow_posting=True))
+    service = udp_lobby.Service(
+        records={}, integrations=integration_service, make_record=main.make_udp_record,
+        save=save, delete=lambda ident: None, publish=publish,
+        probe=lambda *args, **kwargs: Result(timed_out=True), enabled=lambda: True,
+        stream_allowed=main.is_allowed_stream_url,
+    )
+    app = FastAPI()
+    app.include_router(udp_lobby.build_router(service))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://asobby.com") as client:
+        response = await client.post("/api/v1/posts", headers={"Authorization": "Bearer " + credentials["api_key"]},
+                                     json={**doc_block("registration-request"), "addr": "93.184.216.34:10800"})
+        assert response.status_code == 422 and response.json() == doc_block("registration-timeout")
+        assert not service.records
+    schema = main.app.openapi()
+    route = schema["paths"]["/api/v1/posts"]["post"]
+    assert {"200", "201", "409", "422", "503"} <= set(route["responses"])
+    assert "202" not in route["responses"]
+    assert route["requestBody"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/Registration"
+    assert set(schema["components"]["schemas"]["Registration"]["properties"]) == set(udp_lobby.Registration.model_fields)

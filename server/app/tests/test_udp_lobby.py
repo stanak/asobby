@@ -51,6 +51,27 @@ async def credential(service, **changes):
     return await service.integrations.create(integrations.IntegrationInput(name="test", allow_posting=True, **changes))
 
 
+async def seed_registration(service, item, request):
+    """Seed a pre-upgrade durable pending record for monitor regression tests.
+
+    The HTTP API now verifies inline. Keep exercising migration, publication,
+    restart and background failure transitions independently of admission.
+    """
+    async with service._lock:
+        rec, created = service._reserve(item, request)
+        if created:
+            committed = False
+            def commit():
+                nonlocal committed
+                committed = True
+            try:
+                await service._durable(lambda: service.save(rec), commit)
+            finally:
+                if not committed:
+                    service.records.pop(rec.post.id, None)
+        return service.status(rec)
+
+
 def app_for(service):
     app = FastAPI()
     app.include_router(mod.build_router(service))
@@ -75,14 +96,19 @@ async def test_api_scope_pending_hidden_until_checked_and_casual_publication(ser
         assert (await client.post(url, json=body().model_dump())).status_code == 401
         assert (await client.post(url, json=body().model_dump(), headers={"Authorization": "Bearer " + readonly["api_key"]})).status_code == 403
         headers = {"Authorization": "Bearer " + cred["api_key"]}
+        def probe(*args, **kwargs):
+            assert not saved and not events
+            assert main.sorted_public_posts() == [] and main.integration_posts() == []
+            assert not main.user_has_other_posts("viewer")
+            return Result(alive=True, state="waiting", direct=True)
+        s.probe = probe
         response = await client.post(url, json=body().model_dump(), headers=headers)
-        assert response.status_code == 202 and response.headers["cache-control"] == "no-store"
+        assert response.status_code == 201 and response.headers["cache-control"] == "no-store"
         ident = response.json()["id"]
-        assert response.json()["state"] == "checking" and response.json()["post"] is None
+        assert response.json()["state"] == "active" and response.json()["post"] is not None
         assert response.json()["external_user_id"] == body().external_user_id
-        assert ident in saved and not events
-        assert main.sorted_public_posts() == [] and main.integration_posts() == []
-        assert not main.user_has_other_posts("viewer")
+        assert ident in saved and len(events) == 1
+        assert response.headers["location"] == response.json()["status_url"]
         await s.tick()
         response = await client.get(url + "/" + ident, headers=headers)
         assert response.json()["state"] == "active"
@@ -107,13 +133,13 @@ async def test_duplicate_retry_and_same_request_different_content(service):
     s, _, _ = service
     cred = await credential(s)
     item = s.integrations.get(cred["integration"]["id"])
-    first, second = await asyncio.gather(s.register(item, body()), s.register(item, body()))
+    first, second = await asyncio.gather(seed_registration(s, item, body()), seed_registration(s, item, body()))
     assert first["id"] == second["id"] and len(s.records) == 1
     with pytest.raises(HTTPException) as error:
-        await s.register(item, body(comment="different"))
+        await seed_registration(s, item, body(comment="different"))
     assert error.value.status_code == 409
     with pytest.raises(HTTPException) as error:
-        await s.register(item, body(request_id="new", external_user_id="other"))
+        await seed_registration(s, item, body(request_id="new", external_user_id="other"))
     assert error.value.status_code == 409
 
 
@@ -129,7 +155,7 @@ async def test_discord_attribution_roundtrip_and_only_first_publication_emits_cr
         headers = {"Authorization": "Bearer " + cred["api_key"]}
         first = (await client.post("/api/v1/posts", json=request.model_dump(), headers=headers)).json()
         post_id = first["id"]
-        assert not s.integrations.pending[ident].created
+        assert len(s.integrations.pending[ident].created) == 1
         await s.tick()
         active = (await client.get("/api/v1/posts/" + post_id, headers=headers)).json()
         snapshot = (await client.get("/api/v1/lobby", headers=headers)).json()["posts"][0]
@@ -174,14 +200,14 @@ async def test_legacy_retry_fingerprint_and_numeric_external_id_do_not_infer_dis
     cred = await credential(s)
     item = s.integrations.get(cred["integration"]["id"])
     request = body(external_user_id="123456789012345678")
-    reg = await s.register(item, request)
+    reg = await seed_registration(s, item, request)
     rec = s.records[reg["id"]]
     old_body = request.model_dump(exclude={"discord_user_id"})
     assert rec.monitor.fingerprint == hashlib.sha256(integrations.encode_json(old_body)).hexdigest()
     legacy = copy.deepcopy(saved[reg["id"]])
     legacy["monitor"].pop("discord_user_id")
     s.records[reg["id"]] = main.post_record_from_dict(legacy)
-    assert (await s.register(item, request))["id"] == reg["id"]
+    assert (await seed_registration(s, item, request))["id"] == reg["id"]
     await s.tick()
     assert s.status(s.records[reg["id"]])["post"]["discord_user_id"] is None
 
@@ -209,7 +235,7 @@ async def test_enabled_permission_defaults_and_revocation(service):
     assert integrations.IntegrationInput(name="old").allow_posting is False
     cred = await credential(s)
     item = s.integrations.get(cred["integration"]["id"])
-    reg = await s.register(item, body())
+    reg = await seed_registration(s, item, body())
     await s.tick()
     # Key rotation is not a reason to destroy existing registrations.
     await s.integrations.rotate(item.id)
@@ -225,7 +251,7 @@ async def test_enabled_permission_defaults_and_revocation(service):
 async def test_giuroll_busy_return_to_waiting_and_no_heartbeat_events(service):
     s, _, events = service
     cred = await credential(s)
-    reg = await s.register(s.integrations.get(cred["integration"]["id"]), body())
+    reg = await seed_registration(s, s.integrations.get(cred["integration"]["id"]), body())
     s.probe = lambda *a, **kw: Result(alive=True, state="waiting", giuroll=True, autopunch=True)
     await s.tick()
     revision = s.integrations.snapshot()["revision"]
@@ -253,7 +279,7 @@ async def test_enabling_giuroll_after_registration_updates_same_listing(service,
     cred = await credential(s)
     item = s.integrations.get(cred["integration"]["id"])
     s.integrations.items[item.id] = item.model_copy(update={"webhook_url": "https://receiver.example/hook"})
-    reg = await s.register(item, body())
+    reg = await seed_registration(s, item, body())
     ident = reg["id"]
     clock = [time.time()]
     giuroll_running = [False]
@@ -309,7 +335,7 @@ async def test_enabling_giuroll_after_registration_updates_same_listing(service,
 async def test_three_consecutive_misses_not_age_end_listing(service, monkeypatch):
     s, saved, events = service
     cred = await credential(s)
-    reg = await s.register(s.integrations.get(cred["integration"]["id"]), body())
+    reg = await seed_registration(s, s.integrations.get(cred["integration"]["id"]), body())
     await s.tick()
     rec = s.records[reg["id"]]
     rec.post.updated_at = time.time() - 365 * 86400
@@ -332,7 +358,7 @@ async def test_three_consecutive_misses_not_age_end_listing(service, monkeypatch
 async def test_confirmed_failure_rechecks_each_second_and_closes_after_two_seconds(service, monkeypatch):
     s, saved, _ = service
     cred = await credential(s)
-    reg = await s.register(s.integrations.get(cred["integration"]["id"]), body())
+    reg = await seed_registration(s, s.integrations.get(cred["integration"]["id"]), body())
     await s.tick()
     clock = [time.time()]
     monkeypatch.setattr(mod.time, "time", lambda: clock[0])
@@ -361,7 +387,7 @@ async def test_confirmed_failure_rechecks_each_second_and_closes_after_two_secon
 async def test_recovery_or_inconclusive_result_restores_normal_check_interval(service, monkeypatch, result):
     s, _, _ = service
     cred = await credential(s)
-    reg = await s.register(s.integrations.get(cred["integration"]["id"]), body())
+    reg = await seed_registration(s, s.integrations.get(cred["integration"]["id"]), body())
     await s.tick()
     clock = [time.time()]
     monkeypatch.setattr(mod.time, "time", lambda: clock[0])
@@ -380,7 +406,7 @@ async def test_recovery_or_inconclusive_result_restores_normal_check_interval(se
 async def test_outage_and_recovery_reset_streak(service):
     s, _, _ = service
     cred = await credential(s)
-    reg = await s.register(s.integrations.get(cred["integration"]["id"]), body())
+    reg = await seed_registration(s, s.integrations.get(cred["integration"]["id"]), body())
     await s.tick()
     for result, failures in [(Result(), 1), (Result(inconclusive=True), 0), (Result(), 1), (Result(alive=True, direct=True), 0)]:
         s.probe = lambda *a, **kw: result
@@ -401,10 +427,10 @@ async def test_storage_error_never_reports_acceptance_or_removes_undurably(servi
         raise OSError("disk unavailable")
     s.save = fail
     with pytest.raises(HTTPException) as error:
-        await s.register(item, body())
+        await seed_registration(s, item, body())
     assert error.value.status_code == 503 and not s.records
     s.save = save
-    reg = await s.register(item, body())
+    reg = await seed_registration(s, item, body())
     s.delete = fail
     await s.integrations.delete(item.id)
     with pytest.raises(HTTPException):
@@ -418,13 +444,13 @@ async def test_pending_never_emits_upsert_on_failure_and_can_register_again(serv
     monkeypatch.setattr(mod, "FAILURE_GRACE", 0)
     cred = await credential(s)
     item = s.integrations.get(cred["integration"]["id"])
-    await s.register(item, body())
+    await seed_registration(s, item, body())
     s.probe = lambda *a, **kw: Result()
     for _ in range(3):
         due(s)
         await s.tick()
     assert not s.records and not events
-    assert (await s.register(item, body()))["state"] == "checking"
+    assert (await seed_registration(s, item, body()))["state"] == "checking"
 
 
 @pytest.mark.asyncio
@@ -433,20 +459,20 @@ async def test_admission_limits_disabled_verification_and_stream_validation(serv
     cred = await credential(s)
     item = s.integrations.get(cred["integration"]["id"])
     with pytest.raises(HTTPException) as error:
-        await s.register(item, body(stream_url="https://evil.example"))
+        await seed_registration(s, item, body(stream_url="https://evil.example"))
     assert error.value.status_code == 422
     s.enabled = lambda: False
     with pytest.raises(HTTPException) as error:
-        await s.register(item, body())
+        await seed_registration(s, item, body())
     assert error.value.status_code == 503
     s.enabled = lambda: True
-    await s.register(item, body())
+    await seed_registration(s, item, body())
     with pytest.raises(HTTPException) as error:
-        await s.register(item, body(request_id="two", addr="1.1.1.1:10800"))
+        await seed_registration(s, item, body(request_id="two", addr="1.1.1.1:10800"))
     assert error.value.status_code == 429
     monkeypatch.setattr(mod, "MAX_LISTINGS", 1)
     with pytest.raises(HTTPException) as error:
-        await s.register(item, body(request_id="two", external_user_id="two", addr="1.1.1.1:10800"))
+        await seed_registration(s, item, body(request_id="two", external_user_id="two", addr="1.1.1.1:10800"))
     assert error.value.status_code == 429
 
 
@@ -454,7 +480,7 @@ async def test_admission_limits_disabled_verification_and_stream_validation(serv
 async def test_restart_ignores_old_heartbeat_age_and_resumes_both_waiting_and_busy(service, monkeypatch):
     s, saved, _ = service
     cred = await credential(s)
-    reg = await s.register(s.integrations.get(cred["integration"]["id"]), body())
+    reg = await seed_registration(s, s.integrations.get(cred["integration"]["id"]), body())
     await s.tick()
     data = saved[reg["id"]]
     data["post"]["updated_at"] = 1
@@ -478,7 +504,7 @@ async def test_restart_ignores_old_heartbeat_age_and_resumes_both_waiting_and_bu
 async def test_unavailable_integration_store_does_not_remove_restored_posts(service):
     s, _, _ = service
     cred = await credential(s)
-    reg = await s.register(s.integrations.get(cred["integration"]["id"]), body())
+    reg = await seed_registration(s, s.integrations.get(cred["integration"]["id"]), body())
     s.integrations.items.clear()
     s.integrations.available = False
     await s.tick()
@@ -490,7 +516,7 @@ async def test_revoke_during_probe_does_not_publish(service):
     s, saved, events = service
     cred = await credential(s)
     item = s.integrations.get(cred["integration"]["id"])
-    await s.register(item, body())
+    await seed_registration(s, item, body())
     started, finish = threading.Event(), threading.Event()
     def probe(*a, **kw):
         started.set()
@@ -519,7 +545,7 @@ async def test_cancelled_registration_finishes_durable_write_before_retry(servic
         assert finish.wait(3)
         save(rec)
     s.save = delayed
-    task = asyncio.create_task(s.register(item, body()))
+    task = asyncio.create_task(seed_registration(s, item, body()))
     try:
         assert await asyncio.to_thread(started.wait, 2)
         task.cancel()
@@ -529,7 +555,7 @@ async def test_cancelled_registration_finishes_durable_write_before_retry(servic
         finish.set()
         with pytest.raises(asyncio.CancelledError):
             await task
-    retried = await s.register(item, body())
+    retried = await seed_registration(s, item, body())
     assert len(saved) == len(s.records) == 1 and retried["id"] in saved
 
 
@@ -579,7 +605,7 @@ async def test_native_registration_cannot_race_durable_reservation(service, monk
     monkeypatch.setattr(main, "resolve_session", session)
     monkeypatch.setattr(main, "MIN_CLIENT_VERSION", "")
     monkeypatch.setattr(main, "LAST_CREATE_AT", {})
-    registration = asyncio.create_task(s.register(item, body()))
+    registration = asyncio.create_task(seed_registration(s, item, body()))
     try:
         assert await asyncio.to_thread(started.wait, 2)
         assert not main.sorted_public_posts()
@@ -603,7 +629,7 @@ async def test_registration_conflicts_with_noncanonical_native_endpoint(service)
     )
     s.records[rec.post.id] = rec
     with pytest.raises(HTTPException) as error:
-        await s.register(s.integrations.get(cred["integration"]["id"]), body())
+        await seed_registration(s, s.integrations.get(cred["integration"]["id"]), body())
     assert error.value.status_code == 409 and len(s.records) == 1
 
 
@@ -611,7 +637,7 @@ async def test_registration_conflicts_with_noncanonical_native_endpoint(service)
 async def test_legacy_message_route_rejects_unreceivable_messages(service, monkeypatch):
     s, _, _ = service
     cred = await credential(s)
-    reg = await s.register(s.integrations.get(cred["integration"]["id"]), body())
+    reg = await seed_registration(s, s.integrations.get(cred["integration"]["id"]), body())
     await s.tick()
     async def session(request):
         return {"id": "viewer"}
@@ -627,16 +653,16 @@ async def test_registration_rate_and_integration_cap(service, monkeypatch):
     s, _, _ = service
     cred = await credential(s)
     item = s.integrations.get(cred["integration"]["id"])
-    await s.register(item, body())
+    await seed_registration(s, item, body())
     next_body = body(addr="1.1.1.1:10800", request_id="two", external_user_id="two")
     monkeypatch.setattr(mod, "MAX_PER_INTEGRATION", 1)
     with pytest.raises(HTTPException) as error:
-        await s.register(item, next_body)
+        await seed_registration(s, item, next_body)
     assert error.value.status_code == 429
     monkeypatch.setattr(mod, "MAX_PER_INTEGRATION", 10)
     monkeypatch.setattr(mod, "CREATES_PER_MINUTE", 1)
     with pytest.raises(HTTPException) as error:
-        await s.register(item, next_body)
+        await seed_registration(s, item, next_body)
     assert error.value.status_code == 429 and error.value.headers["Retry-After"] == "60"
 
 
@@ -645,8 +671,8 @@ async def test_monitor_round_robin_and_shutdown_waits_for_inflight_socket(servic
     s, _, _ = service
     cred = await credential(s)
     item = s.integrations.get(cred["integration"]["id"])
-    await s.register(item, body())
-    await s.register(item, body(addr="1.1.1.1:10800", request_id="two", external_user_id="two"))
+    await seed_registration(s, item, body())
+    await seed_registration(s, item, body(addr="1.1.1.1:10800", request_id="two", external_user_id="two"))
     checked = []
     def probe(addr, **kw):
         checked.append(addr)
@@ -676,3 +702,285 @@ async def test_monitor_round_robin_and_shutdown_waits_for_inflight_socket(servic
         else:
             await s.stop()
     assert s._probe_task is None and s._task is None
+
+
+@pytest.mark.asyncio
+async def test_inline_admission_success_retry_and_shared_concurrent_request(service):
+    s, saved, events = service
+    cred = await credential(s)
+    item = s.integrations.get(cred["integration"]["id"])
+    s.integrations.items[item.id] = item.model_copy(update={"webhook_url": "https://receiver.example/hook"})
+    calls = []
+    def probe(addr, **kwargs):
+        calls.append(addr)
+        assert 0 < kwargs["deadline"] - time.monotonic() <= 3
+        time.sleep(0.02)
+        return Result(alive=True, state="waiting", giuroll=True, autopunch=True)
+    s.probe = probe
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_for(s)), base_url="https://asobby.test") as client:
+        headers = {"Authorization": "Bearer " + cred["api_key"]}
+        responses = await asyncio.gather(*[
+            client.post("/api/v1/posts", json=body().model_dump(), headers=headers) for _ in range(4)
+        ])
+        assert sorted(r.status_code for r in responses) == [200, 200, 200, 201]
+        first = responses[0].json()
+        assert all(r.json() == first for r in responses)
+        assert first["state"] == "active" and first["post"]["giuroll"] and first["post"]["autopunch"]
+        assert len(saved) == len(events) == len(calls) == 1
+        assert len(s.integrations.pending[item.id].created) == 1
+        retry = await client.post("/api/v1/posts", json=body().model_dump(), headers=headers)
+        assert retry.status_code == 200 and retry.json() == first and len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result,status,code", [
+    (Result(), 422, "host_unconfirmed"),
+    (Result(inconclusive=True), 503, "verification_unavailable"),
+    (Result(timed_out=True), 422, "verification_timeout"),
+])
+async def test_inline_admission_failure_codes_and_retry(service, result, status, code):
+    s, saved, events = service
+    cred = await credential(s)
+    s.probe = lambda *a, **kw: result
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_for(s)), base_url="https://asobby.test") as client:
+        headers = {"Authorization": "Bearer " + cred["api_key"]}
+        failed = await client.post("/api/v1/posts", json=body().model_dump(), headers=headers)
+        assert failed.status_code == status and failed.json()["detail"]["code"] == code
+        assert failed.headers["cache-control"] == "no-store"
+        assert not s.records and not saved and not events
+        await s.tick()
+        assert not s.records and not events
+        s.probe = lambda *a, **kw: Result(alive=True, direct=True)
+        assert (await client.post("/api/v1/posts", json=body().model_dump(), headers=headers)).status_code == 201
+        assert len(s.records) == len(saved) == len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_three_second_timeout_never_publishes_late_result(service):
+    s, saved, events = service
+    cred = await credential(s)
+    ready, release = threading.Event(), threading.Event()
+    def probe(*a, **kw):
+        ready.set()
+        assert release.wait(6)
+        return Result(alive=True, direct=True)  # Deliberately ignores deadline.
+    s.probe = probe
+    assert mod.ADMISSION_TIMEOUT == 3
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_for(s)), base_url="https://asobby.test") as client:
+        headers = {"Authorization": "Bearer " + cred["api_key"]}
+        before = time.monotonic()
+        request = asyncio.create_task(client.post("/api/v1/posts", json=body().model_dump(), headers=headers))
+        try:
+            assert await asyncio.to_thread(ready.wait, 2)
+            ident = next(iter(s.records))
+            assert not saved and not main.sorted_public_posts()
+            await s.tick()  # The monitor cannot pick up an in-flight admission.
+            assert not events
+            failed = await asyncio.wait_for(request, 4)
+            elapsed = time.monotonic() - before
+            assert 2.8 <= elapsed < 4
+            assert failed.status_code == 422 and failed.json()["detail"]["code"] == "verification_timeout"
+            assert not s.records and not saved and not events
+            assert (await client.get("/api/v1/posts/" + ident, headers=headers)).status_code == 404
+            assert s._probe_gate.locked()  # Worker still owns the socket slot.
+        finally:
+            release.set()
+            await s.stop()
+        assert not s.records and not saved and not events and not s._probe_gate.locked()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gate", ["_probe_gate", "_lock"])
+async def test_admission_waiting_for_server_capacity_is_bounded(service, monkeypatch, gate):
+    s, saved, events = service
+    cred = await credential(s)
+    monkeypatch.setattr(mod, "ADMISSION_TIMEOUT", 0.05)
+    calls = []
+    s.probe = lambda *a, **kw: calls.append(a) or Result(alive=True, direct=True)
+    lock = getattr(s, gate)
+    await lock.acquire()
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_for(s)), base_url="https://asobby.test") as client:
+            failed = await asyncio.wait_for(client.post("/api/v1/posts", json=body().model_dump(), headers={"Authorization": "Bearer " + cred["api_key"]}), 0.5)
+            assert failed.status_code == 503 and failed.json()["detail"]["code"] == "verification_busy"
+    finally:
+        lock.release()
+        await s.stop()
+    assert not calls and not saved and not events and not s.records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action,status", [("revoke", 403), ("rotate", 401), ("unavailable", 503)])
+async def test_inline_admission_rechecks_permission_after_probe(service, action, status):
+    s, saved, events = service
+    cred = await credential(s)
+    item = s.integrations.get(cred["integration"]["id"])
+    ready, release = threading.Event(), threading.Event()
+    def probe(*a, **kw):
+        ready.set()
+        assert release.wait(3)
+        return Result(alive=True, direct=True)
+    s.probe = probe
+    request = asyncio.create_task(s.register(item, body()))
+    try:
+        assert await asyncio.to_thread(ready.wait, 2)
+        if action == "revoke":
+            await s.integrations.update(item.id, integrations.IntegrationPatch(allow_posting=False))
+        elif action == "rotate":
+            await s.integrations.rotate(item.id)
+        else:
+            s.integrations.available = False
+    finally:
+        release.set()
+    with pytest.raises(HTTPException) as error:
+        await request
+    assert error.value.status_code == status
+    assert not s.records and not saved and not events
+
+
+@pytest.mark.asyncio
+async def test_inline_attempts_count_towards_rate_limit_and_busy_reservation(service, monkeypatch):
+    s, saved, events = service
+    cred = await credential(s)
+    item = s.integrations.get(cred["integration"]["id"])
+    monkeypatch.setattr(mod, "CREATES_PER_MINUTE", 1)
+    s.probe = lambda *a, **kw: Result()
+    with pytest.raises(HTTPException) as error:
+        await s.register(item, body())
+    assert error.value.status_code == 422
+    with pytest.raises(HTTPException) as error:
+        await s.register(item, body())
+    assert error.value.status_code == 429
+    assert not s.records and not saved and not events
+
+
+@pytest.mark.asyncio
+async def test_inline_storage_failure_has_no_success_event(service):
+    s, saved, events = service
+    cred = await credential(s)
+    def fail(rec):
+        raise OSError("private storage details")
+    s.save = fail
+    with pytest.raises(HTTPException) as error:
+        await s.register(s.integrations.get(cred["integration"]["id"]), body())
+    assert error.value.status_code == 503
+    assert "private" not in str(error.value.detail)
+    assert not s.records and not saved and not events
+
+
+@pytest.mark.asyncio
+async def test_disconnected_inline_request_can_retry_same_durable_commit(service):
+    s, saved, events = service
+    cred = await credential(s)
+    item = s.integrations.get(cred["integration"]["id"])
+    ready, release = threading.Event(), threading.Event()
+    save = s.save
+    def delayed(rec):
+        ready.set()
+        assert release.wait(3)
+        save(rec)
+    s.save = delayed
+    request = asyncio.create_task(s.register(item, body()))
+    try:
+        assert await asyncio.to_thread(ready.wait, 2)
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        assert not main.sorted_public_posts()
+    finally:
+        release.set()
+    result, created = await s.register(item, body())
+    assert not created and result["state"] == "active"
+    assert len(saved) == len(s.records) == len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_pending_retry_is_explicit_and_does_not_create_second_attempt(service):
+    s, saved, _ = service
+    cred = await credential(s)
+    item = s.integrations.get(cred["integration"]["id"])
+    original = await seed_registration(s, item, body())
+    with pytest.raises(HTTPException) as error:
+        await s.register(item, body())
+    assert error.value.status_code == 409 and error.value.detail["code"] == "registration_in_progress"
+    assert list(s.records) == list(saved) == [original["id"]]
+    await s.tick()
+    result, created = await s.register(item, body())
+    assert not created and result["state"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_native_registration_cannot_race_inline_probe(service, monkeypatch):
+    s, saved, _ = service
+    cred = await credential(s)
+    item = s.integrations.get(cred["integration"]["id"])
+    ready, release = threading.Event(), threading.Event()
+    def probe(*a, **kw):
+        ready.set()
+        assert release.wait(3)
+        return Result(alive=True, direct=True)
+    s.probe = probe
+    async def session(request):
+        return {"id": "native-user", "name": "native", "avatar": ""}
+    monkeypatch.setattr(main, "resolve_session", session)
+    monkeypatch.setattr(main, "MIN_CLIENT_VERSION", "")
+    monkeypatch.setattr(main, "LAST_CREATE_AT", {})
+    request = asyncio.create_task(s.register(item, body()))
+    try:
+        assert await asyncio.to_thread(ready.wait, 2)
+        assert not saved and not main.sorted_public_posts()
+        from starlette.requests import Request
+        native_request = Request({"type": "http", "headers": [], "client": ("1.1.1.1", 1234)})
+        with pytest.raises(HTTPException) as error:
+            await main.create_post(main.CreatePostIn(addr="93.184.216.34:010800"), native_request)
+        assert error.value.status_code == 409
+    finally:
+        release.set()
+        await request
+    assert len(s.records) == len(saved) == 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_discards_unverified_admission_and_drains_repeatedly_cancelled_worker(service):
+    s, saved, events = service
+    cred = await credential(s)
+    ready, release = threading.Event(), threading.Event()
+    def probe(*a, **kw):
+        ready.set()
+        assert release.wait(3)
+        return Result(alive=True, direct=True)
+    s.probe = probe
+    request = asyncio.create_task(s.register(s.integrations.get(cred["integration"]["id"]), body()))
+    stopping = None
+    try:
+        assert await asyncio.to_thread(ready.wait, 2)
+        worker = next(iter(s._checks))
+        stopping = asyncio.create_task(s.stop())
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        assert not s.records and not saved and not events
+        for _ in range(2):
+            worker.cancel()
+            await asyncio.sleep(0)
+            assert s._probe_gate.locked() and not stopping.done()
+    finally:
+        release.set()
+        if stopping:
+            await stopping
+        else:
+            await s.stop()
+    assert not s.records and not saved and not events
+    assert not s._probe_gate.locked() and s._probe_task is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_before_admission_task_starts_releases_reservation(service):
+    s, saved, events = service
+    cred = await credential(s)
+    request = asyncio.create_task(s.register(s.integrations.get(cred["integration"]["id"]), body()))
+    await asyncio.sleep(0)  # register reserves, but _admit has not started yet.
+    assert s.records and s._admissions and not s._checks
+    await s.stop()
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    assert not s.records and not s._admissions and not saved and not events

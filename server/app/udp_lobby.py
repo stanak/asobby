@@ -30,6 +30,27 @@ MAX_LISTINGS = 50
 MAX_PER_INTEGRATION = 10
 MAX_PER_USER = 1
 CREATES_PER_MINUTE = 6
+ADMISSION_TIMEOUT = 3.0
+
+
+def admission_error(status, code, message):
+    return HTTPException(status, {"code": code, "message": message}, headers={"Cache-Control": "no-store"})
+
+
+def apply_alive(rec, result, now):
+    monitor, post = rec.monitor, rec.post
+    monitor.published = True
+    monitor.last_success_at = now
+    monitor.failures = 0
+    monitor.first_failure_at = 0
+    post.giuroll = post.giuroll or result.giuroll
+    post.autopunch = result.autopunch
+    post.direct_reachable = result.direct
+    post.reachability_uncertain = result.autopunch and not result.direct
+    post.reachability_lost = False
+    post.net_status = {"waiting": 3, "connecting": 2}.get(result.state, 0)
+    # A Giuroll pong proves liveness, not a free player slot.
+    post.guest_connected = result.state == "connecting"
 
 
 class Registration(BaseModel):
@@ -99,6 +120,9 @@ class Service:
         self._creates: dict[str, deque] = {}
         self._task: asyncio.Task | None = None
         self._probe_task: asyncio.Task | None = None
+        self._probe_gate = asyncio.Lock()
+        self._admissions: dict[str, asyncio.Task] = {}
+        self._checks: set[asyncio.Task] = set()
 
     def permitted(self, ident):
         item = self.integrations.items.get(ident)
@@ -137,59 +161,172 @@ class Service:
             raise asyncio.CancelledError
 
     async def register(self, item, body: Registration):
+        deadline = time.monotonic() + ADMISSION_TIMEOUT
+        try:
+            async with asyncio.timeout_at(deadline):
+                async with self._lock:
+                    rec, created = self._reserve(item, body)
+                    if rec.monitor.published:
+                        return self.status(rec), False
+                    job = self._admissions.get(rec.post.id)
+                    if job is None:
+                        if not created:
+                            # Pre-upgrade 202 registrations retain their original
+                            # background lifecycle; do not silently resubmit them.
+                            raise admission_error(409, "registration_in_progress", "a legacy registration is still being checked")
+                        job = asyncio.create_task(self._admit(rec, item, deadline))
+                        self._admissions[rec.post.id] = job
+                        job.add_done_callback(lambda task: self._admission_done(rec, task))
+        except TimeoutError:
+            raise admission_error(503, "verification_busy", "host verification is busy; retry later") from None
+        # Duplicate requests share the same attempt and deadline. A disconnected
+        # caller cannot cancel another caller's attempt or interrupt a disk write.
+        return await asyncio.shield(job), created
+
+    def _admission_done(self, rec, task):
+        ident = rec.post.id
+        if self._admissions.get(ident) is task:
+            self._admissions.pop(ident, None)
+        # A task cancelled before its first step never enters _admit's finally.
+        if self.records.get(ident) is rec:
+            self.records.pop(ident, None)
+        if not task.cancelled():
+            task.exception()  # Observe failures even if every HTTP caller left.
+
+    def _reserve(self, item, body):
+        """Called under _lock. Reserve only in memory until verification succeeds."""
         if not self.enabled():
             raise HTTPException(503, "UDP host verification is disabled")
+        if not self.integrations.available:
+            raise HTTPException(503, "integration storage unavailable")
         if not self.stream_allowed(body.stream_url):
             raise HTTPException(422, "stream_url must be youtube, twitch, or niconico")
         # Omitting the new optional field must retain pre-upgrade retry hashes.
         fingerprint = hashlib.sha256(integrations.encode_json(body.model_dump(exclude_none=True))).hexdigest()
-        async with self._lock:
-            if not self.permitted(item.id):
-                raise HTTPException(403, "listing creation is not allowed for this integration")
-            managed = [rec for rec in self.records.values() if rec.monitor is not None]
-            owned = [rec for rec in managed if rec.monitor.integration_id == item.id]
-            for rec in owned:
-                if rec.monitor.request_id == body.request_id:
-                    if rec.monitor.fingerprint != fingerprint:
-                        raise HTTPException(409, "request_id was already used with different data")
-                    return self.status(rec)
-            if any(same_address(rec.post.addr, body.addr) for rec in self.records.values()):
-                raise HTTPException(409, "this host already has a listing")
-            if (
-                len(managed) >= MAX_LISTINGS or len(owned) >= MAX_PER_INTEGRATION
-                or sum(rec.monitor.external_user_id == body.external_user_id for rec in owned) >= MAX_PER_USER
-            ):
-                raise HTTPException(429, "too many active registrations", headers={"Retry-After": "30"})
-            now = time.time()
-            self._creates = {key: values for key, values in self._creates.items() if key in self.integrations.items}
-            recent = self._creates.setdefault(item.id, deque())
-            while recent and recent[0] <= now - 60:
-                recent.popleft()
-            if len(recent) >= CREATES_PER_MINUTE:
-                raise HTTPException(429, "too many registrations", headers={"Retry-After": "60"})
-            rec = self.make_record(body, Monitor(
-                integration_id=item.id, external_user_id=body.external_user_id,
-                request_id=body.request_id, fingerprint=fingerprint,
-                discord_user_id=body.discord_user_id,
-            ))
-            # Reserve the endpoint before the async disk write so a native
-            # client finishing its probe cannot publish the same host midway.
-            # Pending records remain invisible and tick() takes this lock.
-            committed = False
-            self.records[rec.post.id] = rec
+        if not self.permitted(item.id):
+            raise HTTPException(403, "listing creation is not allowed for this integration")
+        managed = [rec for rec in self.records.values() if rec.monitor is not None]
+        owned = [rec for rec in managed if rec.monitor.integration_id == item.id]
+        for rec in owned:
+            if rec.monitor.request_id == body.request_id:
+                if rec.monitor.fingerprint != fingerprint:
+                    raise HTTPException(409, "request_id was already used with different data")
+                return rec, False
+        if any(same_address(rec.post.addr, body.addr) for rec in self.records.values()):
+            raise HTTPException(409, "this host already has a listing")
+        if (
+            len(managed) >= MAX_LISTINGS or len(owned) >= MAX_PER_INTEGRATION
+            or sum(rec.monitor.external_user_id == body.external_user_id for rec in owned) >= MAX_PER_USER
+        ):
+            raise HTTPException(429, "too many active registrations", headers={"Retry-After": "30"})
+        now = time.time()
+        self._creates = {key: values for key, values in self._creates.items() if key in self.integrations.items}
+        recent = self._creates.setdefault(item.id, deque())
+        while recent and recent[0] <= now - 60:
+            recent.popleft()
+        if len(recent) >= CREATES_PER_MINUTE:
+            raise HTTPException(429, "too many registrations", headers={"Retry-After": "60"})
+        rec = self.make_record(body, Monitor(
+            integration_id=item.id, external_user_id=body.external_user_id,
+            request_id=body.request_id, fingerprint=fingerprint,
+            discord_user_id=body.discord_user_id,
+        ))
+        # Native-client registration also checks RECORDS for reserved endpoints.
+        self.records[rec.post.id] = rec
+        recent.append(now)  # Failed attempts must not bypass the UDP rate limit.
+        return rec, True
 
-            def accepted():
-                nonlocal committed
-                committed = True
-                recent.append(now)
-
+    async def _check(self, addr, started=None, **kwargs):
+        # Serialize before allocating a thread. A timed-out HTTP request must
+        # not release the socket gate until its underlying worker actually exits.
+        async with self._probe_gate:
+            if started is not None:
+                started.set()
+            task = asyncio.create_task(asyncio.to_thread(self.probe, addr, **kwargs))
+            self._probe_task = task
             try:
-                await self._durable(lambda: self.save(rec), accepted)
-            except BaseException:
-                if not committed and self.records.get(rec.post.id) is rec:
-                    self.records.pop(rec.post.id)
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not task.cancelled():
+                    task.exception()
                 raise
-            return self.status(rec)
+            except Exception:
+                return Result(inconclusive=True)
+            finally:
+                self._probe_task = None
+
+    def _check_done(self, task):
+        self._checks.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    async def _admit(self, rec, item, deadline):
+        job = None
+        started = asyncio.Event()
+        try:
+            job = asyncio.create_task(self._check(
+                rec.post.addr, started=started, detect_giuroll=True, deadline=deadline,
+            ))
+            self._checks.add(job)
+            job.add_done_callback(self._check_done)
+            try:
+                async with asyncio.timeout_at(deadline):
+                    result = await asyncio.shield(job)
+            except TimeoutError:
+                if not started.is_set():
+                    raise admission_error(503, "verification_busy", "host verification is busy; retry later") from None
+                raise admission_error(422, "verification_timeout", "host verification did not finish within 3 seconds") from None
+            if result.timed_out or time.monotonic() >= deadline:
+                raise admission_error(422, "verification_timeout", "host verification did not finish within 3 seconds")
+            if result.inconclusive:
+                raise admission_error(503, "verification_unavailable", "host verification is temporarily unavailable")
+            if not result.alive:
+                raise admission_error(422, "host_unconfirmed", "no valid host response was received")
+            try:
+                async with asyncio.timeout_at(deadline):
+                    await self._lock.acquire()
+            except TimeoutError:
+                raise admission_error(503, "verification_busy", "registration is busy; retry later") from None
+            try:
+                current = self.integrations.items.get(item.id)
+                if not self.integrations.available or not self.enabled():
+                    raise admission_error(503, "verification_unavailable", "host verification is temporarily unavailable")
+                if not self.permitted(item.id):
+                    raise HTTPException(403, "listing creation is not allowed for this integration")
+                if current.api_key_hash != item.api_key_hash:
+                    raise HTTPException(401, "integration key changed")
+                updated = copy.deepcopy(rec)
+                now = time.time()
+                apply_alive(updated, result, now)
+                updated.post.updated_at = now
+                updated.monitor.last_check_at = updated.monitor.last_giuroll_check_at = now
+                updated.monitor.next_check_at = now + CHECK_INTERVAL
+
+                def committed():
+                    self.records[rec.post.id] = updated
+                    self.integrations.post_created(rec.post.id)
+
+                # The 3s verification budget is over. Finish the durable commit
+                # before replying; never time out a write that could later publish.
+                await self._durable(lambda: self.save(updated), committed)
+                await self.publish("upsert", asdict(updated.post))
+                return self.status(updated)
+            finally:
+                self._lock.release()
+        finally:
+            if job is not None and not job.done():
+                job.cancel()  # _check drains the thread while retaining its gate.
+            if self.records.get(rec.post.id) is rec:
+                # No disk write occurs before host verification. A late worker
+                # result cannot resurrect this discarded in-memory reservation.
+                self.records.pop(rec.post.id, None)
 
     async def remove(self, rec, reason):
         await self._durable(
@@ -202,7 +339,8 @@ class Service:
         if not self.integrations.available:
             return  # broken integration storage is NOT an instruction to delete
         async with self._lock:
-            records = [rec for rec in self.records.values() if rec.monitor is not None]
+            records = [rec for rec in self.records.values()
+                       if rec.monitor is not None and rec.post.id not in self._admissions]
             for rec in records:
                 if not self.permitted(rec.monitor.integration_id):
                     await self.remove(rec, "integration_disabled")
@@ -216,21 +354,11 @@ class Service:
             if rec.monitor.next_check_at > now:
                 return
             detect_giuroll = rec.post.giuroll or now - rec.monitor.last_giuroll_check_at >= GIUROLL_CHECK_INTERVAL
-        # Only one bounded thread at a time; it shares the legacy probe lock.
-        self._probe_task = asyncio.create_task(asyncio.to_thread(
-            self.probe, rec.post.addr,
+        result = await self._check(
+            rec.post.addr,
             prefer_autopunch=rec.post.autopunch and not rec.post.direct_reachable,
             detect_giuroll=detect_giuroll,
-        ))
-        try:
-            result = await asyncio.shield(self._probe_task)
-        except asyncio.CancelledError:
-            await self._probe_task
-            raise
-        except Exception:
-            result = Result(inconclusive=True)
-        finally:
-            self._probe_task = None
+        )
         async with self._lock:
             if self.records.get(rec.post.id) is not rec:
                 return
@@ -247,19 +375,7 @@ class Service:
             if detect_giuroll:
                 monitor.last_giuroll_check_at = now
             if result.alive:
-                monitor.published = True
-                monitor.last_success_at = now
-                monitor.failures = 0
-                monitor.first_failure_at = 0
-                post.giuroll = post.giuroll or result.giuroll
-                post.autopunch = result.autopunch
-                post.direct_reachable = result.direct
-                post.reachability_uncertain = result.autopunch and not result.direct
-                post.reachability_lost = False
-                post.net_status = {"waiting": 3, "connecting": 2}.get(result.state, 0)
-                # Do not equate a spectator error or a Giuroll pong with a
-                # free player slot. Never infer identities from UDP addresses.
-                post.guest_connected = result.state == "connecting"
+                apply_alive(updated, result, now)
             else:
                 post.net_status = 0
                 post.guest_connected = False
@@ -304,6 +420,10 @@ class Service:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
+        for job in list(self._admissions.values()):
+            job.cancel()
+        await asyncio.gather(*list(self._admissions.values()), return_exceptions=True)
+        await asyncio.gather(*list(self._checks), return_exceptions=True)
 
     async def _run(self):
         while True:
@@ -317,11 +437,18 @@ class Service:
 def build_router(service: Service):
     router = APIRouter()
 
-    @router.post("/api/v1/posts", status_code=202)
+    @router.post("/api/v1/posts", status_code=201, responses={
+        200: {"description": "Existing registration (idempotent retry)"},
+        409: {"description": "Conflicting or legacy in-progress registration"},
+        422: {"description": "Invalid input, unconfirmed host or verification timeout"},
+        503: {"description": "Verification busy/unavailable or storage unavailable"},
+    })
     async def register(body: Registration, request: Request):
         item = service.authenticate(request)
-        result = await service.register(item, body)
-        return JSONResponse(result, status_code=202, headers={"Cache-Control": "no-store"})
+        result, created = await service.register(item, body)
+        return JSONResponse(result, status_code=201 if created else 200, headers={
+            "Cache-Control": "no-store", "Location": result["status_url"],
+        })
 
     @router.get("/api/v1/posts/{ident}")
     async def status(ident: str, request: Request):
