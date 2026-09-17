@@ -3,14 +3,30 @@ from __future__ import annotations
 
 import tempfile
 import time
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from local_store import LocalStore
 
 
+@contextmanager
+def temporary_store():
+    # SQLite's transaction context does not close the connection. Track the
+    # real test connections and close them before Windows deletes the DB file;
+    # do not rely on GC timing or change the store's transaction behavior.
+    connect = LocalStore._connect
+    with tempfile.TemporaryDirectory() as tmp, ExitStack() as cleanup:
+        def tracked_connect(store):
+            conn = connect(store)
+            cleanup.callback(conn.close)
+            return conn
+        with patch.object(LocalStore, "_connect", tracked_connect):
+            yield LocalStore(Path(tmp) / "matches.db")
+
+
 def test_merge_server_rows_skips_duplicate_after_sync_link():
-    with tempfile.TemporaryDirectory() as tmp:
-        store = LocalStore(Path(tmp) / "matches.db")
+    with temporary_store() as store:
         played_at = time.time()
         local_id = store.record_local(
             my_side="host",
@@ -47,8 +63,7 @@ def test_merge_server_rows_skips_duplicate_after_sync_link():
 
 
 def test_record_local_deduplicates_recent_same_match():
-    with tempfile.TemporaryDirectory() as tmp:
-        store = LocalStore(Path(tmp) / "matches.db")
+    with temporary_store() as store:
         kwargs = dict(
             my_side="host",
             winner="host",
@@ -65,8 +80,7 @@ def test_record_local_deduplicates_recent_same_match():
 
 def test_merge_server_rows_links_local_by_profile_not_winner_only():
     """winner だけ一致する別対戦に誤リンクしない。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        store = LocalStore(Path(tmp) / "matches.db")
+    with temporary_store() as store:
         t0 = time.time()
         bob_id = store.record_local(
             my_side="host",

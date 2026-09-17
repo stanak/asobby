@@ -130,7 +130,7 @@ def test_ko_decided_rejects_double_ko_and_in_progress():
     assert not _ko_decided(_state(lwin=2, rwin=2))
     assert not _ko_decided(_state(lwin=1, rwin=1))
     assert not _ko_decided(_state(lwin=1, rwin=0))
-    assert _ko_fingerprint(_state(lwin=2, rwin=2)) == ""
+    assert _ko_fingerprint(_state(lwin=2, rwin=2), host_char=0, guest_char=1) == ""
 
 
 def test_ko_decided_extended_set():
