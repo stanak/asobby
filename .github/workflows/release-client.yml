@@ -27,6 +27,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r client/requirements.txt
           pip install "pyinstaller>=6.11,<7"
+          pip install "pytest>=8,<9" "pytest-asyncio>=0.24,<2"
+
+      - name: Test client on Windows
+        env:
+          PYTHONPATH: client/src
+        run: python -m pytest client/tests -q
 
       - name: Build client
         run: |

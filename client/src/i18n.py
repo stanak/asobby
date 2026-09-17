@@ -15,7 +15,17 @@ JA: dict[str, str] = {
     "lang.menu": "言語 / Language",
     "post_type.casual": "カジュアル",
     "post_type.ranked": "ランクマ",
-    "tray.already_running": "asobby は既に起動しています",
+    "tray.already_running": (
+        "asobby は既に起動しています。\n"
+        "画面右下のタスクトレイ（隠れている場合は △）のアイコンを確認してください。\n"
+        "もう1つのクライアントは起動しません。"
+    ),
+    "tray.instance_check_failed": (
+        "asobby の多重起動チェックに失敗したため、起動を中止しました。\n"
+        "既に起動中の asobby がないか、タスクトレイを確認してください。\n"
+        "管理者として起動したものがあれば終了し、通常の権限で起動し直してください。\n\n"
+        "詳細: {error}"
+    ),
     "tray.startup_notice": (
         "asobby はタスクトレイに常駐して動いています。"
         "画面右下のトレイアイコン（△の中にある場合もあります）を"
@@ -278,7 +288,17 @@ EN: dict[str, str] = {
     "lang.menu": "Language / 言語",
     "post_type.casual": "Casual",
     "post_type.ranked": "Ranked",
-    "tray.already_running": "asobby is already running",
+    "tray.already_running": (
+        "asobby is already running.\n"
+        "Check its icon in the system tray (or the hidden icons menu).\n"
+        "A second client will not be started."
+    ),
+    "tray.instance_check_failed": (
+        "asobby could not check for another instance, so startup was cancelled.\n"
+        "Check the system tray for an existing asobby instance.\n"
+        "If it was started as administrator, quit it and restart normally.\n\n"
+        "Details: {error}"
+    ),
     "tray.startup_notice": (
         "asobby is running in the system tray. "
         "Click the tray icon at the bottom-right of your screen "

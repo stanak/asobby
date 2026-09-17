@@ -872,18 +872,6 @@ class TrayApp:
 
 
 if __name__ == "__main__":
-    import ctypes
-    import sys
-    from tkinter import Tk
-    from tkinter import messagebox
+    from single_instance import run_single_instance
 
-    ERROR_ALREADY_EXISTS = 183
-    # Local\ (セッション毎) なら一般ユーザー権限で確実に作成できる
-    mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\asobby_client_mutex")
-    if ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
-        root = Tk()
-        root.withdraw()
-        messagebox.showwarning("asobby", t("tray.already_running"))
-        sys.exit(0)
-
-    TrayApp().run()
+    raise SystemExit(run_single_instance(lambda: TrayApp().run()))
