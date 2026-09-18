@@ -1,6 +1,7 @@
-"""初回開始ランク選択の結合テスト。"""
+"""初回開始ランク選択・一度限りの手動変更の結合テスト。"""
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import struct
@@ -208,6 +209,8 @@ async def test_ranked_game_locks_both_users():
             assert guest.rank_locked is True
 
         for token in (host_token, guest_token):
+            me = (await client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})).json()
+            assert me["can_change_rank"] is True  # First result locks only the initial choice.
             locked = await client.post(
                 "/rank/initial",
                 json={"rank": "easy"},
@@ -338,3 +341,197 @@ async def test_hydrate_recomputes_rank_evidence_for_older_records(monkeypatch):
         await main._hydrate_records_from_redis()
         restored = main.RECORDS["old"].post
         assert restored.rank_status == "provisional" and restored.ranked_games == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rank", db.MANUAL_RANKS)
+async def test_manual_rank_change_allowed_once_for_existing_users(rank):
+    async with app_client() as client:
+        await create_user("111", rank="ex" if rank != "ex" else "normal", rank_locked=True)
+        headers = {"Authorization": "Bearer " + bearer_token("111")}
+        assert (await client.get("/auth/me", headers=headers)).json()["can_change_rank"] is True
+        response = await client.post("/rank/change", headers=headers, json={"rank": rank})
+        assert response.status_code == 200
+        assert response.json() == {"ok": True, "rank": rank, "can_change_rank": False}
+        user = await db.get_user("111")
+        assert user.rank == rank and user.rank_locked
+        assert user.rank_change_used_at is not None
+        assert user.rank_change_used_at == user.rank_changed_at
+        for target in (rank, "easy" if rank != "easy" else "hard"):
+            retry = await client.post("/rank/change", headers=headers, json={"rank": target})
+            assert retry.status_code == 409
+            assert retry.json()["detail"] == "rank change already used"
+        assert (await client.post("/rank/initial", headers=headers, json={"rank": "normal"})).status_code == 409
+        me = (await client.get("/auth/me", headers=headers)).json()
+        assert me["can_change_rank"] is False and me["can_choose_rank"] is False
+
+
+@pytest.mark.asyncio
+async def test_initial_choice_does_not_consume_extra_choice():
+    async with app_client() as client:
+        await create_user("111")
+        headers = {"Authorization": "Bearer " + bearer_token("111")}
+        assert (await client.get("/auth/me", headers=headers)).json()["can_change_rank"] is False
+        blocked = await client.post("/rank/change", headers=headers, json={"rank": "hard"})
+        assert blocked.status_code == 409 and blocked.json()["detail"] == "choose initial rank first"
+        assert (await client.post("/rank/initial", headers=headers, json={"rank": "normal"})).status_code == 200
+        assert (await db.get_user("111")).rank_change_used_at is None
+        assert (await client.get("/auth/me", headers=headers)).json()["can_change_rank"] is True
+        assert (await client.post("/rank/change", headers=headers, json={"rank": "hard"})).status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("locked", [False, True])
+async def test_current_ph_cannot_change_or_bypass_via_initial_choice(locked):
+    async with app_client() as client:
+        await create_user("111", rank="ph", rank_locked=locked)
+        headers = {"Authorization": "Bearer " + bearer_token("111")}
+        me = (await client.get("/auth/me", headers=headers)).json()
+        assert me["can_choose_rank"] is False and me["can_change_rank"] is False
+        for rank in db.MANUAL_RANKS:
+            response = await client.post("/rank/change", headers=headers, json={"rank": rank})
+            assert response.status_code == 403
+            assert response.json()["detail"] == "ph rank cannot be changed manually"
+        assert (await client.post("/rank/initial", headers=headers, json={"rank": "normal"})).status_code == 409
+        user = await db.get_user("111")
+        assert user.rank == "ph" and user.rank_change_used_at is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_or_unauthorized_changes_do_not_consume_allowance():
+    async with app_client() as client:
+        await create_user("111", rank_locked=True)
+        await create_user("222", rank_locked=True)
+        headers = {"Authorization": "Bearer " + bearer_token("111")}
+        assert (await client.post("/rank/change", json={"rank": "hard"})).status_code == 401
+        same = await client.post("/rank/change", headers=headers, json={"rank": "normal"})
+        assert same.status_code == 409 and same.json()["detail"] == "rank is unchanged"
+        for body in ({"rank": "ph"}, {"rank": "N"}, {}, {"rank": "hard", "user_id": "222"},
+                     {"rank": "hard", "rank_change_used_at": None}):
+            assert (await client.post("/rank/change", headers=headers, json=body)).status_code == 422
+        for uid in ("111", "222"):
+            user = await db.get_user(uid)
+            assert user.rank == "normal" and user.rank_change_used_at is None
+        # Cookie-authenticated Web lobby uses the same account-only endpoint.
+        client.cookies.set("asobby_session", bearer_token("111"))
+        assert (await client.post("/rank/change", json={"rank": "hard"})).status_code == 200
+        assert (await db.get_user("222")).rank == "normal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial", [False, True])
+async def test_concurrent_rank_choices_have_exactly_one_winner(initial):
+    async with app_client() as client:
+        await create_user("111", rank_locked=not initial)
+        headers = {"Authorization": "Bearer " + bearer_token("111")}
+        targets = ["easy", "ex", "hard", "luna"]
+        responses = await asyncio.gather(*[
+            client.post("/rank/initial" if initial else "/rank/change", headers=headers, json={"rank": rank})
+            for rank in targets
+        ])
+        assert sorted(r.status_code for r in responses) == [200, 409, 409, 409]
+        user = await db.get_user("111")
+        assert user.rank == next(rank for rank, r in zip(targets, responses) if r.status_code == 200)
+        assert (user.rank_change_used_at is None) == initial
+
+
+@pytest.mark.asyncio
+async def test_manual_change_preserves_history_ratings_and_survives_restart():
+    async with app_client() as client:
+        await create_user("111", rank_locked=True)
+        await add_rank_history("111", 50)
+        async with db.session() as s:
+            user = await s.get(db.User, "111")
+            user.ts_mu, user.ts_sigma = 30.0, 3.0
+            await s.commit()
+        history = await db.fetch_ranked_matches_at_current_rank("111")
+        headers = {"Authorization": "Bearer " + bearer_token("111")}
+        assert (await client.post("/rank/change", headers=headers, json={"rank": "hard"})).status_code == 200
+        assert await db.fetch_ranked_matches_at_current_rank("111") == []
+        assert await main.evaluate_rank("111") is None
+        user = await db.get_user("111")
+        used_at = user.rank_change_used_at
+        assert (user.ts_mu, user.ts_sigma) == (30.0, 3.0)
+        async with db.session() as s:
+            for match in history:
+                saved = await s.get(db.Match, match.id)
+                assert saved is not None and saved.match_rank == "normal"
+        details = await main.host_rank_for_post("111")
+        assert details["rank_status"] == "ranked" and details["ranked_games"] == 50
+        # Automatic promotion and a new login must not grant a second allowance.
+        await add_rank_history("111", 50)
+        assert await main.evaluate_rank("111") == "luna"
+        await db.upsert_user_on_login("111", "renamed", "1.2.3.4")
+    async with app_client() as client:
+        user = await db.get_user("111")
+        assert user.rank == "luna" and user.rank_change_used_at == used_at
+        assert (await client.get("/auth/me", headers=headers)).json()["can_change_rank"] is False
+        assert (await client.post("/rank/change", headers=headers, json={"rank": "normal"})).status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_stale_auto_promotion_does_not_overwrite_manual_choice(monkeypatch):
+    async with app_client():
+        await create_user("111", rank_locked=True)
+        await add_rank_history("111", 50)
+        original_fetch = db.fetch_ranked_matches_at_current_rank
+
+        async def fetch_then_change(*args, **kwargs):
+            matches = await original_fetch(*args, **kwargs)
+            assert await db.change_user_rank_once("111", "hard") is None
+            return matches
+
+        monkeypatch.setattr(db, "fetch_ranked_matches_at_current_rank", fetch_then_change)
+        assert await main.evaluate_rank("111") is None
+        assert (await db.get_user("111")).rank == "hard"
+
+
+@pytest.mark.asyncio
+async def test_failed_commit_does_not_consume_rank_change(monkeypatch):
+    async with app_client():
+        await create_user("111", rank_locked=True)
+
+        async def fail_commit(_session):
+            raise RuntimeError("simulated database failure")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(db.AsyncSession, "commit", fail_commit)
+            with pytest.raises(RuntimeError, match="simulated database failure"):
+                await db.change_user_rank_once("111", "hard")
+        user = await db.get_user("111")
+        assert user.rank == "normal" and user.rank_change_used_at is None and user.rank_changed_at is None
+        assert await db.change_user_rank_once("111", "hard") is None
+
+
+@pytest.mark.asyncio
+async def test_manual_choice_refreshes_host_guest_api_sse_without_renewing_lease():
+    async with app_client() as client:
+        await create_user("111", rank_locked=True)
+        await create_user("222", rank_locked=True)
+        headers = {"Authorization": "Bearer " + bearer_token("111")}
+        created = await client.post("/posts", headers=headers, json={"addr": "1.2.3.4:10800", "post_type": "ranked"})
+        assert created.status_code == 200
+        rec = main.RECORDS[created.json()["post"]["id"]]
+        rec.guest_user_id, rec.guest_rank = "222", "normal"
+        main.refresh_ranked_active(rec)
+        assert rec.post.ranked_active
+        updated_at = rec.post.updated_at
+        cred = await main.INTEGRATIONS.create(integrations.IntegrationInput(name="manual-rank-reader"))
+        api_headers = {"Authorization": "Bearer " + cred["api_key"]}
+        before = await client.get("/api/v1/lobby", headers=api_headers)
+        q = await main.HUB.subscribe()
+        try:
+            guest_headers = {"Authorization": "Bearer " + bearer_token("222")}
+            assert (await client.post("/rank/change", headers=guest_headers, json={"rank": "hard"})).status_code == 200
+            assert rec.guest_rank == "hard" and rec.post.rank == "normal" and not rec.post.ranked_active
+            assert '"ranked_active":false' in q.get_nowait()
+            assert (await client.post("/rank/change", headers=headers, json={"rank": "hard"})).status_code == 200
+            assert rec.post.rank == "hard" and rec.post.ranked_active
+            assert '"rank":"hard"' in q.get_nowait()
+        finally:
+            await main.HUB.unsubscribe(q)
+        assert rec.post.updated_at == updated_at
+        after = await client.get("/api/v1/lobby", headers={**api_headers, "If-None-Match": before.headers["etag"]})
+        assert after.status_code == 200 and after.json()["posts"][0]["rank"] == "H"
+        assert after.json()["revision"] != before.json()["revision"]
+        assert "rank_change_used_at" not in after.json()["posts"][0]

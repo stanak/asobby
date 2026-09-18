@@ -37,7 +37,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 import db
 import geoip
@@ -1129,6 +1129,10 @@ class ChooseRankIn(BaseModel):
     rank: Literal["easy", "normal", "ex", "hard", "luna"]
 
 
+class ChangeRankIn(ChooseRankIn):
+    model_config = ConfigDict(extra="forbid")
+
+
 class FaviconNotifyIn(BaseModel):
     ranked_enabled: Optional[bool] = None
     casual_enabled: Optional[bool] = None
@@ -1375,7 +1379,8 @@ async def resolve_session(request: Request) -> Optional[dict[str, Any]]:
         "avatar": discord_avatar_url(user.id, user.avatar),
         "rank": user.rank,
         "rating": rating,
-        "can_choose_rank": not user.rank_locked,
+        "can_choose_rank": not user.rank_locked and user.rank in db.MANUAL_RANKS,
+        "can_change_rank": db.can_change_user_rank(user),
     }
 
 
@@ -2068,10 +2073,10 @@ def _match_is_win(match: db.Match, user_id: str) -> bool:
 
 async def evaluate_rank(user_id: str) -> Optional[str]:
     """現ランクでの直近ランクマ勝率に基づき昇降格する。変更があれば新ランクを返す。"""
-    rank_info = await db.get_user_rank(user_id)
-    if rank_info is None:
+    user = await db.get_user(user_id)
+    if user is None:
         return None
-    rank, _mu, _sigma = rank_info
+    rank = user.rank
     if rank == "ph":
         return None
 
@@ -2099,7 +2104,8 @@ async def evaluate_rank(user_id: str) -> Optional[str]:
             new_rank = rules.get("promote_to")
 
     if new_rank and new_rank != rank:
-        await db.set_user_rank(user_id, new_rank)
+        if not await db.set_user_rank(user_id, new_rank, expected_state=(rank, user.rank_changed_at)):
+            return None  # A manual choice or another evaluation already won.
         print(f"rank change: user={user_id} {rank} -> {new_rank} (win_rate={win_rate:.3f}, games={games})")
         return new_rank
     return None
@@ -2195,12 +2201,20 @@ def apply_post_rank(rec: PostRecord, details: dict[str, Any]) -> bool:
 async def refresh_active_post_ranks(user_ids: set[str]) -> None:
     """Publish choices/results immediately without renewing a host's lease."""
     for user_id in user_ids - {""}:
-        records = [r for r in RECORDS.values() if r.monitor is None and r.owner_user_id == user_id]
+        records = [r for r in RECORDS.values() if r.monitor is None
+                   and user_id in (r.owner_user_id, r.guest_user_id)]
         if not records:
             continue
         details = await host_rank_for_post(user_id)
         for rec in records:
-            if RECORDS.get(rec.post.id) is rec and apply_post_rank(rec, details):
+            if RECORDS.get(rec.post.id) is not rec:
+                continue
+            changed = apply_post_rank(rec, details) if rec.owner_user_id == user_id else False
+            if rec.guest_user_id == user_id and rec.guest_rank != details["rank"]:
+                rec.guest_rank = details["rank"]
+                refresh_ranked_active(rec)
+                changed = True
+            if changed:
                 await _persist_record(rec)
                 if RECORDS.get(rec.post.id) is rec:
                     await HUB.publish("upsert", asdict(rec.post))
@@ -3718,6 +3732,22 @@ async def choose_initial_rank(body: ChooseRankIn, request: Request) -> dict[str,
         raise HTTPException(status_code=409, detail="rank already locked")
     await refresh_active_post_ranks({sess["id"]})
     return {"ok": True, "rank": body.rank}
+
+
+@app.post("/rank/change")
+async def change_rank_once(body: ChangeRankIn, request: Request) -> dict[str, Any]:
+    """初回選択とは別に一度だけ手動変更。現在 Ph のユーザーは対象外。"""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    error = await db.change_user_rank_once(sess["id"], body.rank)
+    if error is not None:
+        status = 403 if error == "ph rank cannot be changed manually" else 409
+        if error == "user not found":
+            status = 404
+        raise HTTPException(status_code=status, detail=error)
+    await refresh_active_post_ranks({sess["id"]})
+    return {"ok": True, "rank": body.rank, "can_change_rank": False}
 
 
 @app.get("/posts")

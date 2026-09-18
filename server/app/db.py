@@ -13,7 +13,7 @@ from typing import Any, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, SmallInteger, String, and_, exists, func, or_, select, union
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, SmallInteger, String, and_, exists, func, or_, select, union, update
 from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -55,6 +55,10 @@ class User(Base):
     )
     # 初回開始ランク選択済み、またはランクマ 1 戦目以降は True
     rank_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 初回選択とは別の、一度限りの手動変更権。既存ユーザーも NULL = 未使用。
+    rank_change_used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     ts_mu: Mapped[float] = mapped_column(Float, default=25.0, nullable=False)
     ts_sigma: Mapped[float] = mapped_column(Float, default=8.333333333333334, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -72,6 +76,7 @@ class User(Base):
 
 
 PH_CHAR_IDS: tuple[int, ...] = tuple(range(21))  # 0–19 + Random (20)
+MANUAL_RANKS = ("easy", "normal", "ex", "hard", "luna")
 DEFAULT_TS_MU = 25.0
 DEFAULT_TS_SIGMA = 8.333333333333334
 
@@ -484,15 +489,55 @@ async def get_user_rank_evidence(user_id: str) -> tuple[str, float, float, bool,
 
 async def choose_initial_rank(user_id: str, rank: str) -> bool:
     """初回のみ開始ランクを設定する。rank_locked が False のときだけ成功。"""
+    if rank not in MANUAL_RANKS:
+        return False
     async with session() as s:
-        user = await s.get(User, user_id)
-        if user is None or user.rank_locked:
-            return False
-        user.rank = rank
-        user.rank_changed_at = utcnow()
-        user.rank_locked = True
+        result = await s.execute(
+            update(User).where(
+                User.id == user_id, User.rank_locked.is_(False),
+                User.rank.in_(MANUAL_RANKS), User.rank_change_used_at.is_(None),
+            ).values(rank=rank, rank_changed_at=utcnow(), rank_locked=True)
+        )
         await s.commit()
-        return True
+        return result.rowcount == 1
+
+
+def can_change_user_rank(user: User) -> bool:
+    return bool(user.rank_locked and user.rank in MANUAL_RANKS and user.rank_change_used_at is None)
+
+
+async def change_user_rank_once(user_id: str, rank: str) -> str | None:
+    """Consume the extra manual choice atomically; return an error or None.
+
+    Keep all results and ratings. Only the current-rank evaluation window is
+    restarted. Login, promotion and demotion never replenish this allowance.
+    """
+    if rank not in MANUAL_RANKS:
+        return "invalid rank"
+    now = utcnow()
+    async with session() as s:
+        result = await s.execute(
+            update(User).where(
+                User.id == user_id, User.rank_locked.is_(True),
+                User.rank.in_(MANUAL_RANKS), User.rank != rank,
+                User.rank_change_used_at.is_(None),
+            ).values(rank=rank, rank_changed_at=now, rank_change_used_at=now)
+        )
+        if result.rowcount == 1:
+            await s.commit()
+            return None
+        user = await s.get(User, user_id)
+        if user is None:
+            return "user not found"
+        if user.rank == "ph":
+            return "ph rank cannot be changed manually"
+        if user.rank_change_used_at is not None:
+            return "rank change already used"
+        if not user.rank_locked:
+            return "choose initial rank first"
+        if user.rank == rank:
+            return "rank is unchanged"
+        return "rank change unavailable"
 
 
 async def lock_user_rank(user_id: str) -> None:
@@ -505,21 +550,30 @@ async def lock_user_rank(user_id: str) -> None:
         await s.commit()
 
 
-async def set_user_rank(user_id: str, new_rank: str) -> None:
-    """ランクを更新し rank_changed_at を現在時刻にセットする。"""
+async def set_user_rank(
+    user_id: str, new_rank: str, *,
+    expected_state: tuple[str, datetime | None] | None = None,
+) -> bool:
+    """Update rank, optionally rejecting a stale promotion/demotion decision."""
     mu = DEFAULT_TS_MU
     sigma = DEFAULT_TS_SIGMA
     async with session() as s:
         user = await s.get(User, user_id)
         if user is None:
-            return
-        user.rank = new_rank
-        user.rank_changed_at = utcnow()
+            return False
         mu = user.ts_mu
         sigma = user.ts_sigma
+        statement = update(User).where(User.id == user_id)
+        if expected_state is not None:
+            old_rank, changed_at = expected_state
+            statement = statement.where(User.rank == old_rank, User.rank_changed_at == changed_at)
+        result = await s.execute(statement.values(rank=new_rank, rank_changed_at=utcnow()))
+        if result.rowcount != 1:
+            return False
         await s.commit()
     if new_rank == "ph":
         await init_ph_char_ratings(user_id, mu, sigma)
+    return True
 
 
 async def init_ph_char_ratings(
