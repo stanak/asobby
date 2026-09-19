@@ -63,6 +63,13 @@
   function panel(parent, title) { const p = el("section", null, "panel"); p.append(el("h2", title)); parent.append(p); return p; }
   const characterChoices = count => Array.from({length:count}, (_, id) => [String(id), charName(id)]);
 
+  function characterEditor(parent, key, name, initial) {
+    const group = el("fieldset"), choices = el("div", null, "character-choices");
+    group.append(el("legend", tr(key)), choices); parent.append(group);
+    const inputs = characterChoices(20).map(([id, label]) => check(choices, label, name, id, initial.includes(Number(id))));
+    return () => inputs.filter(input => input.checked).map(input => Number(input.value));
+  }
+
   function tagEditor(parent, key, initial, max, maxLength, hint) {
     const wrap = el("div", null, "field"), list = el("div", null, "chips"), entry = el("div", null, "tag-entry"), input = el("input"), add = el("button", tr("add"));
     const label = el("label", tr(key)); label.htmlFor = `tag-${key}`; input.id = label.htmlFor; input.maxLength = maxLength;
@@ -111,8 +118,8 @@
     const favorites = tagEditor(interests, "favorites", data.favorite_players, 20, 100, tr("favoriteHint"));
     const games = tagEditor(interests, "games", data.other_games, 30, 120, tr("gamesHint"));
     const characters = panel(form, tr("characters")); characters.append(el("p", tr("charHint"), "hint"));
-    const strongCharacter = select(characters, tr("strong"), "strong_character", characterChoices(20), data.strong_character == null ? "" : String(data.strong_character));
-    const weakCharacter = select(characters, tr("weak"), "weak_character", characterChoices(20), data.weak_character == null ? "" : String(data.weak_character));
+    const strongCharacters = characterEditor(characters, "strong", "strong_characters", data.strong_characters);
+    const weakCharacters = characterEditor(characters, "weak", "weak_characters", data.weak_characters);
     const privacy = panel(form, tr("privacy"));
     const allow = check(privacy, tr("allowWinrates"), "character_winrates_public", "1", data.character_winrates_public);
     privacy.append(el("p", tr("privacyHint"), "hint"));
@@ -128,8 +135,7 @@
           main_character:mainCharacter.value === "" ? null : Number(mainCharacter.value),
           country_code:country.value, device_type:device.value, device_model:model.value,
           favorite_players:favorites(), other_games:games(), character_winrates_public:allow.checked,
-          strong_character:strongCharacter.value === "" ? null : Number(strongCharacter.value),
-          weak_character:weakCharacter.value === "" ? null : Number(weakCharacter.value),
+          strong_characters:strongCharacters(), weak_characters:weakCharacters(),
         };
         save.disabled = true; save.textContent = tr("saving");
         await api("/user/profile", {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
@@ -147,7 +153,12 @@
     if (player.main_character != null) card.append(searchLink(`${tr("mainCharacter")}: ${charName(player.main_character)}`, "main_character", player.main_character));
     card.append(el("div", [player.age == null ? null : tr("ageValue", {n:player.age}), player.country_code ? countryName(player.country_code) : null].filter(Boolean).join(" · "), "muted"));
     if (player.device_type) card.append(el("div", `${tr(player.device_type)}${player.device_model ? ` · ${player.device_model}` : ""}`));
-    if (player.strong_character != null) card.append(searchLink(`${tr("strong")}: ${charName(player.strong_character)}`, "strong_char", player.strong_character));
+    for (const [key, field] of [["strong", "strong_char"], ["weak", "weak_char"]]) {
+      const values = player[`${key}_characters`];
+      if (values.length) {
+        const group = el("div"); group.append(el("div", tr(key), "muted"), chips(values, id => searchLink(charName(id), field, id))); card.append(group);
+      }
+    }
     if (player.other_games.length) card.append(chips(player.other_games.slice(0,4), game => searchLink(game, "game", game)));
     return card;
   }
@@ -224,8 +235,8 @@
     fact("device", player.device_type ? `${tr(player.device_type)}${player.device_model ? ` · ${player.device_model}` : ""}` : tr("unset"));
     fact("favorites", chips(player.favorite_players, name => searchLink(name, "name", name)));
     fact("games", chips(player.other_games, game => searchLink(game, "game", game)));
-    fact("strong", player.strong_character == null ? tr("unset") : searchLink(charName(player.strong_character), "strong_char", player.strong_character));
-    fact("weak", player.weak_character == null ? tr("unset") : searchLink(charName(player.weak_character), "weak_char", player.weak_character));
+    fact("strong", chips(player.strong_characters, id => searchLink(charName(id), "strong_char", id)));
+    fact("weak", chips(player.weak_characters, id => searchLink(charName(id), "weak_char", id)));
     const summary = panel(right, t("nav.stats")), numbers = el("div", null, "numbers");
     for (const [key,label] of [["total_matches","total"],["unique_opponents","opponents"]]) { const item = el("div"); item.append(el("div", player[key].toLocaleString(), "number"), el("div", tr(label), "muted")); numbers.append(item); }
     summary.append(numbers, el("p", tr("countHint", {n:player.unidentified_opponent_matches}), "hint"));

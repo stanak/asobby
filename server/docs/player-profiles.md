@@ -54,8 +54,8 @@ Cookieセッションまたは個人セッションの `Authorization: Bearer` �
   "device_model": "HORI RAP-4",
   "favorite_players": ["好きなプレイヤー", "Another Player"],
   "other_games": ["STREET FIGHTER 6", "ぷよぷよ"],
-  "strong_character": 0,
-  "weak_character": 19,
+  "strong_characters": [0, 5],
+  "weak_characters": [1, 19],
   "character_winrates_public": false
 }
 ```
@@ -72,11 +72,14 @@ Cookieセッションまたは個人セッションの `Authorization: Bearer` �
 | `device_model` | 120文字以内、型番入力時は種別必須 | `""` |
 | `favorite_players` | 自由入力の文字列配列。各100文字、最大20件 | `[]` |
 | `other_games` | 自由入力の文字列配列。各120文字、最大30件 | `[]` |
-| `strong_character` / `weak_character` | それぞれ整数0〜19から1つ。ランダムは含まない | `null` |
+| `strong_characters` / `weak_characters` | 整数0〜19の配列、それぞれ最大20件。ランダムは含まない。重複除去・昇順で保存する | `[]` |
 | `character_winrates_public` | キャラ別勝率の他ユーザーへの公開許可 | `false` |
 
 名前・タグは前後空白を除去。タグはNFKC正規化＋casefoldで重複排除する。
 得意キャラと苦手キャラは別の自己申告なので、同じキャラを両方に選ぶこともできる。
+編集画面ではそれぞれ20キャラのチェックボックスから複数選択でき、全解除も可能。
+旧仕様の単数形 `strong_character` / `weak_character` はAPIでは受け付けない。
+既存のDB登録値は移行処理で複数選択形式に引き継ぐ。
 ランク・レート・ユーザーID・戦績など、編集項目以外の送信は422になる。
 応答は `{"ok":true,"id":"本人のDiscord ID"}`。
 
@@ -98,10 +101,13 @@ Cookieセッションまたは個人セッションの `Authorization: Bearer` �
 `display_name` はプレイヤーネームがあればその値、なければDiscord表示名。
 `lobby_name` はロビー表示選択に従う名前。
 `discord_name` はDiscord表示名、`discord_username` は取得済みのユーザー名（未取得は空文字）。
+`strong_characters` / `weak_characters` は登録した全キャラのID配列（昇順、未登録は空配列）で、
+本人用API・ユーザーページ・検索結果に共通する。旧単数形のフィールドは返さない。
 
 `GET /api/players` は次のクエリで検索し、
 `{players:[公開プロフィール...],total,page,limit}` を返す。検索結果に個別戦績集計は含まれない。
 異なる条件はAND、複数ランクはORで検索する。メイン・得意・苦手キャラはそれぞれ1つを指定する。
+得意・苦手は、複数登録されたキャラのどれかに指定IDが含まれる人が該当する。
 
 | クエリ | 検索方法 |
 | --- | --- |
@@ -114,7 +120,7 @@ Cookieセッションまたは個人セッションの `Authorization: Bearer` �
 | `favorite_player` | 登録した推しプレイヤー名のNFKC＋casefold部分一致 |
 | `game` | 好きなゲーム名のNFKC＋casefold部分一致 |
 | `rank` | 内部ランク値（easy/normal/ex/hard/luna/ph）。繰り返し指定可 |
-| `strong_char` / `weak_char` | それぞれ整数0〜19の完全一致 |
+| `strong_char` / `weak_char` | それぞれ整数0〜19を1つ指定。登録配列にそのIDを含む人を検索 |
 | `page` / `limit` | 既定1ページ・24人、最大100人/ページ。ID順で安定したページ送り |
 
 推しプレイヤーのリンクは `name` 検索へ移動する（`favorite_player` 検索とは別）。
@@ -133,6 +139,10 @@ Phレートはプロフィールへの表示のみで、ランク（Phなど）�
 0017はUserの任意プロフィール列と複数値の `player_profile_tags` を追加する。
 既存の名前・ランク・戦績は変更しない。生年月日・メイン/得意/苦手キャラはNULL、他の任意情報は空、
 名前切替・勝率公開はfalse、生年月日の公開範囲はsecretで開始する。追加のクライアント更新は不要。
+0018は `player_profile_characters` を追加し、既存の得意・苦手キャラを移す（NULLは空配列相当）。
+以降はこのテーブルを保存・検索の正とし、旧単一値列はロールバック用に残して選択IDの最小値（未登録はNULL）を反映する。
+0017へのダウングレードは、複数選択が残っている場合はデータ欠落を防ぐため拒否する。
+戻す場合は本人が各選択を1つ以下に減らす必要がある。
 本番に反映するにはサーバー更新が必要（起動時に既存のAlembic手順でマイグレーション）。
 
 テストは `test_player_profiles.py` / `test_player_profiles_migration.py`。

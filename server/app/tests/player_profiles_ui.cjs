@@ -17,10 +17,11 @@ const { chromium } = require(process.argv[2] || "playwright");
       main_character:20,
       lobby_name:"あそび人", use_player_name:true, age:25, country_code:"JP", device_type:"gamepad", device_model:"RAP-4",
       rank:"ph", rank_symbol:"Ph", rating:39.3, avatar:"", favorite_players:["Top Player"],
-      other_games:["STREET FIGHTER 6", '<img src=x onerror="window.injected=1">'], strong_character:0, weak_character:19,
+      other_games:["STREET FIGHTER 6", '<img src=x onerror="window.injected=1">'], strong_characters:[0,5], weak_characters:[1,19],
       character_winrates_public:false, total_matches:5, unique_opponents:2, unidentified_opponent_matches:1,
       character_winrates:null, is_owner:false,
     };
+    let savedProfile = null;
     await page.route("**/*", async route => {
       const url = new URL(route.request().url()), req = route.request();
       if (url.hostname !== "asobby.test") return route.fulfill({status:503,body:""});
@@ -34,8 +35,9 @@ const { chromium } = require(process.argv[2] || "playwright");
       if (url.pathname === "/auth/me") return json(loggedIn ? {id:"alice",name:"Alice"} : {detail:"login required"}, loggedIn ? 200 : 401);
       if (url.pathname === "/api/players/options") return json({countries:["JP","US"],ranks:{easy:"E",normal:"N",ex:"Ex",hard:"H",luna:"L",ph:"Ph"},devices:["keyboard","gamepad","arcade","other"]});
       if (url.pathname === "/user/profile") {
-        if (req.method() === "GET") return json({...player,birth_date:"2000-09-20",birth_visibility:"public"});
+        if (req.method() === "GET") return json({...player,birth_date:"2000-09-20",birth_visibility:"public",...savedProfile});
         assert.equal(req.headers()["content-type"], "application/json"); writes.push(req.postDataJSON());
+        if (!saveError) savedProfile = req.postDataJSON();
         return json(saveError ? {detail:[{loc:["body","player_name"],msg:"24 CP932 bytes"}]} : {ok:true,id:"alice"}, saveError ? 422 : 200);
       }
       if (url.pathname === "/api/players") { searches.push(url.searchParams); return json({players:url.searchParams.get("name") === "nobody" ? [] : [player],total:url.searchParams.get("name") === "nobody" ? 0 : 25,page:Number(url.searchParams.get("page")||1),limit:24}); }
@@ -46,14 +48,16 @@ const { chromium } = require(process.argv[2] || "playwright");
     async function ready(url) { await page.goto(`https://asobby.test${url}`); await page.waitForFunction(() => document.getElementById("app").getAttribute("aria-busy") === "false"); }
     async function noOverflow() { assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),true); }
     for (const lang of ["ja","en"]) {
+      savedProfile = null;
       await ready(`/profile?lang=${lang}`);
       assert.equal(await page.locator('select[name="birth_visibility"]').inputValue(),"public");
       assert.deepEqual(await page.locator('select[name="birth_visibility"] option').evaluateAll(options => options.map(o => o.value)),["public","statistics","secret"]);
       assert.equal(await page.locator('#profile-form input[name="character_winrates_public"]').isChecked(),false);
-      assert.equal(await page.locator('select[name="strong_character"] option').count(),21); // 20 + unset
-      assert.equal(await page.locator('select[name="weak_character"] option').count(),21);
-      assert.equal(await page.locator('select[name="strong_character"]').getAttribute("multiple"),null);
-      assert.equal(await page.locator('select[name="weak_character"]').getAttribute("multiple"),null);
+      for (const [kind, expected] of [["strong",["0","5"]],["weak",["1","19"]]]) {
+        assert.equal(await page.locator(`input[name="${kind}_characters"]`).count(),20);
+        assert.deepEqual(await page.locator(`input[name="${kind}_characters"]:checked`).evaluateAll(inputs => inputs.map(i => i.value)), expected);
+        assert.equal(await page.locator(`input[name="${kind}_characters"][value="20"]`).count(),0);
+      }
       assert.equal(await page.locator('select[name="main_character"] option').count(),22); // 21 + unset
       assert.equal(await page.locator('select[name="main_character"]').inputValue(),"20");
       await page.locator('select[name="birth_visibility"]').selectOption("statistics");
@@ -67,6 +71,9 @@ const { chromium } = require(process.argv[2] || "playwright");
       assert.equal(await page.locator('[name="birth_date"]').inputValue(),"");
       await page.locator('#tag-favorites').fill("New Hero"); await page.locator('#tag-favorites').press("Enter");
       await page.locator('[name="character_winrates_public"]').check();
+      await page.locator('input[name="strong_characters"][value="6"]').check();
+      await page.locator('input[name="weak_characters"][value="1"]').uncheck();
+      await page.locator('input[name="weak_characters"][value="5"]').check();
       await page.locator('#profile-form button[type="submit"]').click();
       await page.locator('#save-status.success').waitFor();
       assert.equal(writes.at(-1).birth_date,null);
@@ -74,9 +81,23 @@ const { chromium } = require(process.argv[2] || "playwright");
       assert.deepEqual(writes.at(-1).favorite_players,["Top Player","New Hero"]);
       assert.equal(writes.at(-1).character_winrates_public,true);
       assert.equal(writes.at(-1).main_character,20);
-      assert.equal(writes.at(-1).strong_character,0);
-      assert.equal(writes.at(-1).weak_character,19);
+      assert.deepEqual(writes.at(-1).strong_characters,[0,5,6]);
+      assert.deepEqual(writes.at(-1).weak_characters,[5,19]);
+      assert.equal("strong_character" in writes.at(-1),false);
+      assert.equal("weak_character" in writes.at(-1),false);
       assert.equal("rank" in writes.at(-1),false);
+      await ready(`/profile?lang=${lang}`);
+      assert.deepEqual(await page.locator('input[name="strong_characters"]:checked').evaluateAll(inputs => inputs.map(i => Number(i.value))),[0,5,6]);
+      assert.deepEqual(await page.locator('input[name="weak_characters"]:checked').evaluateAll(inputs => inputs.map(i => Number(i.value))),[5,19]);
+      for (const kind of ["strong","weak"]) {
+        for (const checkbox of await page.locator(`input[name="${kind}_characters"]`).all()) await checkbox.uncheck();
+      }
+      await page.locator('#profile-form button[type="submit"]').click();
+      await page.locator('#save-status.success').waitFor();
+      assert.deepEqual(writes.at(-1).strong_characters,[]);
+      assert.deepEqual(writes.at(-1).weak_characters,[]);
+      await ready(`/profile?lang=${lang}`);
+      assert.equal(await page.locator('.character-choices input:checked').count(),0);
       saveError = true;
       await page.locator('[name="player_name"]').fill("あ".repeat(13));
       await page.locator('#profile-form button[type="submit"]').click();
@@ -91,6 +112,12 @@ const { chromium } = require(process.argv[2] || "playwright");
       await page.locator('aside>details>summary').first().click();
       assert.equal(searches.at(-1).get("age_min"),"20");
       assert.deepEqual(searches.at(-1).getAll("strong_char"),["0"]);
+      for (const kind of ["strong","weak"]) {
+        assert.equal(await page.locator(`select[name="${kind}_char"] option`).count(),21);
+        assert.equal(await page.locator(`select[name="${kind}_char"]`).getAttribute("multiple"),null);
+      }
+      await page.locator('select[name="strong_char"]').selectOption("5");
+      await page.locator('select[name="weak_char"]').selectOption("19");
       assert.equal(await page.locator('#search-form [name="total_matches"]').count(),0);
       assert.equal(await page.locator('#search-form [name="rating_min"], #search-form [name="rating_max"]').count(),0);
       await page.locator('[name="device_model"]').fill("RAP-4");
@@ -98,6 +125,10 @@ const { chromium } = require(process.argv[2] || "playwright");
       await page.waitForFunction(() => new URLSearchParams(location.search).get("device_model") === "RAP-4");
       await page.locator('.player-card').waitFor();
       assert.equal(searches.at(-1).get("device_model"),"RAP-4");
+      assert.deepEqual(searches.at(-1).getAll("strong_char"),["5"]);
+      assert.deepEqual(searches.at(-1).getAll("weak_char"),["19"]);
+      assert.equal(await page.locator('.player-card a[href="/players?strong_char=5"]').count(),1);
+      assert.equal(await page.locator('.player-card a[href="/players?weak_char=19"]').count(),1);
       await page.locator('.pagination button').last().click();
       await page.waitForFunction(() => new URLSearchParams(location.search).get("page") === "2");
       await page.goBack(); await page.locator('.player-card').waitFor();
@@ -109,6 +140,9 @@ const { chromium } = require(process.argv[2] || "playwright");
       assert.match(await page.locator('#content').innerText(),/Ph · 39.3/);
       assert.equal(await page.locator('#content table').count(),0);
       assert.doesNotMatch(await page.locator('#content').innerText(),/2000-09-20/);
+      for (const [kind, ids] of [["strong",[0,5]],["weak",[1,19]]]) {
+        for (const id of ids) assert.equal(await page.locator(`#content a[href="/players?${kind}_char=${id}"]`).count(),1);
+      }
       const favorite = page.locator('#content a').filter({hasText:"Top Player"});
       assert.equal(await favorite.getAttribute("href"),"/players?name=Top+Player");
       await favorite.click(); await page.locator('.player-card').waitFor();
@@ -126,6 +160,6 @@ const { chromium } = require(process.argv[2] || "playwright");
     await page.setViewportSize({width:1280,height:900}); await ready('/players?lang=ja'); await page.locator('.player-card').waitFor(); await noOverflow();
     if (process.argv[3]) await page.screenshot({path:path.join(process.argv[3],"asobby-player-search.png"),fullPage:true});
     assert.deepEqual(errors,[]);
-    console.log("Player profile UI passed: JA/EN, mobile/desktop, privacy, editing, validation errors, filters/pagination/back, favourite links, XSS, 404 and login gate.");
+    console.log("Player profile UI passed: JA/EN, mobile/desktop, multiple character editing/reload/clear, single-character search, privacy, validation errors, pagination/back, links, XSS, 404 and login gate.");
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode=1; });

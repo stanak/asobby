@@ -42,8 +42,8 @@ def example(**updates):
     return {"player_name": "あそび人", "main_character": 20, "use_player_name": True, "birth_date": "2000-09-20", "birth_visibility": "public",
             "country_code": "JP", "device_type": "gamepad", "device_model": "HORI ＲＡＰ-４",
             "favorite_players": ["  Top Player  ", "top player", "Other"],
-            "other_games": ["STREET FIGHTER 6", "ぷよぷよ"], "strong_character": 0,
-            "weak_character": 19, "character_winrates_public": False, **updates}
+            "other_games": ["STREET FIGHTER 6", "ぷよぷよ"], "strong_characters": [0, 5],
+            "weak_characters": [1, 19], "character_winrates_public": False, **updates}
 
 
 async def save(client, uid="alice", **updates):
@@ -61,12 +61,14 @@ async def test_defaults_privacy_roundtrip_clear_and_auth(client):
     assert defaults["birth_date"] is None and not defaults["character_winrates_public"]
     assert defaults["birth_visibility"] == "secret"
     assert defaults["country_code"] == ""  # Never inferred from last IP.
+    assert defaults["strong_characters"] == defaults["weak_characters"] == []
     await save(client)
     own = await client.get("/user/profile", headers=auth())
     assert own.headers["cache-control"] == "private, no-store"
     assert own.json()["birth_date"] == "2000-09-20"
     assert own.json()["favorite_players"] == ["Other", "Top Player"]
-    assert own.json()["strong_character"] == 0
+    assert own.json()["strong_characters"] == [0, 5]
+    assert own.json()["weak_characters"] == [1, 19]
     assert own.json()["main_character"] == 20
     public = await client.get("/api/players/alice", headers=auth("bob"))
     assert public.json()["age"] == 25
@@ -88,8 +90,10 @@ async def test_defaults_privacy_roundtrip_clear_and_auth(client):
     {"player_name": "abc\n"}, {"player_name": "", "use_player_name": True},
     {"birth_date": "2026-09-20"}, {"birth_date": "2025-02-29"}, {"birth_date": "1899-01-01"},
     {"country_code": "XX"}, {"device_type": "joystick"}, {"device_model": "pad", "device_type": ""},
-    {"strong_character": 20}, {"weak_character": -1}, {"strong_character": True},
-    {"strong_character": [0, 5]}, {"weak_character": [1]},
+    {"strong_characters": [20]}, {"weak_characters": [-1]}, {"strong_characters": [True]},
+    {"strong_characters": 0}, {"weak_characters": None}, {"strong_characters": ["5"]},
+    {"weak_characters": [1.0]}, {"strong_characters": [0] * 21}, {"weak_characters": [0] * 21},
+    {"strong_character": 0}, {"weak_character": 1},
     {"favorite_players": ["x"] * 21}, {"other_games": ["x"] * 31}, {"device_model": "x" * 121},
     {"other_games": ["x\x00y"]}, {"rank": "ph"}, {"id": "bob"}, {"character_winrates_public": "false"},
     {"main_character": 21}, {"main_character": -1}, {"main_character": True},
@@ -119,10 +123,11 @@ def test_edit_documentation_covers_entire_input_schema():
 async def test_all_search_fields_and_inclusive_age_boundaries(client):
     await save(client)
     await save(client, "bob", player_name="Bob", main_character=0, birth_date="2000-09-19", country_code="US", device_type="keyboard",
-               device_model="Kinesis", favorite_players=[], other_games=[], strong_character=5, weak_character=None)
+               device_model="Kinesis", favorite_players=[], other_games=[], strong_characters=[6], weak_characters=[])
     queries = ["name=あそ", "name=DISCORD+ALICE", "name=LOGIN_ALICE", "main_character=20", "age_min=25&age_max=25",
                "country_code=JP", "device_type=gamepad", "device_model=rap-4", "favorite_player=top",
-               "game=street+fighter", "strong_char=0", "weak_char=19",
+               "game=street+fighter", "strong_char=0", "strong_char=5", "weak_char=1", "weak_char=19",
+               "strong_char=5&weak_char=19",
                "rank=normal&device_model=rap", "country_code=jp&age_max=25&game=ぷよ"]
     for query in queries:
         r = await client.get(f"/api/players?{query}", headers=auth())
@@ -144,12 +149,54 @@ async def test_all_search_fields_and_inclusive_age_boundaries(client):
 async def test_clear_tags_and_unicode_expansion_are_safe(client):
     await save(client, device_model="ﬃ" * 120, other_games=["ﬃ" * 120])
     assert (await client.get("/api/players?device_model=ffi&game=ffi", headers=auth())).json()["total"] == 1
-    await save(client, main_character=None, favorite_players=[], other_games=[], strong_character=None, weak_character=None)
+    await save(client, main_character=None, favorite_players=[], other_games=[], strong_characters=[], weak_characters=[])
     saved = (await client.get("/user/profile", headers=auth())).json()
     assert saved["main_character"] is None
-    assert saved["strong_character"] is None and saved["weak_character"] is None
+    assert saved["strong_characters"] == saved["weak_characters"] == []
     assert all(saved[key] == [] for key in profiles.TAG_FIELDS)
     assert (await client.get("/api/players?game=ffi", headers=auth())).json()["total"] == 0
+    for query in ("strong_char=0", "strong_char=5", "weak_char=1", "weak_char=19"):
+        assert (await client.get(f"/api/players?{query}", headers=auth())).json()["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_multiple_characters_roundtrip_dedup_replace_and_search(client):
+    await save(client, strong_characters=[5, 0, 5], weak_characters=[19, 5, 19])
+    await save(client, "bob", strong_characters=[5, 6], weak_characters=[1])
+    for path in ("/user/profile", "/api/players/alice", "/api/players?name=login_alice"):
+        data = (await client.get(path, headers=auth())).json()
+        if "players" in data:
+            data = data["players"][0]
+        assert data["strong_characters"] == [0, 5]
+        assert data["weak_characters"] == [5, 19]  # Same ID may be selected in both fields.
+        assert "strong_character" not in data and "weak_character" not in data
+    for query, ids in [
+        ("strong_char=5", ["alice", "bob"]), ("weak_char=5", ["alice"]),
+        ("strong_char=5&weak_char=19", ["alice"]), ("strong_char=0&weak_char=1", []),
+        ("strong_char=19", []), ("weak_char=0", []),
+        ("strong_char=5&limit=1&page=2", ["bob"]),
+    ]:
+        data = (await client.get(f"/api/players?{query}", headers=auth())).json()
+        assert [p["id"] for p in data["players"]] == ids
+        assert data["total"] == (2 if "strong_char=5" == query or "page=2" in query else len(ids))
+    await save(client, strong_characters=[6], weak_characters=[])
+    assert (await client.get("/api/players?strong_char=0", headers=auth())).json()["total"] == 0
+    assert (await client.get("/api/players?weak_char=19", headers=auth())).json()["total"] == 0
+    bob = (await client.get("/user/profile", headers=auth("bob"))).json()
+    assert bob["strong_characters"] == [5, 6] and bob["weak_characters"] == [1]
+    async with db.session() as s:
+        user = await s.get(db.User, "alice")
+        assert user.strong_character == 6 and user.weak_character is None
+    # All 20 are accepted, and invalid changes must not erase an existing selection.
+    await save(client, strong_characters=list(range(20)), weak_characters=list(range(20)))
+    r = await client.put("/user/profile", headers=auth(), json=example(strong_characters=[0, 20]))
+    assert r.status_code == 422
+    own = (await client.get("/user/profile", headers=auth())).json()
+    assert own["strong_characters"] == own["weak_characters"] == list(range(20))
+    # Omitted fields follow full-replacement semantics, restoring empty lists.
+    assert (await client.put("/user/profile", headers=auth(), json={})).status_code == 200
+    own = (await client.get("/user/profile", headers=auth())).json()
+    assert own["strong_characters"] == own["weak_characters"] == []
 
 
 @pytest.mark.parametrize("query", ["age_min=30&age_max=20", "age_min=-1", "strong_char=20",

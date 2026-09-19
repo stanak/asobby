@@ -13,7 +13,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, SmallInteger, String, Text, UniqueConstraint, and_, exists, func, or_, select, union, update
+from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, SmallInteger, String, Text, UniqueConstraint, and_, exists, func, or_, select, union, update
 from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -77,6 +77,7 @@ class User(Base):
     discord_username: Mapped[str] = mapped_column(String(100), default="", nullable=False)
     player_name: Mapped[str] = mapped_column(String(24), default="", nullable=False)
     main_character: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True, index=True)
+    # Legacy single-value mirrors for rollback. PlayerProfileCharacter is authoritative.
     strong_character: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True, index=True)
     weak_character: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True, index=True)
     use_player_name: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -98,6 +99,20 @@ class PlayerProfileTag(Base):
     kind: Mapped[str] = mapped_column(String(24), primary_key=True)
     value: Mapped[str] = mapped_column(String(120), primary_key=True)
     search_value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class PlayerProfileCharacter(Base):
+    """Self-declared matchups, distinct from main character and match statistics."""
+    __tablename__ = "player_profile_characters"
+    __table_args__ = (
+        CheckConstraint("kind IN ('strong_characters', 'weak_characters')", name="ck_profile_character_kind"),
+        CheckConstraint("character_id BETWEEN 0 AND 19", name="ck_profile_character_id"),
+        Index("ix_profile_character_lookup", "kind", "character_id", "user_id"),
+    )
+
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(24), primary_key=True)
+    character_id: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
 
 
 def lobby_display_name(user: User) -> str:

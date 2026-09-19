@@ -18,7 +18,8 @@ Device = Literal["", "keyboard", "gamepad", "arcade", "other"]
 Rank = Literal["easy", "normal", "ex", "hard", "luna", "ph"]
 Char = Annotated[int, Field(strict=True, ge=0, le=19)]
 TAG_FIELDS = ("favorite_players", "other_games")
-SCALAR_FIELDS = ("player_name", "main_character", "strong_character", "weak_character", "use_player_name", "birth_date", "birth_visibility", "country_code",
+CHARACTER_FIELDS = ("strong_characters", "weak_characters")
+SCALAR_FIELDS = ("player_name", "main_character", "use_player_name", "birth_date", "birth_visibility", "country_code",
                  "device_type", "device_model", "character_winrates_public")
 
 
@@ -60,9 +61,14 @@ class ProfileIn(BaseModel):
     device_model: str = Field(default="", max_length=120)
     favorite_players: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=20)
     other_games: list[Annotated[str, Field(max_length=120)]] = Field(default_factory=list, max_length=30)
-    strong_character: Char | None = None
-    weak_character: Char | None = None
+    strong_characters: list[Char] = Field(default_factory=list, max_length=20)
+    weak_characters: list[Char] = Field(default_factory=list, max_length=20)
     character_winrates_public: bool = False
+
+    @field_validator("strong_characters", "weak_characters")
+    @classmethod
+    def unique_characters(cls, values):
+        return sorted(set(values))
 
     @field_validator("birth_date", mode="before")
     @classmethod
@@ -157,13 +163,20 @@ class SearchIn(BaseModel):
         return self
 
 
-async def tags_for(s, user_ids: list[str]) -> dict:
-    values = {uid: {field: [] for field in TAG_FIELDS} for uid in user_ids}
+async def profile_lists_for(s, user_ids: list[str]) -> dict:
+    values = {uid: {field: [] for field in (*TAG_FIELDS, *CHARACTER_FIELDS)} for uid in user_ids}
+    if not user_ids:
+        return values
     rows = (await s.scalars(select(db.PlayerProfileTag).where(
         db.PlayerProfileTag.user_id.in_(user_ids)
     ).order_by(db.PlayerProfileTag.value))).all()
     for row in rows:
         values[row.user_id][row.kind].append(row.value)
+    characters = (await s.scalars(select(db.PlayerProfileCharacter).where(
+        db.PlayerProfileCharacter.user_id.in_(user_ids)
+    ).order_by(db.PlayerProfileCharacter.character_id))).all()
+    for row in characters:
+        values[row.user_id][row.kind].append(row.character_id)
     return values
 
 
@@ -172,7 +185,6 @@ def public_profile(user: db.User, tags: dict) -> dict:
     return {
         "id": user.id, "player_name": user.player_name, "discord_name": user.name,
         "main_character": user.main_character,
-        "strong_character": user.strong_character, "weak_character": user.weak_character,
         "discord_username": user.discord_username, "display_name": user.player_name or user.name,
         "lobby_name": db.lobby_display_name(user), "use_player_name": user.use_player_name,
         "avatar": f"https://cdn.discordapp.com/avatars/{user.id}/{user.avatar}.png?size=128" if user.avatar else "",
@@ -216,9 +228,12 @@ def search_query(filters: SearchIn):
     query = select(u)
     if filters.main_character is not None:
         query = query.where(u.main_character == filters.main_character)
-    for field, column in (("strong_char", u.strong_character), ("weak_char", u.weak_character)):
+    character = db.PlayerProfileCharacter
+    for field, kind in (("strong_char", "strong_characters"), ("weak_char", "weak_characters")):
         if (value := getattr(filters, field)) is not None:
-            query = query.where(column == value)
+            query = query.where(select(character.user_id).where(
+                character.user_id == u.id, character.kind == kind, character.character_id == value
+            ).exists())
     if filters.name.strip():
         needle = filters.name.strip().lower()
         query = query.where(or_(*(func.lower(field).contains(needle, autoescape=True)
@@ -262,7 +277,7 @@ def build_router(resolve_session, refresh_names) -> APIRouter:
         sess = await require_user(request, response)
         async with db.session() as s:
             user = await s.get(db.User, sess["id"])
-            tags = (await tags_for(s, [user.id]))[user.id]
+            tags = (await profile_lists_for(s, [user.id]))[user.id]
             return {**public_profile(user, tags), "birth_date": user.birth_date, "birth_visibility": user.birth_visibility,
                     "player_name_bytes": len(user.player_name.encode("cp932"))}
 
@@ -273,6 +288,13 @@ def build_router(resolve_session, refresh_names) -> APIRouter:
             user = await s.scalar(select(db.User).where(db.User.id == sess["id"]).with_for_update())
             for field in SCALAR_FIELDS:
                 setattr(user, field, getattr(body, field))
+            await s.execute(delete(db.PlayerProfileCharacter).where(db.PlayerProfileCharacter.user_id == user.id))
+            for kind in CHARACTER_FIELDS:
+                values = getattr(body, kind)
+                # Keep legacy single-value columns usable for an older server.
+                setattr(user, kind[:-1], values[0] if values else None)
+                for character_id in values:
+                    s.add(db.PlayerProfileCharacter(user_id=user.id, kind=kind, character_id=character_id))
             user.device_model_search = normalized(body.device_model)
             await s.execute(delete(db.PlayerProfileTag).where(db.PlayerProfileTag.user_id == user.id))
             for kind in TAG_FIELDS:
@@ -288,7 +310,7 @@ def build_router(resolve_session, refresh_names) -> APIRouter:
             query = search_query(filters)
             total = await s.scalar(select(func.count()).select_from(query.subquery()))
             rows = (await s.scalars(query.order_by(db.User.id).offset((filters.page - 1) * filters.limit).limit(filters.limit))).all()
-            tags = await tags_for(s, [u.id for u in rows])
+            tags = await profile_lists_for(s, [u.id for u in rows])
             # No statistics or hidden birthday fields in searchable listings.
             return {"players": [public_profile(u, tags[u.id]) for u in rows], "total": total,
                     "page": filters.page, "limit": filters.limit}
@@ -317,7 +339,7 @@ def build_router(resolve_session, refresh_names) -> APIRouter:
             user = await s.get(db.User, user_id)
             if user is None:
                 raise HTTPException(404, "player not found")
-            tags = (await tags_for(s, [user.id]))[user.id]
+            tags = (await profile_lists_for(s, [user.id]))[user.id]
             own = user.id == sess["id"]
             return {**public_profile(user, tags), "is_owner": own,
                     **await profile_stats(s, user.id, include_winrates=own or user.character_winrates_public)}
