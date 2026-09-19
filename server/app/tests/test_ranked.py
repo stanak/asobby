@@ -5,6 +5,7 @@ import os
 import socket
 import struct
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import AsyncIterator
 
 import pytest
@@ -92,7 +93,7 @@ def clean_state(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ranked_match_flow():
+async def test_ranked_match_flow(monkeypatch):
     async with app_client() as client:
         await create_user("999", name="host", last_ip="1.2.3.4")
         await create_user("888", name="guest", last_ip="5.6.7.8")
@@ -126,6 +127,7 @@ async def test_ranked_match_flow():
         max_games = main.RANKED_SESSION_MAX_GAMES
         played_at = time.time()
         for i in range(max_games + 1):
+            monkeypatch.setattr(db, "utcnow", lambda: datetime.fromtimestamp(played_at + i * 200, timezone.utc))
             r = await client.post(
                 "/posts/result",
                 json={
@@ -403,7 +405,7 @@ async def test_cross_rank_band_not_ranked():
 
 
 @pytest.mark.asyncio
-async def test_sync_respects_ranked_session_limit():
+async def test_sync_respects_ranked_session_limit(monkeypatch):
     """sync も /posts/result と同様、同一セッションの上限超過分は ranked=false。"""
     import time
 
@@ -425,6 +427,7 @@ async def test_sync_respects_ranked_session_limit():
         max_games = main.RANKED_SESSION_MAX_GAMES
         played_at = time.time()
         for i in range(max_games):
+            monkeypatch.setattr(db, "utcnow", lambda: datetime.fromtimestamp(played_at + i * 200, timezone.utc))
             r = await client.post(
                 "/posts/result",
                 json={
@@ -676,7 +679,7 @@ async def test_ranked_active_after_update_probe_during_connection(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ranked_pair_limit_when_host_and_client_swap():
+async def test_ranked_pair_limit_when_host_and_client_swap(monkeypatch):
     """ホスト/クライアントを入れ替えても同一ペアの連戦上限を共有する。"""
     import time
 
@@ -698,6 +701,7 @@ async def test_ranked_pair_limit_when_host_and_client_swap():
         max_games = main.RANKED_SESSION_MAX_GAMES
         played_at = time.time()
         for i in range(max_games):
+            monkeypatch.setattr(db, "utcnow", lambda: datetime.fromtimestamp(played_at + i * 200, timezone.utc))
             r = await client.post(
                 "/posts/result",
                 json={
@@ -734,6 +738,8 @@ async def test_ranked_pair_limit_when_host_and_client_swap():
         token_b = res_b.json()["owner_token"]
         rec_b = main.RECORDS[post_b["id"]]
         await main.apply_guest_probe(rec_b, make_0x08_reply("1.1.1.1"))
+
+        monkeypatch.setattr(db, "utcnow", lambda: datetime.fromtimestamp(played_at + max_games * 200 + 300, timezone.utc))
 
         r = await client.post(
             "/posts/result",

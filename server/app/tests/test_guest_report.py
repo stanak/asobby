@@ -178,7 +178,7 @@ async def test_guest_report_duplicate():
 
 
 @pytest.mark.asyncio
-async def test_host_first_guest_duplicate():
+async def test_host_first_conflicting_guest_is_held():
     async with app_client() as client:
         await create_user("999", name="host", last_ip="1.2.3.4")
         await create_user("888", name="guest", last_ip="5.6.7.8")
@@ -215,7 +215,7 @@ async def test_host_first_guest_duplicate():
             headers={"Authorization": f"Bearer {guest_token}"},
         )
         assert guest_res.json()["recorded"] is False
-        assert guest_res.json()["reason"] == "duplicate"
+        assert guest_res.json()["reason"] == "legacy_ambiguous_match"
 
         async with db.session() as s:
             res_m = await s.execute(select(db.Match))
@@ -225,7 +225,7 @@ async def test_host_first_guest_duplicate():
 
 
 @pytest.mark.asyncio
-async def test_guest_first_host_promotes():
+async def test_guest_first_conflicting_host_does_not_overwrite():
     async with app_client() as client:
         await create_user("999", name="host", last_ip="1.2.3.4")
         await create_user("888", name="guest", last_ip="5.6.7.8")
@@ -271,8 +271,8 @@ async def test_guest_first_host_promotes():
         )
         assert host_result.status_code == 200
         data = host_result.json()
-        assert data["recorded"] is True
-        assert data["ranked"] is True
+        assert data["recorded"] is False
+        assert data["status"] == "pending"
 
         async with db.session() as s:
             res_m = await s.execute(select(db.Match))
@@ -280,10 +280,10 @@ async def test_guest_first_host_promotes():
             assert len(matches) == 1
             m = matches[0]
             assert m.id == promoted_id
-            assert m.source == "host"
-            assert m.ranked is True
-            assert m.match_rank == "normal"
-            assert m.host_user_id == "999"
+            assert m.source == "guest"
+            assert m.ranked is False
+            assert m.match_rank is None
+            assert m.host_user_id is None
             assert m.guest_user_id == "888"
 
 
@@ -508,8 +508,8 @@ async def test_guest_and_sync_same_played_at_dedup():
 
 
 @pytest.mark.asyncio
-async def test_host_sync_mergeable_dedup_played_at_skew():
-    """guest 報告と host sync の played_at が 3 分ズレても 1 行にまとまる。"""
+async def test_host_sync_does_not_merge_three_minute_old_guest_report():
+    """A profile match must not turn a three-minute-old game into this game."""
     async with app_client() as client:
         await create_user("999", name="host", rank="normal")
         await create_user("888", name="guest", rank="normal")
@@ -521,11 +521,8 @@ async def test_host_sync_mergeable_dedup_played_at_skew():
             json={**RANKED_MATCH_PROFILES, "played_at": guest_played_at},
             headers={"Authorization": f"Bearer {guest_token}"},
         )
-        assert guest_res.json()["recorded"] is True
-
-        async with db.session() as s:
-            res_m = await s.execute(select(db.Match))
-            promoted_id = list(res_m.scalars().all())[0].id
+        assert guest_res.json()["recorded"] is False
+        assert guest_res.json()["status"] == "pending"
 
         host_token = bearer_token("999", "host")
         host_played_at = time.time()
@@ -548,18 +545,17 @@ async def test_host_sync_mergeable_dedup_played_at_skew():
             headers={"Authorization": f"Bearer {host_token}"},
         )
         assert sync_res.status_code == 200
-        assert sync_res.json()["results"][0]["status"] == "duplicate"
+        assert sync_res.json()["results"][0]["status"] == "imported"
 
         async with db.session() as s:
             res_m = await s.execute(select(db.Match))
             matches = list(res_m.scalars().all())
             assert len(matches) == 1
             m = matches[0]
-            assert m.id == promoted_id
-            assert m.source == "host"
-            assert m.ranked is True
+            assert m.source == "sync"
+            assert m.ranked is False
             assert m.host_user_id == "999"
-            assert m.guest_user_id == "888"
+            assert m.guest_user_id is None
 
 
 @pytest.mark.asyncio
@@ -571,8 +567,8 @@ async def test_consecutive_ranked_matches_same_players_not_deduped():
 
         host_token = bearer_token("999", "host")
         guest_token = bearer_token("888", "guest")
-        first_at = time.time() - 120
-        second_at = time.time() - 30  # 90s 後 (旧 180s 窓では誤 dedup)
+        first_at = time.time() - 85
+        second_at = time.time() + 10  # 95s 後 (旧 180s 窓では誤 dedup)
 
         guest_res = await client.post(
             "/matches/report",
@@ -777,7 +773,7 @@ async def test_concurrent_host_result_and_guest_report_single_row():
 
         guest_token = bearer_token("888", "guest")
         now = time.time()
-        # 本番で観測された挙動: KO 検知時刻は 7 秒ズレるが HTTP はほぼ同時に届く
+        # Legacy reports seven seconds apart are ambiguous without shared IDs.
         host_res, guest_res = await asyncio.gather(
             client.post(
                 "/posts/result",
@@ -807,10 +803,11 @@ async def test_concurrent_host_result_and_guest_report_single_row():
         )
         assert host_res.status_code == 200
         assert guest_res.status_code == 200
+        assert any(r.json().get("status") == "pending" for r in (host_res, guest_res))
 
         async with db.session() as s:
             res_m = await s.execute(select(db.Match))
             matches = list(res_m.scalars().all())
             assert len(matches) == 1
-            assert matches[0].host_user_id == "999"
+            assert matches[0].host_user_id in (None, "999")
             assert matches[0].guest_user_id == "888"

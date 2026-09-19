@@ -38,8 +38,10 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy import select
 
 import db
+import match_identity
 import geoip
 import post_redis
 import client_release
@@ -1093,7 +1095,15 @@ class ClosePostIn(BaseModel):
     reason: str = Field(default="manual", max_length=64)
 
 
-class ReportResultIn(BaseModel):
+class ResultIdentityIn(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+    report_version: Literal[1, 2] = 1
+    client_id: str = Field(default="", pattern=r"^(?:[0-9a-f]{32})?$")
+    match_id: str = Field(default="", pattern=r"^(?:[0-9a-f]{32})?$")
+    duration_sec: Optional[float] = Field(default=None, ge=0, le=7200, allow_inf_nan=False)
+
+
+class ReportResultIn(ResultIdentityIn):
     id: str = Field(max_length=64)
     owner_token: str = Field(max_length=128)
     winner: Literal["host", "guest", "draw"]
@@ -1106,7 +1116,7 @@ class ReportResultIn(BaseModel):
     guest_wins: Optional[int] = Field(default=None, ge=0, le=9)
 
 
-class GuestReportIn(BaseModel):
+class GuestReportIn(ResultIdentityIn):
     winner: Literal["host", "guest", "draw"]
     host_char: Optional[int] = None
     guest_char: Optional[int] = None
@@ -1195,7 +1205,7 @@ def _score_kwargs(host_wins: Optional[int], guest_wins: Optional[int]) -> dict[s
     return {"host_wins": hw, "guest_wins": gw}
 
 
-class SyncMatchIn(BaseModel):
+class SyncMatchIn(ResultIdentityIn):
     client_id: str
     played_at: float
     my_side: Literal["host", "guest", "client"]
@@ -2591,36 +2601,87 @@ async def _find_dedup_match(
     guest_profile: str,
     *,
     my_side: Literal["host", "guest", "client"],
+    reporter_id: str = "",
 ) -> Optional[db.Match]:
-    """時刻±MATCH_DEDUP_WINDOW_SEC のプロファイル照合 → guest/sync 行の 600s フォールバック。"""
+    """Legacy-only, bounded matching. Never fall back to an unrelated past game."""
     near = await db.find_near_match_by_profiles(
         played_at,
         winner,
         host_profile,
         guest_profile,
         window_sec=db.MATCH_DEDUP_WINDOW_SEC,
+        reporter_id=reporter_id,
+        side="host" if my_side == "host" else "guest",
     )
     if near is not None:
         return near
-    # 双方の勝敗判定が食い違っても同一対戦なら重複させない
-    # (±window 内に同ペアの別対戦は存在し得ない)
-    near = await db.find_near_match_profiles_only(
-        played_at,
-        host_profile,
-        guest_profile,
-        window_sec=db.MATCH_DEDUP_WINDOW_SEC,
-    )
-    if near is not None:
-        return near
-    missing_side: Literal["host", "guest"] = (
-        "host" if my_side == "host" else "guest"
-    )
-    return await db.find_mergeable_profile_match(
-        winner,
-        host_profile,
-        guest_profile,
-        missing_side=missing_side,
-    )
+    return None
+
+
+async def _submit_identified_result(user_id: str, side: str, body: ResultIdentityIn, payload: dict) -> dict:
+    if not body.client_id:
+        raise HTTPException(status_code=422, detail="report v2 requires client_id")
+    try:
+        result = await match_identity.submit(
+            user_id=user_id, client_id=body.client_id, match_id=body.match_id,
+            side=side, payload=payload, ranked_limit=RANKED_SESSION_MAX_GAMES,
+            gap_minutes=RANKED_SESSION_GAP_MINUTES,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if result.get("recorded") and result.get("ranked"):
+        match = await db.get_match_by_id(result["match_id"])
+        if match is not None:
+            ses = await get_or_create_ranked_session(match.host_user_id, match.guest_user_id, match.match_rank)
+            ses.games = await db.count_ranked_pair_streak_before(
+                match.host_user_id, match.guest_user_id,
+                before=db.utcnow() + timedelta(microseconds=1), match_rank=match.match_rank,
+                gap_minutes=RANKED_SESSION_GAP_MINUTES,
+            )
+            ses.last_game_at = time.time()
+            result["ranked_session"] = ses.info()
+            for rec in RECORDS.values():
+                if (rec.owner_user_id, rec.guest_user_id) == (match.host_user_id, match.guest_user_id):
+                    rec.session_games = ses.games
+            # Rank evaluation is repeatable; TrueSkill and rank locking already
+            # happened atomically with the unique match insert.
+            for uid in (match.host_user_id, match.guest_user_id):
+                if uid:
+                    await evaluate_rank(uid)
+            await refresh_active_post_ranks({match.host_user_id, match.guest_user_id})
+    return result
+
+
+async def _legacy_clock_guard(user_id: str, side: str, payload: dict, *, live: bool = True, client_id: str = "") -> Optional[dict]:
+    reported_at = match_identity.client_time(payload)
+    if live and reported_at is not None and abs((db.utcnow() - reported_at).total_seconds()) > 90:
+        return await match_identity.quarantine(user_id, side, payload, "legacy_clock_skew_or_delay", client_id)
+    reported_at = reported_at or db.utcnow()
+    if payload.get("host_profile") and payload.get("guest_profile"):
+        async with db.session() as s:
+            identity_column = db.BattleTicket.host_user_id if side == "host" else db.BattleTicket.guest_user_id
+            active_v2 = await s.scalar(select(db.BattleTicket).where(
+                identity_column == user_id,
+                db.BattleTicket.host_profile == payload["host_profile"],
+                db.BattleTicket.guest_profile == payload["guest_profile"],
+                db.BattleTicket.started_at >= db.utcnow() - timedelta(hours=2),
+            ).limit(1))
+            if active_v2 is not None:
+                return await match_identity.quarantine(user_id, side, payload, "legacy_missing_shared_id", client_id)
+            identity_column = db.Match.host_user_id if side == "host" else db.Match.guest_user_id
+            candidates = list((await s.scalars(select(db.Match).where(
+                (identity_column == user_id) | identity_column.is_(None),
+                db.Match.host_profile == payload["host_profile"],
+                db.Match.guest_profile == payload["guest_profile"],
+                db.Match.played_at >= reported_at - timedelta(seconds=90),
+                db.Match.played_at <= reported_at + timedelta(seconds=90),
+            ).limit(3))).all())
+        if candidates:
+            compatible = [m for m in candidates if abs((match_identity.utc(m.played_at) - reported_at).total_seconds()) <= db.MATCH_DEDUP_WINDOW_SEC
+                          and all(getattr(m, k) == payload.get(k) for k in ("winner", "host_char", "guest_char"))]
+            if len(compatible) != 1:
+                return await match_identity.quarantine(user_id, side, payload, "legacy_ambiguous_match", client_id)
+    return None
 
 
 def _match_to_stats_item(match: db.Match, user_id: str, has_replay: bool) -> dict[str, Any]:
@@ -2796,6 +2857,16 @@ async def stats_me_matches(
         date_to=dt_to,
     )
     matches = [_match_to_stats_item(m, sess["id"], has_replay) for m, has_replay in rows]
+    async with db.session() as s:
+        reports = (await s.scalars(select(db.MatchReport).where(
+            db.MatchReport.user_id == sess["id"],
+            db.MatchReport.match_id.in_([item["id"] for item in matches]),
+            db.MatchReport.status == "confirmed",
+        ))).all()
+    report_ids = {r.match_id: r.client_id for r in reports}
+    for item in matches:
+        if item["id"] in report_ids:
+            item.update(report_version=2, client_id=report_ids[item["id"]])
     total = await db.count_user_matches(sess["id"])
     return {"ok": True, "matches": matches, "total": total}
 
@@ -2927,13 +2998,28 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
 
     user_id = sess["id"]
     results: list[dict[str, Any]] = []
-    to_insert: list[dict[str, Any]] = []
 
     existing_ids = await db.filter_existing_match_ids(
         [_sync_match_id(user_id, m.client_id) for m in body.matches]
     )
     async with MATCH_WRITE_LOCK:
         for item in body.matches:
+            if item.report_version == 2 or item.match_id:
+                host_side = item.my_side == "host"
+                payload = {
+                    "winner": item.winner, "played_at": item.played_at,
+                    "duration_sec": item.duration_sec,
+                    "host_char": item.my_char if host_side else item.opp_char,
+                    "guest_char": item.opp_char if host_side else item.my_char,
+                    "host_profile": item.my_profile if host_side else item.opp_profile,
+                    "guest_profile": item.opp_profile if host_side else item.my_profile,
+                    "host_wins": item.host_wins, "guest_wins": item.guest_wins,
+                }
+                result = await _submit_identified_result(user_id, "host" if host_side else "guest", item, payload)
+                results.append({"client_id": item.client_id, "server_id": result["match_id"],
+                                "status": ("imported" if result["newly_recorded"] else "duplicate") if result["recorded"] else result["status"],
+                                "reason": result["reason"]})
+                continue
             match_id = _sync_match_id(user_id, item.client_id)
             if match_id in existing_ids:
                 results.append({
@@ -2952,6 +3038,35 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
                 })
                 continue
 
+            # A quarantined live report must not re-enter via the old client's
+            # delayed/batch sync using a different local UUID.
+            async with db.session() as s:
+                held = await s.scalar(select(db.MatchReport).where(
+                    db.MatchReport.user_id == user_id,
+                    db.MatchReport.client_played_at == played_at,
+                    db.MatchReport.status.in_(("pending", "conflict")),
+                ).limit(1))
+            if held is not None:
+                result = await match_identity.quarantine(user_id, "host" if item.my_side == "host" else "guest",
+                                                        item.model_dump(), held.reason, item.client_id)
+                results.append({"client_id": item.client_id, "server_id": None,
+                                "status": result["status"], "reason": result["reason"]})
+                continue
+
+            host_side = item.my_side == "host"
+            guarded = await _legacy_clock_guard(user_id, "host" if host_side else "guest", {
+                "winner": item.winner, "played_at": item.played_at,
+                "host_profile": item.my_profile if host_side else item.opp_profile,
+                "guest_profile": item.opp_profile if host_side else item.my_profile,
+                "host_char": item.my_char if host_side else item.opp_char,
+                "guest_char": item.opp_char if host_side else item.my_char,
+                "host_wins": item.host_wins, "guest_wins": item.guest_wins,
+            }, live=False, client_id=item.client_id)
+            if guarded is not None:
+                results.append({"client_id": item.client_id, "server_id": None,
+                                "status": guarded["status"], "reason": guarded["reason"]})
+                continue
+
             # user_id で照合できない相手側報告 (ゲスト未同定の host 報告など)
             # ともプロファイルで照合する
             if item.my_side == "host":
@@ -2959,7 +3074,7 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
             else:
                 hp, gp = item.opp_profile, item.my_profile
             near_match = await _find_dedup_match(
-                played_at, item.winner, hp, gp, my_side=item.my_side
+                played_at, item.winner, hp, gp, my_side=item.my_side, reporter_id=user_id
             )
             if near_match is not None:
                 # 既存行に自分の側が未同定で残っていれば紐付ける
@@ -3071,7 +3186,9 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
                 row["match_rank"] = match_rank if is_ranked else None
                 if is_ranked:
                     await _bump_session_games(user_id, guest_uid)
-            to_insert.append(row)
+            # Make earlier rows of this SAME batch visible to subsequent dedup
+            # queries; delaying all inserts until the end missed these rows.
+            await db.bulk_insert_matches([row])
             existing_ids.add(match_id)
             results.append({
                 "client_id": item.client_id,
@@ -3079,10 +3196,38 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
                 "status": "imported",
             })
 
-        if to_insert:
-            await db.bulk_insert_matches(to_insert)
-
     return {"ok": True, "results": results}
+
+
+@app.get("/matches/protocol")
+async def match_protocol() -> dict:
+    return {"report_version": 2}
+
+
+@app.get("/matches/reports")
+async def my_match_reports(request: Request, limit: int = Query(100, ge=1, le=500),
+                           client_id: list[str] = Query(default=[], max_length=100)) -> dict:
+    """Own durable report status; pending/conflict reports are not match statistics."""
+    sess = await resolve_session(request)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    if not db.is_configured():
+        return {"ok": True, "reports": []}
+    async with db.session() as s:
+        query = select(db.MatchReport).where(db.MatchReport.user_id == sess["id"])
+        if client_id:
+            query = query.where(db.MatchReport.client_id.in_(client_id))
+        reports = (await s.scalars(query.order_by(db.MatchReport.received_at.desc()).limit(limit))).all()
+        confirmed = {m.id: m for m in (await s.scalars(select(db.Match).where(
+            db.Match.id.in_([r.match_id for r in reports if r.status == "confirmed"])
+        ))).all()}
+    return {"ok": True, "reports": [{"client_id": r.client_id, "match_id": r.match_id,
+            "status": r.status, "reason": r.reason, "received_at": _dt_ts(r.received_at),
+            "has_conflict": r.conflict_payload is not None,
+            "client_played_at": _dt_ts(r.client_played_at) if r.client_played_at else None,
+            "match": {**_match_to_stats_item(confirmed[r.match_id], sess["id"], False),
+                      "report_version": 2, "client_id": r.client_id} if r.match_id in confirmed else None,
+            } for r in reports]}
 
 
 @app.get("/stats/me")
@@ -4203,6 +4348,8 @@ async def upload_replay(
     guest_profile: str = "",
     winner: str = "",
     my_side: str = "",
+    match_id: str = "",
+    client_id: str = "",
 ) -> dict[str, Any]:
     """ログインユーザーの直近対戦リプレイを受け取る。
 
@@ -4240,8 +4387,21 @@ async def upload_replay(
 
     # battle_ts なし (旧クライアント) はアップロード遅延分だけ窓を広げる
     window = 180 if battle_ts > 0 else 240
-    match = await db.find_match_for_replay(sess["id"], around, window_sec=window)
-    if match is None and host_profile and guest_profile and winner in ("host", "guest"):
+    if client_id:
+        async with db.session() as s:
+            ticket = await s.get(db.BattleTicket, (sess["id"], client_id))
+        if ticket is None or (match_id and ticket.match_id != match_id):
+            return {"ok": True, "stored": False, "reason": "no_match"}
+        match_id = ticket.match_id
+    if match_id:
+        match = await db.get_match_by_id(match_id)
+        if match is not None and sess["id"] not in (match.host_user_id, match.guest_user_id):
+            raise HTTPException(status_code=403, detail="not a participant")
+        if match is None:
+            return {"ok": True, "stored": False, "reason": "no_match"}
+    else:
+        match = await db.find_match_for_replay(sess["id"], around, window_sec=window)
+    if not match_id and match is None and host_profile and guest_profile and winner in ("host", "guest"):
         match = await db.find_match_for_replay_by_profiles(
             sess["id"],
             around,
@@ -4278,6 +4438,10 @@ class PresenceIn(BaseModel):
     host_profile: str = Field(default="", max_length=64)
     guest_profile: str = Field(default="", max_length=64)
     my_side: str = Field(default="", max_length=8)
+    client_id: str = Field(default="", pattern=r"^(?:[0-9a-f]{32})?$")
+    post_id: str = Field(default="", max_length=32)
+    ended: bool = False
+    start_age_sec: float = Field(default=0, ge=0, le=7200, allow_inf_nan=False)
 
 
 @app.post("/matches/presence")
@@ -4290,7 +4454,7 @@ async def net_battle_presence(
         raise HTTPException(status_code=401, detail="invalid or expired session")
     guest_user = await db.get_user(sess["id"])
     linked: Optional[PostRecord] = None
-    if guest_user is not None:
+    if guest_user is not None and not (body and body.my_side == "host"):
         linked = await _link_guest_to_active_posts(
             guest_user,
             client_ip(request),
@@ -4298,14 +4462,40 @@ async def net_battle_presence(
             guest_profile=body.guest_profile if body else "",
         )
     session_info: Optional[dict[str, Any]] = None
+    if body and body.my_side == "host":
+        linked = next((rec for rec in RECORDS.values()
+                       if rec.owner_user_id == sess["id"] and rec.post.id == body.post_id), None)
+        if linked is not None and body.client_id and not body.ended:
+            linked.host_profile, linked.guest_profile = body.host_profile, body.guest_profile
     if linked is not None:
         ses = await ranked_session_for_record(linked)
         if ses is not None:
             session_info = ses.info()
+    match_id = None
+    if body and body.client_id and db.is_configured() and (linked is not None or body.start_age_sec >= 10 or body.ended):
+        if body.my_side not in ("host", "guest", "client"):
+            raise HTTPException(status_code=422, detail="invalid battle side")
+        side = "host" if body.my_side == "host" else "guest"
+        try:
+            async with MATCH_WRITE_LOCK:
+                match_id = await match_identity.announce(
+                    user_id=sess["id"], client_id=body.client_id, side=side,
+                    post_id=linked.post.id if linked else "",
+                    host_user_id=linked.owner_user_id if linked else (sess["id"] if side == "host" else None),
+                    guest_user_id=(linked.guest_user_id or None) if linked else (sess["id"] if side == "guest" else None),
+                    host_profile=body.host_profile, guest_profile=body.guest_profile,
+                    match_rank=linked.post.rank if linked and linked.post.post_type == "ranked" else None,
+                    ended=body.ended,
+                    start_age_sec=body.start_age_sec,
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {
         "ok": True,
         "identified": linked is not None,
         "ranked_session": session_info,
+        "match_id": match_id,
+        "report_version": 2,
     }
 
 
@@ -4319,6 +4509,12 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
         return {"ok": True, "recorded": False}
 
     uid = sess["id"]
+    if body.report_version == 2 or body.client_id or body.match_id:
+        async with MATCH_WRITE_LOCK:
+            return await _submit_identified_result(uid, "guest", body, body.model_dump())
+    guarded = await _legacy_clock_guard(uid, "guest", body.model_dump())
+    if guarded is not None:
+        return guarded
     played_at = _resolve_report_played_at(body.played_at)
     guest_ip = client_ip(request)
     guest_user = await db.get_user(uid)
@@ -4327,12 +4523,16 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
 
     # ゲスト未同定の host 報告と重複しないようプロファイルでも照合する
     async with MATCH_WRITE_LOCK:
+        guarded = await _legacy_clock_guard(uid, "guest", body.model_dump())
+        if guarded is not None:
+            return guarded
         near = await _find_dedup_match(
             played_at,
             body.winner,
             body.host_profile,
             body.guest_profile,
             my_side="guest",
+            reporter_id=uid,
         )
         if near is not None:
             await db.claim_match_side(near.id, "guest", uid)
@@ -4345,23 +4545,6 @@ async def report_guest_match(body: GuestReportIn, request: Request) -> dict[str,
                 "recorded": False,
                 "reason": "duplicate",
                 "match_id": near.id,
-            }
-
-        near_profiles = await db.find_near_match_profiles_only(
-            played_at, body.host_profile, body.guest_profile
-        )
-        if near_profiles is not None:
-            await db.claim_match_side(near_profiles.id, "guest", uid)
-            _diag_log(
-                f"guest_report_diag: uid={uid} dedup=profiles_only "
-                f"match={near_profiles.id} src={near_profiles.source} "
-                f"played_at={played_at:%H:%M:%S}"
-            )
-            return {
-                "ok": True,
-                "recorded": False,
-                "reason": "duplicate",
-                "match_id": near_profiles.id,
             }
 
         match_id = await db.insert_match_result(
@@ -4416,6 +4599,16 @@ async def _report_result_inner(body: ReportResultIn) -> dict[str, Any]:
     if not db.is_configured():
         return {"ok": True, "recorded": False}
 
+    if body.report_version == 2 or body.client_id or body.match_id:
+        if not rec.owner_user_id:
+            raise HTTPException(status_code=401, detail="login required for identified results")
+        async with MATCH_WRITE_LOCK:
+            return await _submit_identified_result(rec.owner_user_id, "host", body, body.model_dump(exclude={"owner_token"}))
+    if rec.owner_user_id:
+        guarded = await _legacy_clock_guard(rec.owner_user_id, "host", body.model_dump(exclude={"owner_token"}))
+        if guarded is not None:
+            return guarded
+
     played_at = _resolve_report_played_at(body.played_at)
     score = _score_kwargs(body.host_wins, body.guest_wins)
 
@@ -4440,6 +4633,7 @@ async def _report_result_inner(body: ReportResultIn) -> dict[str, Any]:
             body.host_profile,
             body.guest_profile,
             my_side="host",
+            reporter_id=rec.owner_user_id,
         )
         if near_for_gate is not None and near_for_gate.guest_user_id:
             rec.guest_user_id = near_for_gate.guest_user_id
@@ -4530,6 +4724,10 @@ async def _report_result_inner(body: ReportResultIn) -> dict[str, Any]:
     )
 
     async with MATCH_WRITE_LOCK:
+        if rec.owner_user_id:
+            guarded = await _legacy_clock_guard(rec.owner_user_id, "host", body.model_dump(exclude={"owner_token"}))
+            if guarded is not None:
+                return guarded
         match_id: Optional[str] = None
         promoted = False
         newly_recorded = False
@@ -4579,6 +4777,7 @@ async def _report_result_inner(body: ReportResultIn) -> dict[str, Any]:
                 body.host_profile,
                 body.guest_profile,
                 my_side="host",
+                reporter_id=rec.owner_user_id,
             )
             if near is not None:
                 if near.source in ("sync", "guest"):

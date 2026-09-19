@@ -372,8 +372,8 @@ async def test_matches_sync_near_duplicate_and_guest_mapping():
             headers={"Authorization": f"Bearer {guest_token}"},
         )
         nr = near.json()["results"][0]
-        assert nr["status"] == "duplicate"
-        assert nr["server_id"] == match_id
+        assert nr["status"] == "pending"
+        assert nr["server_id"] is None
 
         sync_token = bearer_token("777", "solo")
         await create_user("777", name="solo")

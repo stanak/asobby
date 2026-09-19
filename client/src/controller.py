@@ -19,6 +19,7 @@ from host_clipboard import (
     should_include_autopunch_in_clipboard,
 )
 from api_client import ApiClient
+from battle_identity import BattleIdentity
 from detect_api import DetectionState
 from hisoutensoku_memory import read_detection_state
 from local_store import LocalStore
@@ -272,6 +273,9 @@ class Controller:
         self._stats_sync_running = False
 
         self._battle_start_ts = 0.0
+        self._battle_identity: BattleIdentity | None = None
+        self._last_recorded_battle = ""
+        self._battle_identity_profiles = ("", "", "")
         self._battle_presence_announced = False
         self._next_guest_presence_ts = 0.0
         self._notified_ranked_established = False
@@ -1301,12 +1305,12 @@ class Controller:
                     self.log_sink("info", f"Soku path auto-set: {st.exe_path}")
                 self._sync_tools_from_detection(st)
                 act = self.on_detect(st, my_ip=my_ip)
-                if act:
-                    await self._action_q.put(act)
                 if self._pending_local_match is not None:
                     payload = self._pending_local_match
                     self._pending_local_match = None
-                    asyncio.create_task(self._record_local_match(payload))
+                    await self._record_local_match(payload)
+                if act:
+                    await self._action_q.put(act)
             except Exception as e:
                 self.log_sink("error", f"Detector loop error: {e}")
             await asyncio.sleep(DETECT_INTERVAL_SEC)
@@ -1416,10 +1420,15 @@ class Controller:
                             played_at=act.payload.get("played_at", 0),
                             host_wins=act.payload.get("host_wins"),
                             guest_wins=act.payload.get("guest_wins"),
+                            **{k: act.payload[k] for k in ("report_version", "client_id", "match_id", "duration_sec") if k in act.payload},
                         )
                         self._replay_result_reported = True
                         server_id = str(resp.get("match_id") or "")
-                        if resp.get("recorded") and server_id:
+                        if act.payload.get("client_id") and resp.get("accepted"):
+                            await asyncio.to_thread(self.local_store.accept_report, act.payload["client_id"], server_id or None, resp.get("status", "confirmed"))
+                            if resp.get("status") in ("pending", "conflict"):
+                                self.log_sink("warn", f"Match awaiting confirmation: {resp.get('reason')}")
+                        elif resp.get("recorded") and server_id:
                             await asyncio.to_thread(
                                 self.local_store.mark_pushed_for_report,
                                 float(act.payload.get("played_at") or 0),
@@ -1446,11 +1455,16 @@ class Controller:
                             played_at=act.payload.get("played_at", 0),
                             host_wins=act.payload.get("host_wins"),
                             guest_wins=act.payload.get("guest_wins"),
+                            **{k: act.payload[k] for k in ("report_version", "client_id", "match_id", "duration_sec") if k in act.payload},
                         )
                         if resp.get("recorded") or resp.get("reason") == "duplicate":
                             self._replay_result_reported = True
                         server_id = str(resp.get("match_id") or "")
-                        if server_id:
+                        if act.payload.get("client_id") and resp.get("accepted"):
+                            await asyncio.to_thread(self.local_store.accept_report, act.payload["client_id"], server_id or None, resp.get("status", "confirmed"))
+                            if resp.get("status") in ("pending", "conflict"):
+                                self.log_sink("warn", f"Match awaiting confirmation: {resp.get('reason')}")
+                        elif server_id:
                             await asyncio.to_thread(
                                 self.local_store.mark_pushed_for_report,
                                 float(act.payload.get("played_at") or 0),
@@ -1589,6 +1603,17 @@ class Controller:
         # -----------------
         # 0) KO 確定 -> ローカル戦績 (ホスト/クライアント、ログイン不要)
         # -----------------
+        if is_battle and st.net_side in ("host", "client") and self._battle_identity is None and not _ko_decided(st):
+            if self._stable_for("identity_battle_enter", 0.15, seen=True):
+                self._battle_identity = BattleIdentity(time.monotonic())
+                self._battle_identity_profiles = (st.lprof or "", st.rprof or "", st.net_side)
+                self._result_reported = False
+                self._last_ko_fingerprint = ""
+                self._last_ko_played_at = 0.0
+                if self.is_logged_in():
+                    asyncio.create_task(self._announce_net_battle_presence(
+                        host_profile=st.lprof or "", guest_profile=st.rprof or "",
+                        my_side=st.net_side, identity=self._battle_identity))
         host_char, guest_char = _match_char_ids(st)
         if host_char is None:
             host_char = self._round_char_ids[0]
@@ -1603,6 +1628,8 @@ class Controller:
             st.net_side in ("host", "client")
             and ko_fp
             and ko_fp != self._last_ko_fingerprint
+            and self._battle_identity is not None
+            and self._last_recorded_battle != self._battle_identity.client_id
             and _ko_recordable(
                 is_battle=is_battle,
                 mode=st.mode,
@@ -1610,6 +1637,7 @@ class Controller:
             )
         ):
             self._last_ko_fingerprint = ko_fp
+            self._last_recorded_battle = self._battle_identity.client_id
             self._round_battle_engaged = False
             self._round_char_ids = (None, None)
             played_at = time.time()
@@ -1636,6 +1664,7 @@ class Controller:
                 "ranked": ranked,
                 "match_rank": match_rank,
                 "played_at": played_at,
+                **self._battle_identity.result_fields(time.monotonic()),
             }
             self._pending_local_match = payload
             self._handle_session_score(payload)
@@ -1647,6 +1676,7 @@ class Controller:
             st.net_side == "host"
             and self.has_active_post()
             and not self._result_reported
+            and self._battle_identity is not None
             and _ko_decided(st)
             and host_char is not None
             and guest_char is not None
@@ -1666,12 +1696,14 @@ class Controller:
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
                 "played_at": played_at,
+                **self._battle_identity.result_fields(time.monotonic()),
             })
 
         # クライアント側: ホストが asobby 非導入でも戦績を補完報告する
         if (
             st.net_side == "client"
             and not self._result_reported
+            and self._battle_identity is not None
             and self.is_logged_in()
             and _ko_decided(st)
             and host_char is not None
@@ -1692,6 +1724,7 @@ class Controller:
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
                 "played_at": played_at,
+                **self._battle_identity.result_fields(time.monotonic()),
             })
 
         # -----------------
@@ -1706,17 +1739,17 @@ class Controller:
                 self._battle_opponent_asobby = None
                 # 新ラウンド開始時のみ KO 報告フラグをリセットする。
                 # btl_mode!=5 への一瞬の落ち込みでリセットすると二重登録になる。
-                self._result_reported = False
-                self._last_ko_fingerprint = ""
-                self._last_ko_played_at = 0.0
                 if self.is_logged_in() and not self._battle_presence_announced:
                     self._battle_presence_announced = True
                     self._next_guest_presence_ts = now + GUEST_PRESENCE_INTERVAL_SEC
+                    if self._battle_identity and not self._battle_identity.match_id:
+                        self._next_guest_presence_ts = now + 2
                     asyncio.get_running_loop().create_task(
                         self._announce_net_battle_presence(
                             host_profile=(st.lprof or "").strip(),
                             guest_profile=(st.rprof or "").strip(),
                             my_side=st.net_side or "",
+                            identity=self._battle_identity,
                         )
                     )
 
@@ -1724,17 +1757,20 @@ class Controller:
         # ランクマセッション状態の受信。IP 推論に依存しない同定経路)
         if (
             is_net_battle
-            and st.net_side == "client"
+            and st.net_side in ("host", "client")
             and self.is_logged_in()
             and self._battle_presence_announced
             and now >= self._next_guest_presence_ts
         ):
             self._next_guest_presence_ts = now + GUEST_PRESENCE_INTERVAL_SEC
+            if self._battle_identity and not self._battle_identity.match_id:
+                self._next_guest_presence_ts = now + 2
             asyncio.get_running_loop().create_task(
                 self._announce_net_battle_presence(
                     host_profile=(st.lprof or "").strip(),
                     guest_profile=(st.rprof or "").strip(),
-                    my_side="client",
+                    my_side=st.net_side,
+                    identity=self._battle_identity,
                 )
             )
 
@@ -1753,6 +1789,8 @@ class Controller:
                 "guest_profile": (st.rprof or ""),
                 **_ko_result_core(st),
                 "my_side": st.net_side or "",
+                "client_id": self._battle_identity.client_id if self._battle_identity else "",
+                "match_id": self._battle_identity.match_id if self._battle_identity else "",
             }
 
         if self._replay_pending and not is_net_battle:
@@ -1763,9 +1801,24 @@ class Controller:
             self._battle_start_ts = 0.0
             self._battle_presence_announced = False
             self._next_guest_presence_ts = 0.0
+            replay_meta = dict(self._replay_match_meta or {})
+            self._replay_match_meta = None
             asyncio.create_task(
-                self._schedule_replay_upload(battle_start_ts, battle_end_ts, exe_path)
+                self._schedule_replay_upload(battle_start_ts, battle_end_ts, exe_path, replay_meta)
             )
+
+        # Only a stable exit from a game rotates its identity; a rollback or a
+        # one-frame scene/mode change cannot create a second match ID.
+        if self._stable_for("identity_battle_exit", 0.5, seen=not is_battle):
+            previous = self._battle_identity
+            if previous is not None:
+                hp, gp, side = self._battle_identity_profiles
+                if self.is_logged_in():
+                    asyncio.create_task(self._announce_net_battle_presence(
+                        host_profile=hp, guest_profile=gp, my_side=side,
+                        identity=previous, ended=True))
+                self._battle_identity = None
+            self._stable_for("identity_battle_enter", 0.15, seen=False)
 
         # -----------------
         # ホスト検知時の IP:Port + 使用ツール クリップボードコピーは create/update
@@ -1983,14 +2036,16 @@ class Controller:
         return max(candidates, key=lambda p: p.stat().st_mtime)
 
     async def _schedule_replay_upload(
-        self, battle_start_ts: float, battle_end_ts: float, exe_path: str
+        self, battle_start_ts: float, battle_end_ts: float, exe_path: str,
+        meta: Optional[dict] = None,
     ) -> None:
+        if meta is None:
+            meta = dict(self._replay_match_meta or {})
+            self._replay_match_meta = None
         deadline = time.time() + REPLAY_RESULT_WAIT_SEC
         while time.time() < deadline and not self._replay_result_reported:
             await asyncio.sleep(0.25)
         async with self._replay_upload_lock:
-            meta = dict(self._replay_match_meta or {})
-            self._replay_match_meta = None
             await self._upload_replay(
                 battle_start_ts, battle_end_ts, exe_path, meta
             )
@@ -2067,6 +2122,8 @@ class Controller:
                     guest_profile=meta.get("guest_profile", ""),
                     winner=meta.get("winner", ""),
                     my_side=meta.get("my_side", ""),
+                    match_id=meta.get("match_id", ""),
+                    client_id=meta.get("client_id", ""),
                 )
             except httpx.HTTPError as e:
                 self.log_sink("error", f"Replay upload failed: {e}")
@@ -2129,9 +2186,8 @@ class Controller:
             status = str(result.get("status", ""))
             server_id = result.get("server_id")
             sid = str(server_id) if server_id else None
-            await asyncio.to_thread(
-                self.local_store.mark_pushed, local_id, sid
-            )
+            await asyncio.to_thread(self.local_store.accept_report, local_id, sid,
+                                    "confirmed" if status in ("imported", "duplicate") else status)
             if status in ("imported", "duplicate") and sid:
                 linked = True
                 self.log_sink("info", f"Stats push: synced {local_id}")
@@ -2141,6 +2197,18 @@ class Controller:
         """サーバー側の新着戦績をローカルへ取り込む。"""
         since = await asyncio.to_thread(self.local_store.max_server_played_at)
         inserted = 0
+        pending = await asyncio.to_thread(self.local_store.pending_report_ids)
+        for offset in range(0, len(pending), 50):
+            response = await self.api.fetch_match_reports(pending[offset:offset + 50])
+            confirmed = []
+            for report in response.get("reports") or []:
+                if report.get("match"):
+                    confirmed.append(report["match"])
+                else:
+                    await asyncio.to_thread(self.local_store.accept_report, report["client_id"],
+                                            report.get("match_id"), report["status"])
+            if confirmed:
+                inserted += await asyncio.to_thread(self.local_store.merge_server_rows, confirmed)
         while True:
             resp = await self.api.fetch_my_matches(
                 since=since, limit=STATS_SYNC_BATCH
@@ -2181,6 +2249,8 @@ class Controller:
             "opp_profile": opp_profile or "",
             "ranked": bool(row.get("ranked", 0)),
         }
+        if row.get("report_version") == 2:
+            payload.update(report_version=2, match_id=row.get("battle_id") or "", duration_sec=row.get("duration_sec"))
         match_rank = row.get("match_rank")
         if match_rank:
             payload["match_rank"] = match_rank
@@ -2259,9 +2329,8 @@ class Controller:
                     if not client_id:
                         continue
                     sid = str(server_id) if server_id else None
-                    await asyncio.to_thread(
-                        self.local_store.mark_pushed, client_id, sid
-                    )
+                    await asyncio.to_thread(self.local_store.accept_report, client_id, sid,
+                                            "confirmed" if status in ("imported", "duplicate") else status)
                     if status == "imported":
                         pushed += 1
                         self.log_sink("info", f"Stats push: imported {client_id}")
@@ -2279,17 +2348,28 @@ class Controller:
         host_profile: str = "",
         guest_profile: str = "",
         my_side: str = "",
+        identity: BattleIdentity | None = None,
+        ended: bool = False,
     ) -> None:
         try:
             resp = await self.api.announce_net_battle(
                 host_profile=host_profile,
                 guest_profile=guest_profile,
                 my_side=my_side,
+                client_id=identity.client_id if identity else "",
+                post_id=self.my_post.id if my_side == "host" and self.has_active_post() else "",
+                ended=ended,
+                start_age_sec=min(7200, max(0, time.monotonic() - identity.started_monotonic)) if identity else 0,
             )
         except Exception as e:
             self.log_sink("debug", f"Net battle presence failed: {e}")
             return
         if isinstance(resp, dict):
+            if identity is not None and resp.get("match_id"):
+                identity.match_id = str(resp["match_id"])
+                await asyncio.to_thread(self.local_store.bind_battle, identity.client_id, identity.match_id)
+            if identity is not None and identity is not self._battle_identity:
+                return  # An old request must not change the next game's UI/state.
             self._handle_ranked_session_info(resp.get("ranked_session"))
             if my_side == "client":
                 identified = resp.get("identified")

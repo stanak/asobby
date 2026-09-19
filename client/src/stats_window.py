@@ -58,6 +58,8 @@ def _format_set_score(row: dict) -> str:
 
 
 def _result_symbol(row: dict) -> str:
+    if row.get("report_status") in ("pending", "conflict"):
+        return "…" if row["report_status"] == "pending" else "!"
     if LocalStore.is_draw(row):
         return "?"
     return "○" if LocalStore.is_my_win(row) else "×"
@@ -200,6 +202,7 @@ def apply_filter_state(
 
 def compute_summary(rows: list[dict], recent_sizes: tuple[int, ...] = (30, 50, 100)) -> MatchSummary:
     """勝敗サマリと直近 N 戦の勝率を計算する。勝率分母は勝+負。"""
+    rows = [r for r in rows if r.get("report_status") not in ("pending", "conflict")]
     wins, losses, draws = _count_results(rows)
     sorted_rows = sorted(rows, key=lambda r: r["played_at"], reverse=True)
     recent_rates: dict[int, float] = {}
@@ -244,6 +247,8 @@ def _aggregate_rows(
 ) -> list[AggRow]:
     stats: dict[Any, list[int]] = defaultdict(lambda: [0, 0, 0])
     for row in rows:
+        if row.get("report_status") in ("pending", "conflict"):
+            continue
         key = key_fn(row)
         stats[key][0] += 1
         if LocalStore.is_draw(row):

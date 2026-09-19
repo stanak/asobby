@@ -6,6 +6,7 @@ import socket
 import struct
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import AsyncIterator
 
 import pytest
@@ -195,7 +196,7 @@ async def test_confirmed_identity_not_overwritten_by_ip_inference():
 
 
 @pytest.mark.asyncio
-async def test_session_counts_games_and_limits_to_max():
+async def test_session_counts_games_and_limits_to_max(monkeypatch):
     """結果報告はセッションのゲーム数で上限を判定し、レスポンスで進捗を返す。"""
     async with app_client() as client:
         await create_user("999", name="host", last_ip="1.2.3.4", rank="normal")
@@ -222,6 +223,7 @@ async def test_session_counts_games_and_limits_to_max():
         max_games = main.RANKED_SESSION_MAX_GAMES
         played_at = time.time()
         for i in range(max_games + 1):
+            monkeypatch.setattr(db, "utcnow", lambda: datetime.fromtimestamp(played_at + i * 120, timezone.utc))
             r = await client.post(
                 "/posts/result",
                 json={

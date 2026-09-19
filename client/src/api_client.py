@@ -21,6 +21,16 @@ class ApiClient:
         self.http = http
         self.base = base.rstrip("/")
         self.session_token: str = ""  # Discord ログイン時のセッション（任意）
+        self._match_protocol_version = 0
+
+    async def _require_match_identity(self) -> None:
+        if self._match_protocol_version >= 2:
+            return
+        r = await self.http.get(f"{self.base}/matches/protocol", headers=self._request_headers())
+        r.raise_for_status()
+        self._match_protocol_version = int(r.json().get("report_version", 0))
+        if self._match_protocol_version < 2:
+            raise httpx.RequestError("Server update required for safe match reporting", request=r.request)
 
     def _request_headers(self) -> dict:
         headers = {"X-Asobby-Client-Version": __version__}
@@ -113,7 +123,13 @@ class ApiClient:
         played_at: float = 0,
         host_wins: int | None = None,
         guest_wins: int | None = None,
+        report_version: int = 1,
+        client_id: str = "",
+        match_id: str = "",
+        duration_sec: float | None = None,
     ) -> dict:
+        if report_version == 2:
+            await self._require_match_identity()
         payload: dict = {
             "id": post_id,
             "owner_token": owner_token,
@@ -123,6 +139,8 @@ class ApiClient:
             "host_profile": host_profile,
             "guest_profile": guest_profile,
             "played_at": played_at,
+            "report_version": report_version, "client_id": client_id,
+            "match_id": match_id, "duration_sec": duration_sec,
         }
         if host_wins is not None and guest_wins is not None:
             payload["host_wins"] = host_wins
@@ -145,7 +163,13 @@ class ApiClient:
         played_at: float = 0,
         host_wins: int | None = None,
         guest_wins: int | None = None,
+        report_version: int = 1,
+        client_id: str = "",
+        match_id: str = "",
+        duration_sec: float | None = None,
     ) -> dict:
+        if report_version == 2:
+            await self._require_match_identity()
         payload: dict = {
             "winner": winner,
             "host_char": host_char,
@@ -153,6 +177,8 @@ class ApiClient:
             "host_profile": host_profile,
             "guest_profile": guest_profile,
             "played_at": played_at,
+            "report_version": report_version, "client_id": client_id,
+            "match_id": match_id, "duration_sec": duration_sec,
         }
         if host_wins is not None and guest_wins is not None:
             payload["host_wins"] = host_wins
@@ -174,8 +200,14 @@ class ApiClient:
         guest_profile: str = "",
         winner: str = "",
         my_side: str = "",
+        match_id: str = "",
+        client_id: str = "",
     ) -> dict:
         params: dict[str, str | float] = {}
+        if match_id:
+            params["match_id"] = match_id
+        if client_id:
+            params["client_id"] = client_id
         if battle_ts > 0:
             params["battle_ts"] = battle_ts
         if host_profile:
@@ -245,6 +277,10 @@ class ApiClient:
         host_profile: str = "",
         guest_profile: str = "",
         my_side: str = "",
+        client_id: str = "",
+        post_id: str = "",
+        ended: bool = False,
+        start_age_sec: float = 0,
     ) -> dict:
         """対戦中の自己申告。プロファイルペアでゲスト同定し、ランクマセッション状態を得る。"""
         r = await self.http.post(
@@ -253,9 +289,18 @@ class ApiClient:
                 "host_profile": host_profile,
                 "guest_profile": guest_profile,
                 "my_side": my_side,
+                "client_id": client_id, "post_id": post_id, "ended": ended,
+                "start_age_sec": start_age_sec,
             },
             headers=self._request_headers(),
         )
+        r.raise_for_status()
+        return r.json()
+
+    async def fetch_match_reports(self, client_ids: list[str]) -> dict:
+        r = await self.http.get(f"{self.base}/matches/reports",
+                                params=[("client_id", value) for value in client_ids],
+                                headers=self._request_headers())
         r.raise_for_status()
         return r.json()
 
@@ -271,6 +316,8 @@ class ApiClient:
 
     async def sync_matches(self, matches: list[dict]) -> dict:
         """未送信のローカル戦績をサーバーへ同期する。"""
+        if any(row.get("report_version") == 2 for row in matches):
+            await self._require_match_identity()
         r = await self.http.post(
             f"{self.base}/matches/sync",
             json={"matches": matches},

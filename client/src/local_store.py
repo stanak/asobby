@@ -82,6 +82,9 @@ class LocalStore:
             conn.execute("ALTER TABLE matches ADD COLUMN host_wins INTEGER")
         if "guest_wins" not in columns:
             conn.execute("ALTER TABLE matches ADD COLUMN guest_wins INTEGER")
+        for name, kind in (("battle_id", "TEXT"), ("duration_sec", "REAL"), ("report_version", "INTEGER NOT NULL DEFAULT 1"), ("report_status", "TEXT NOT NULL DEFAULT ''")):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE matches ADD COLUMN {name} {kind}")
         conn.execute("UPDATE matches SET my_side = 'client' WHERE my_side = 'guest'")
 
     @staticmethod
@@ -102,11 +105,15 @@ class LocalStore:
         host_wins: int | None = None,
         guest_wins: int | None = None,
         played_at: float | None = None,
+        client_id: str = "",
+        match_id: str = "",
+        duration_sec: float | None = None,
+        report_version: int = 1,
     ) -> str:
         """ローカル対戦を記録する。戻り値は生成した id (重複時は既存 id)。"""
         if played_at is None:
             played_at = time.time()
-        existing_id = self._find_recent_duplicate(
+        existing_id = None if client_id else self._find_recent_duplicate(
             played_at=played_at,
             my_side=my_side,
             winner=winner,
@@ -116,8 +123,10 @@ class LocalStore:
         if existing_id is not None:
             return existing_id
 
-        local_id = uuid.uuid4().hex
+        local_id = client_id or uuid.uuid4().hex
         with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM matches WHERE id = ?", (local_id,)).fetchone():
+                return local_id
             conn.execute(
                 """
                 INSERT INTO matches(
@@ -135,12 +144,14 @@ class LocalStore:
                     guest_char,
                     host_profile or "",
                     guest_profile or "",
-                    ranked,
+                    0 if report_version == 2 else ranked,
                     match_rank,
                     host_wins,
                     guest_wins,
                 ),
             )
+            conn.execute("UPDATE matches SET battle_id = ?, duration_sec = ?, report_version = ? WHERE id = ?",
+                         (match_id or None, duration_sec, report_version, local_id))
         return local_id
 
     def _find_recent_duplicate(
@@ -225,7 +236,7 @@ class LocalStore:
                           host_char = ?, guest_char = ?,
                           host_profile = ?, guest_profile = ?,
                           ranked = ?, match_rank = ?,
-                          host_wins = ?, guest_wins = ?, source = ?
+                          host_wins = ?, guest_wins = ?, source = ?, report_status = 'confirmed'
                         WHERE server_id = ?
                         """,
                         (
@@ -246,11 +257,16 @@ class LocalStore:
                     )
                     continue
 
-                if host_profile and guest_profile:
+                if row.get("report_version") == 2:
+                    # Never use a time-window heuristic for ID-based matches.
+                    cur = conn.execute("SELECT * FROM matches WHERE battle_id = ? OR id = ?",
+                                       (server_id, row.get("client_id", "")))
+                elif host_profile and guest_profile:
                     cur = conn.execute(
                         """
                         SELECT * FROM matches
                         WHERE server_id IS NULL
+                          AND report_version = 1
                           AND ABS(played_at - ?) <= 30
                           AND winner = ?
                           AND host_profile = ?
@@ -271,6 +287,7 @@ class LocalStore:
                         """
                         SELECT * FROM matches
                         WHERE server_id IS NULL
+                          AND report_version = 1
                           AND ABS(played_at - ?) <= 30
                           AND winner = ?
                         ORDER BY ABS(played_at - ?)
@@ -288,7 +305,7 @@ class LocalStore:
                           host_char = ?, guest_char = ?,
                           host_profile = ?, guest_profile = ?,
                           ranked = ?, match_rank = ?,
-                          host_wins = ?, guest_wins = ?
+                          host_wins = ?, guest_wins = ?, report_status = 'confirmed'
                         WHERE id = ?
                         """,
                         (
@@ -309,11 +326,15 @@ class LocalStore:
                     )
                     continue
 
-                if host_profile and guest_profile:
+                if row.get("report_version") == 2:
+                    cur = conn.execute("SELECT id FROM matches WHERE server_id = ?", (server_id,))
+                    if cur.fetchone() is not None:
+                        continue
+                elif host_profile and guest_profile:
                     cur = conn.execute(
                         """
                         SELECT id FROM matches
-                        WHERE ABS(played_at - ?) <= 30
+                        WHERE report_version = 1 AND ABS(played_at - ?) <= 30
                           AND winner = ?
                           AND host_profile = ?
                           AND guest_profile = ?
@@ -327,7 +348,7 @@ class LocalStore:
                     cur = conn.execute(
                         """
                         SELECT id FROM matches
-                        WHERE ABS(played_at - ?) <= 30
+                        WHERE report_version = 1 AND ABS(played_at - ?) <= 30
                           AND winner = ?
                           AND my_side = ?
                         LIMIT 1
@@ -361,6 +382,8 @@ class LocalStore:
                         guest_wins,
                     ),
                 )
+                if row.get("report_version") == 2:
+                    conn.execute("UPDATE matches SET report_version = 2, battle_id = ?, report_status = 'confirmed' WHERE server_id = ?", (server_id, server_id))
                 inserted += 1
         return inserted
 
@@ -418,6 +441,25 @@ class LocalStore:
                 (local_id,),
             )
 
+    def accept_report(self, local_id: str, server_id: str | None, status: str) -> None:
+        """Pending/conflict is a durable acknowledgement, not a confirmed win."""
+        self.mark_pushed(local_id, server_id)
+        # Only pulling the canonical row marks it confirmed. Until then its
+        # local wall-clock timestamp must not advance the incremental cursor.
+        if status in ("confirmed", "imported", "duplicate"):
+            status = "pending"
+        with self._connect() as conn:
+            conn.execute("UPDATE matches SET report_status = ?, battle_id = COALESCE(?, battle_id), ranked = CASE WHEN ? IN ('pending', 'conflict') THEN 0 ELSE ranked END WHERE id = ?",
+                         (status, server_id, status, local_id))
+
+    def pending_report_ids(self) -> list[str]:
+        with self._connect() as conn:
+            return [r[0] for r in conn.execute("SELECT id FROM matches WHERE pushed = 1 AND report_status IN ('pending', 'conflict')")]
+
+    def bind_battle(self, local_id: str, match_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("UPDATE matches SET battle_id = ? WHERE id = ?", (match_id, local_id))
+
     def mark_pushed_for_report(
         self,
         played_at: float,
@@ -462,7 +504,7 @@ class LocalStore:
             cur = conn.execute(
                 """
                 SELECT MAX(played_at) FROM matches
-                WHERE source = 'server' OR server_id IS NOT NULL
+                WHERE source = 'server' OR (server_id IS NOT NULL AND (report_version = 1 OR report_status = 'confirmed'))
                 """
             )
             row = cur.fetchone()

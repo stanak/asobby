@@ -9,11 +9,11 @@ import hashlib
 import ipaddress
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, SmallInteger, String, and_, exists, func, or_, select, union, update
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, SmallInteger, String, UniqueConstraint, and_, exists, func, or_, select, union, update
 from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -30,7 +30,7 @@ def utcnow() -> datetime:
 
 
 # プロファイル一致による近傍 dedup の時刻窓 (秒)
-MATCH_DEDUP_WINDOW_SEC = 45
+MATCH_DEDUP_WINDOW_SEC = 3
 
 
 class Base(DeclarativeBase):
@@ -217,6 +217,47 @@ class Replay(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
+
+
+class BattleTicket(Base):
+    """One authenticated start announcement per client/game; shared ID is server-issued."""
+    __tablename__ = "battle_tickets"
+    __table_args__ = (
+        UniqueConstraint("match_id", "side", name="uq_battle_ticket_side"),
+        Index("ix_battle_ticket_host_start", "host_user_id", "started_at"),
+        Index("ix_battle_ticket_guest_start", "guest_user_id", "started_at"),
+    )
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    match_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    post_id: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    host_user_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    guest_user_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    host_profile: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    guest_profile: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    match_rank: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MatchReport(Base):
+    """Durable raw reports, including unresolved/conflicting reports (not official matches)."""
+    __tablename__ = "match_reports"
+    __table_args__ = (
+        Index("ix_match_report_client_time", "user_id", "client_played_at"),
+        Index("ix_match_report_received", "user_id", "received_at"),
+    )
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    match_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    conflict_payload: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    client_played_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(String(64), default="", nullable=False)
 
 
 # ----------------------------
@@ -732,6 +773,8 @@ async def find_near_match_by_profiles(
     host_profile: str,
     guest_profile: str,
     window_sec: int = MATCH_DEDUP_WINDOW_SEC,
+    reporter_id: str = "",
+    side: str = "",
 ) -> Optional[Match]:
     """勝敗・両プロファイル・時刻 (±window_sec) が一致する match を 1 件返す。
 
@@ -752,77 +795,15 @@ async def find_near_match_by_profiles(
                 & Match.played_at.is_not(None)
                 & (Match.played_at >= lo)
                 & (Match.played_at <= hi)
+                & ~exists().where(BattleTicket.match_id == Match.id)
+                & ((Match.host_user_id == reporter_id) | Match.host_user_id.is_(None) if side == "host" else
+                   (Match.guest_user_id == reporter_id) | Match.guest_user_id.is_(None) if side == "guest" else True)
             )
             .order_by(Match.played_at.desc())
-            .limit(1)
+            .limit(2)
         )
-        return res.scalar_one_or_none()
-
-
-async def find_near_match_profiles_only(
-    played_at: datetime,
-    host_profile: str,
-    guest_profile: str,
-    window_sec: int = MATCH_DEDUP_WINDOW_SEC,
-) -> Optional[Match]:
-    """勝敗を問わずプロファイルと時刻が近い match を返す (ゲスト補完報告用)。"""
-    if not host_profile or not guest_profile:
-        return None
-    lo = played_at - timedelta(seconds=window_sec)
-    hi = played_at + timedelta(seconds=window_sec)
-    async with session() as s:
-        res = await s.execute(
-            select(Match)
-            .where(
-                (Match.host_profile == host_profile)
-                & (Match.guest_profile == guest_profile)
-                & Match.played_at.is_not(None)
-                & (Match.played_at >= lo)
-                & (Match.played_at <= hi)
-            )
-            .order_by(Match.played_at.desc())
-            .limit(1)
-        )
-        return res.scalar_one_or_none()
-
-
-async def find_mergeable_profile_match(
-    winner: str,
-    host_profile: str,
-    guest_profile: str,
-    *,
-    within_sec: int = 600,
-    missing_side: Literal["host", "guest"],
-) -> Optional[Match]:
-    """played_at がズレた guest/sync 行をプロファイルで照合する (時刻非依存フォールバック)。
-
-    ホストとゲストで KO 時刻が異なる・guest 報告が utcnow() になる等で
-    find_near_match_by_profiles が外れた場合の保険。source=guest/sync のみ対象。
-    missing_side は今回の報告で埋めようとしている側 (未同定の側のみ照合)。"""
-    if not host_profile or not guest_profile:
-        return None
-    side_null = (
-        Match.host_user_id.is_(None)
-        if missing_side == "host"
-        else Match.guest_user_id.is_(None)
-    )
-    cutoff = utcnow() - timedelta(seconds=within_sec)
-    async with session() as s:
-        res = await s.execute(
-            select(Match)
-            .where(
-                (Match.winner == winner)
-                & (Match.host_profile == host_profile)
-                & (Match.guest_profile == guest_profile)
-                & (Match.source.in_(("guest", "sync")))
-                & Match.played_at.is_not(None)
-                & (Match.played_at >= cutoff)
-                & side_null
-            )
-            .order_by(Match.played_at.desc())
-            .limit(1)
-        )
-        return res.scalar_one_or_none()
+        candidates = list(res.scalars().all())
+        return candidates[0] if len(candidates) == 1 else None
 
 
 async def claim_match_side(match_id: str, side: str, user_id: str) -> bool:
@@ -855,8 +836,10 @@ async def find_recent_guest_reported_match(
     played_at: Optional[datetime] = None,
     within_sec: int = 180,
 ) -> Optional[Match]:
-    """直近のゲスト報告 (source=='guest') を返す。プロファイル一致優先、単一候補のみフォールバック。"""
-    cutoff = utcnow() - timedelta(seconds=within_sec)
+    """Legacy reports only: require matching result, profiles AND nearby KO time."""
+    if played_at is None or not host_profile or not guest_profile:
+        return None
+    window = timedelta(seconds=min(within_sec, MATCH_DEDUP_WINDOW_SEC))
     async with session() as s:
         res = await s.execute(
             select(Match)
@@ -864,28 +847,16 @@ async def find_recent_guest_reported_match(
                 (Match.guest_user_id == guest_user_id)
                 & (Match.source == "guest")
                 & Match.played_at.is_not(None)
-                & (Match.played_at >= cutoff)
+                & (Match.played_at >= played_at - window)
+                & (Match.played_at <= played_at + window)
+                & (Match.winner == winner)
+                & (Match.host_profile == host_profile)
+                & (Match.guest_profile == guest_profile)
+                & ~exists().where(BattleTicket.match_id == Match.id)
             )
             .order_by(Match.played_at.desc())
         )
         candidates = list(res.scalars().all())
-
-    if not candidates:
-        return None
-
-    if winner:
-        winner_matches = [m for m in candidates if m.winner == winner]
-        if winner_matches:
-            candidates = winner_matches
-
-    if host_profile and guest_profile:
-        for match in candidates:
-            if (
-                match.host_profile == host_profile
-                and match.guest_profile == guest_profile
-            ):
-                return match
-        return None
 
     return candidates[0] if len(candidates) == 1 else None
 
@@ -925,7 +896,8 @@ async def promote_guest_match(
         if guest_wins is not None:
             match.guest_wins = guest_wins
         match.source = "host"
-        if played_at is not None:
+        # A later host report must never move an existing game's timestamp.
+        if match.played_at is None and played_at is not None:
             match.played_at = played_at
         await s.commit()
         return match
