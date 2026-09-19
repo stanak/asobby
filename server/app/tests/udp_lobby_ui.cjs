@@ -5,7 +5,7 @@ const path = require("node:path");
 const { chromium } = require(process.argv[2] || "playwright");
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, ...(process.platform === "win32" ? {channel:"msedge"} : {}) });
   try {
     const page = await browser.newPage();
     const errors = [];
@@ -23,6 +23,7 @@ const { chromium } = require(process.argv[2] || "playwright");
       if (url.hostname !== "asobby.test") return route.fulfill({ status: 503, body: "" });
       const json = data => route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
       if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: fs.readFileSync(path.join(staticDir, "index.html"), "utf8") });
+      if (/^\/players\/(123|456)$/.test(url.pathname)) return route.fulfill({ contentType: "text/html", body: "<h1>Mock profile</h1>" });
       if (url.pathname.startsWith("/static/")) {
         const filename = path.join(staticDir, path.basename(url.pathname));
         if (fs.existsSync(filename) && fs.statSync(filename).isFile()) return route.fulfill({
@@ -67,6 +68,37 @@ const { chromium } = require(process.argv[2] || "playwright");
     assert.equal(await row.locator('a[href="/players/123"]').innerText(), post.owner_name);
     assert.equal(await row.locator('a[href="/players/456"]').innerText(), "Guest");
     assert.equal(await row.locator(".user-cell img").count(), 0);
+    const withAvatars = {
+      ...post, owner_profile_url:"/players/123", owner_avatar:"/static/favicon-32.png",
+      guest_user_id:"456", guest_name:"Guest", guest_avatar:"/static/favicon-32.png",
+      supports_messages:true, giuroll:false,
+    };
+    // Both the avatar and the name navigate to the correct user's profile.
+    for (const [id, target] of [["123",".avatar"],["123",".user-name"],["456",".avatar"],["456",".user-name"],["123","keyboard"]]) {
+      await page.evaluate(p => window.mockSse.handlers.snapshot({data:JSON.stringify([p])}), withAvatars);
+      assert.equal(await row.locator('.user-identity').count(),2);
+      assert.equal(await row.locator('a.user-identity > .avatar').count(),2);
+      assert.equal(await row.locator('.user-name img').count(),0);
+      assert.equal(await row.locator('a[href="/players/123"]').innerText(),post.owner_name);
+      assert.equal(await row.locator('a[href="/players/123"]').getAttribute("target"),null);
+      // An open message menu must not swallow the profile link's navigation.
+      await row.locator('.msg-btn').click();
+      assert.equal(await row.locator('.msg-popover').count(),1);
+      assert.equal(new URL(page.url()).pathname,"/");
+      const profile = row.locator(`a[href="/players/${id}"]`);
+      if (target === "keyboard") { await profile.focus(); await page.keyboard.press("Enter"); }
+      else await profile.locator(target).click();
+      await page.waitForURL(`https://asobby.test/players/${id}`);
+      await page.goto("https://asobby.test/?lang=ja");
+      await page.waitForFunction(() => window.mockSse?.handlers.snapshot);
+    }
+    await page.evaluate(p => window.mockSse.handlers.snapshot({data:JSON.stringify([p])}), {
+      ...withAvatars, owner_profile_url:"", guest_user_id:"",
+    });
+    assert.equal(await row.locator('.user-cell a').count(),0);
+    assert.equal(await row.locator('.user-cell .avatar').count(),2);
+    await row.locator('.user-cell .avatar').first().click();
+    assert.equal(new URL(page.url()).pathname,"/");
     await page.evaluate(p => window.mockSse.handlers.upsert({ data: JSON.stringify(p) }), {
       ...post, owner_profile_url: "javascript:alert(1)",
     });
@@ -102,6 +134,14 @@ const { chromium } = require(process.argv[2] || "playwright");
         ["unknown", null, "History unknown"],
       ];
       for (const post_type of ["casual", "ranked"]) {
+        await page.evaluate(p => window.mockSse.handlers.snapshot({data:JSON.stringify([p])}), {
+          ...withAvatars, post_type, rank:"normal",
+        });
+        const identities = page.locator(`#${post_type}-rows a.user-identity`);
+        assert.equal(await identities.count(),2);
+        assert.equal(await identities.locator('.avatar').count(),2);
+        assert.equal(await identities.nth(0).getAttribute('href'),'/players/123');
+        assert.equal(await identities.nth(1).getAttribute('href'),'/players/456');
         for (const [rank_status, ranked_games, label] of cases) {
           const p = { ...post, rank: "normal", post_type, rank_status, ranked_games };
           await page.evaluate(p => window.mockSse.handlers.snapshot({ data: JSON.stringify([p]) }), p);
@@ -121,6 +161,6 @@ const { chromium } = require(process.argv[2] || "playwright");
       assert.equal(await page.locator("#casual-rows .rank-cell").innerText(), "");
     }
     assert.deepEqual(errors, []);
-    console.log("Lobby UI passed: UDP listings, JA/EN rank evidence in both tables, Ph rating, unknown history, safe text, messages and SSE.");
+    console.log("Lobby UI passed: avatar/name profile navigation, keyboard and open-menu navigation, unidentified users, JA/EN in both tables, rank evidence, safe text, messages and SSE.");
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

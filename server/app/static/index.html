@@ -367,6 +367,15 @@
     gap: 2px 6px;
     max-width: 100%;
   }
+  .user-identity {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+  }
+  a.user-identity { color: var(--accent); text-decoration: none; }
+  a.user-identity:hover .user-name { text-decoration: underline; }
+  a.user-identity:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
   button.msg-btn {
     background: transparent;
     color: var(--muted);
@@ -1434,6 +1443,32 @@ async function reportHighPing(postId, rttMs) {
   }
 }
 
+function buildUserIdentity(name, avatar, profileUrl) {
+  const linked = /^\/players\/[A-Za-z0-9_%.-]+$/.test(profileUrl || "");
+  const identity = document.createElement(linked ? "a" : "span");
+  identity.className = "user-identity";
+  if (linked) {
+    identity.href = profileUrl;
+    if (!name) identity.setAttribute("aria-label", t("players.profile"));
+  }
+  if (avatar) {
+    const img = document.createElement("img");
+    img.className = "avatar";
+    img.src = avatar;
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    img.alt = "";
+    identity.appendChild(img);
+  }
+  if (name) {
+    const label = document.createElement("span");
+    label.className = "user-name";
+    label.textContent = name;
+    identity.appendChild(label);
+  }
+  return identity;
+}
+
 function buildRow(p) {
   const tr = document.createElement("tr");
   if (p.net_status === NET_BATTLE) tr.classList.add("battle");
@@ -1446,48 +1481,15 @@ function buildRow(p) {
   userCell.className = "user-cell";
   const userInner = document.createElement("div");
   userInner.className = "user-inner";
-  if (p.owner_avatar) {
-    const img = document.createElement("img");
-    img.className = "avatar";
-    img.src = p.owner_avatar;
-    img.loading = "lazy";
-    img.referrerPolicy = "no-referrer";
-    img.alt = "";
-    userInner.appendChild(img);
-  }
-  if (p.owner_name) {
-    if (/^\/players\/[A-Za-z0-9_%.-]+$/.test(p.owner_profile_url || "")) {
-      const profile = document.createElement("a");
-      profile.href = p.owner_profile_url;
-      profile.textContent = p.owner_name;
-      userInner.appendChild(profile);
-    } else {
-      userInner.appendChild(document.createTextNode(p.owner_name));
-    }
-  }
+  if (p.owner_name || p.owner_avatar) userInner.appendChild(buildUserIdentity(p.owner_name, p.owner_avatar, p.owner_profile_url));
   if (p.guest_name) {
     if (p.owner_name) {
       userInner.appendChild(document.createTextNode(t("common.vs")));
     } else {
       userInner.appendChild(document.createTextNode(t("common.vsLower")));
     }
-    if (p.guest_avatar) {
-      const gimg = document.createElement("img");
-      gimg.className = "avatar";
-      gimg.src = p.guest_avatar;
-      gimg.loading = "lazy";
-      gimg.referrerPolicy = "no-referrer";
-      gimg.alt = "";
-      userInner.appendChild(gimg);
-    }
-    if (p.guest_user_id) {
-      const profile = document.createElement("a");
-      profile.href = `/players/${encodeURIComponent(p.guest_user_id)}`;
-      profile.textContent = p.guest_name;
-      userInner.appendChild(profile);
-    } else {
-      userInner.appendChild(document.createTextNode(p.guest_name));
-    }
+    userInner.appendChild(buildUserIdentity(p.guest_name, p.guest_avatar,
+      p.guest_user_id ? `/players/${encodeURIComponent(p.guest_user_id)}` : ""));
   }
   userCell.appendChild(userInner);
   tr.appendChild(userCell);
