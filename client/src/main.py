@@ -17,6 +17,7 @@ from hotkeys import HotkeyManager
 from replay_refusal import REPLAY_REFUSAL_PERMANENT
 from icon_art import render_icon
 from tray_icon import TrayIcon
+from runtime_compat import is_wine, wine_version
 from i18n import (
     SUPPORTED_LANGS,
     get_lang,
@@ -66,7 +67,8 @@ class TrayApp:
 
     def __init__(self) -> None:
         self.icon: TrayIcon | None = None
-        self.tk_root = None  # run() で作る tkinter のルート (非表示)
+        self.tk_root = None  # Wine では操作画面、それ以外では非表示のルート
+        self.compat_window = None
         self.post: Post = Post()
 
         self._rotate_log()
@@ -91,6 +93,9 @@ class TrayApp:
         important: bool = False,
         on_click=None,
     ) -> None:
+        if getattr(self, "compat_window", None) is not None:
+            self.compat_window.notify(text, important=important, on_click=on_click)
+            return
         shown = toast.show_info_toast(
             text,
             title="asobby",
@@ -108,6 +113,11 @@ class TrayApp:
                 pass
 
     def emit_request(self, req, text: str) -> None:
+        if getattr(self, "compat_window", None) is not None:
+            # Pending requests are actionable in the shared, always accessible menu.
+            self.compat_window.notify(text + "\n" + t("wine.request_hint"), important=True)
+            return
+
         def callback(reply: str) -> None:
             fut = asyncio.run_coroutine_threadsafe(
                 self.controller.reply_request(req.message_id, reply),
@@ -844,7 +854,7 @@ class TrayApp:
     def _show_startup_notice(self) -> None:
         # Check when the delayed callback runs, in case the user just disabled it.
         if self.controller.startup_notify_enabled():
-            self.emit_notify(t("tray.startup_notice"))
+            self.emit_notify(t("wine.startup_notice" if is_wine() else "tray.startup_notice"))
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self.loop)
@@ -866,19 +876,27 @@ class TrayApp:
 
         # tkinter はメインスレッドで動かす (ダイアログのキー入力のため)
         self.tk_root = Tk()
-        self.tk_root.withdraw()
+        if is_wine():
+            from compat_window import CompatWindow
+
+            self.compat_window = CompatWindow(self.tk_root, self)
+            self._append_log("info", f"Wine compatibility mode: {wine_version() or 'forced'}")
+        else:
+            self.tk_root.withdraw()
 
         threading.Thread(target=self._run_loop, daemon=True, name="asyncio-loop").start()
 
-        self.icon = TrayIcon(
-            "asobby",
-            icon=self._icon_for("idle", ranked_badge=False, casual_badge=False),
-            title=f"asobby v{__version__} - {self._status_text()}",
-            menu=self._build_menu(),
-        )
+        if not is_wine():
+            self.icon = TrayIcon(
+                "asobby",
+                icon=self._icon_for("idle", ranked_badge=False, casual_badge=False),
+                title=f"asobby v{__version__} - {self._status_text()}",
+                menu=self._build_menu(),
+            )
         self._append_log("info", f"asobby agent v{__version__} started")
         self._append_log("info", f"Lobby page: {self.controller.lobby_url()}")
-        self.icon.run_detached()
+        if self.icon:
+            self.icon.run_detached()
         if self.controller.hotkeys_enabled():
             self._start_hotkeys()
         # 初期状態では常駐を案内する。トレイ設定でこの通知だけ無効にできる。

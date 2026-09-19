@@ -73,15 +73,17 @@ def _show_notice(message: str, *, error: bool = False) -> None:
 def run_single_instance(start: Callable[[], None]) -> int:
     """Acquire before constructing the app (DB, local API, detector, hotkeys)."""
     from i18n import t
+    from runtime_compat import is_wine
 
     try:
         guard = SingleInstance()
         acquired = guard.acquire()
     except OSError as exc:
-        _show_notice(t("tray.instance_check_failed", error=str(exc)), error=True)
+        key = "wine.instance_check_failed" if is_wine() else "tray.instance_check_failed"
+        _show_notice(t(key, error=str(exc)), error=True)
         return 1
     if not acquired:
-        _show_notice(t("tray.already_running"))
+        _show_notice(t("wine.already_running" if is_wine() else "tray.already_running"))
         return 0
     try:
         start()

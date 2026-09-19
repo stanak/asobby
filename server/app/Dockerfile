@@ -24,7 +24,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py db.py geoip.py post_redis.py client_release.py integrations.py chat_sync.py udp_lobby.py udp_probe.py alembic.ini ./
+# Include every application module (including newly added profile/order helpers).
+# Keep secrets, runtime data and tests outside this top-level source glob.
+COPY *.py alembic.ini ./
 COPY tools ./tools
 COPY migrations ./migrations
 COPY static ./static

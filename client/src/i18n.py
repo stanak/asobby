@@ -10,6 +10,14 @@ _lang = DEFAULT_LANG
 _on_change: Callable[[str], None] | None = None
 
 JA: dict[str, str] = {
+    "wine.window_hint": "Wine互換モードです。設定・ログイン・リクエストへの返信は「メニュー」から操作できます。このウィンドウを閉じるとasobbyを終了します。",
+    "wine.menu": "メニュー",
+    "wine.already_running": "asobby は既に起動しています。起動済みの asobby 操作ウィンドウを開いてください。",
+    "wine.instance_check_failed": "多重起動を確認できないため、起動を中止しました。同じWine環境で動いているasobbyがないか確認してください。\n\n詳細: {error}",
+    "wine.open_notification": "選択した通知を開く",
+    "wine.request_hint": "「メニュー」→「リクエストに返信」から承諾・拒否できます。",
+    "wine.startup_notice": "asobbyはWine互換モードで動作しています。通知はこのウィンドウに表示されます。",
+    "wine.action_failed": "操作に失敗しました。メニューからログを確認してください。",
     "lang.ja": "日本語",
     "lang.en": "English",
     "lang.menu": "言語 / Language",
@@ -285,6 +293,14 @@ JA: dict[str, str] = {
 }
 
 EN: dict[str, str] = {
+    "wine.window_hint": "Wine compatibility mode. Use Menu for settings, login and request replies. Closing this window exits asobby.",
+    "wine.menu": "Menu",
+    "wine.already_running": "asobby is already running. Open the existing asobby control window.",
+    "wine.instance_check_failed": "asobby could not check for another instance, so startup was cancelled. Check for an existing asobby in the same Wine environment.\n\nDetails: {error}",
+    "wine.open_notification": "Open selected notification",
+    "wine.request_hint": "Use Menu → Reply to requests to accept or decline.",
+    "wine.startup_notice": "asobby is running in Wine compatibility mode. Notifications appear in this window.",
+    "wine.action_failed": "The action failed. Open the log from Menu for details.",
     "lang.ja": "日本語",
     "lang.en": "English",
     "lang.menu": "Language / 言語",

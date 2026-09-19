@@ -3,8 +3,13 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from i18n import t
+from runtime_compat import is_wine
 
 try:
+    # Do not even import WinRT extensions under Wine: failure can occur during
+    # their DLL initialization, before show_toast's exception handler runs.
+    if is_wine():
+        raise ImportError("Wine uses the asobby control window for notifications")
     from windows_toasts import (
         InteractableWindowsToaster,
         Toast,
@@ -16,7 +21,7 @@ try:
 
     INTERACTIVE_AVAILABLE = True
     IMPORT_ERROR: Optional[str] = None
-except ImportError as _e:
+except (ImportError, OSError, RuntimeError) as _e:
     INTERACTIVE_AVAILABLE = False
     IMPORT_ERROR = repr(_e)
 
