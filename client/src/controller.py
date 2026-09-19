@@ -339,6 +339,18 @@ class Controller:
         d = self.config_mgr.get_post_defaults()
         return {k: d[k] for k in ("post_type", "comment", "stream_url") if k in d}
 
+    def startup_notify_enabled(self) -> bool:
+        raw = self.config_mgr.get_value("options", "startup_notify_enabled", True)
+        return raw if isinstance(raw, bool) else True
+
+    def set_startup_notify_enabled(self, enabled: bool) -> None:
+        value = bool(enabled)
+        self.config_mgr.set_value("options", "startup_notify_enabled", value)
+        self.log_sink(
+            "info",
+            t("log.startup_notify_enabled", state=t("common.on" if value else "common.off")),
+        )
+
     def ping_warn_enabled(self) -> bool:
         return bool(self.config_mgr.get_value("options", "ping_warn_enabled", True))
 

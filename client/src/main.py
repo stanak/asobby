@@ -303,6 +303,13 @@ class TrayApp:
             )
         )
 
+    def _toggle_startup_notify(self) -> None:
+        self.controller.set_startup_notify_enabled(
+            not self.controller.startup_notify_enabled()
+        )
+        if self.icon:
+            self.icon.update_menu()
+
     def _toggle_session_score_notify(self) -> None:
         self.controller.set_session_score_notify_enabled(
             not self.controller.session_score_notify_enabled()
@@ -767,6 +774,11 @@ class TrayApp:
             Menu.SEPARATOR,
             self._section_header("tray.section.settings"),
             MenuItem(
+                t("tray.startup_notify"),
+                lambda: self._toggle_startup_notify(),
+                checked=lambda item: self.controller.startup_notify_enabled(),
+            ),
+            MenuItem(
                 lambda item: self._replay_refusal_menu_label(),
                 Menu(lambda: self._replay_refusal_menu_items()),
             ),
@@ -829,6 +841,11 @@ class TrayApp:
     # -----------------
     # startup
     # -----------------
+    def _show_startup_notice(self) -> None:
+        # Check when the delayed callback runs, in case the user just disabled it.
+        if self.controller.startup_notify_enabled():
+            self.emit_notify(t("tray.startup_notice"))
+
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self.loop)
 
@@ -864,10 +881,8 @@ class TrayApp:
         self.icon.run_detached()
         if self.controller.hotkeys_enabled():
             self._start_hotkeys()
-        # 「黙って常駐するのが怖い」対策: 起動直後にトレイ常駐を明示的に知らせる
-        self.tk_root.after(
-            1500, lambda: self.emit_notify(t("tray.startup_notice"))
-        )
+        # 初期状態では常駐を案内する。トレイ設定でこの通知だけ無効にできる。
+        self.tk_root.after(1500, self._show_startup_notice)
         self.tk_root.mainloop()
 
 
