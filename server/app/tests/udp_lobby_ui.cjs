@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { chromium } = require(process.argv[2] || "playwright");
+const orderCases = JSON.parse(fs.readFileSync(path.join(__dirname, "lobby_order_cases.json"), "utf8"));
 
 (async () => {
   const browser = await chromium.launch({ headless: true, ...(process.platform === "win32" ? {channel:"msedge"} : {}) });
@@ -159,8 +160,41 @@ const { chromium } = require(process.argv[2] || "playwright");
       assert.match(await page.locator("#casual-rows .rank-cell").innerText(), /Ph \(123\.5\)/i);
       await page.evaluate(p => window.mockSse.handlers.upsert({ data: JSON.stringify(p) }), post);
       assert.equal(await page.locator("#casual-rows .rank-cell").innerText(), "");
+
+      // The same contract fixture is checked by the native/SSE/integration tests.
+      assert.deepEqual(await page.evaluate(items => sortPosts(items).map(p => p.id), orderCases.posts), orderCases.expected);
+      const samples = orderCases.posts.map(p => ({...post, net_status:0, ...p, owner_name:p.id}));
+      const expected = type => orderCases.expected.filter(id => {
+        const p = samples.find(p => p.id === id);
+        return (p.post_type === "ranked" ? "ranked" : "casual") === type;
+      });
+      const rowNames = type => page.locator(`#${type}-rows tr`).evaluateAll(rows => rows.map(row => row.querySelector('.user-name').textContent));
+      for (const input of [samples, [...samples].reverse()]) {
+        await page.evaluate(items => window.mockSse.handlers.snapshot({data:JSON.stringify(items)}), input);
+        for (const type of ["ranked", "casual"]) assert.deepEqual(await rowNames(type), expected(type));
+      }
+      // Beginning a match moves a row down without changing the two-table layout.
+      const waiting = samples.find(p => p.id === "waiting-ranked-a");
+      await page.evaluate(p => window.mockSse.handlers.upsert({data:JSON.stringify(p)}), {...waiting, net_status:4});
+      assert.deepEqual(await rowNames("ranked"), [...expected("ranked").filter(id => id !== waiting.id), waiting.id]);
+      await page.evaluate(p => window.mockSse.handlers.upsert({data:JSON.stringify(p)}), waiting);
+      assert.deepEqual(await rowNames("ranked"), expected("ranked"));
+
+      const playing = samples.find(p => p.id === "playing-casual");
+      await page.evaluate(p => window.mockSse.handlers.upsert({data:JSON.stringify(p)}), {...playing, net_status:3});
+      assert.deepEqual(await rowNames("casual"), [playing.id, ...expected("casual").filter(id => id !== playing.id)]);
+      // A guest connection overrides stale waiting state, even without a name.
+      await page.evaluate(p => window.mockSse.handlers.upsert({data:JSON.stringify(p)}), {...playing, net_status:3, guest_connected:true});
+      assert.deepEqual(await rowNames("casual"), expected("casual"));
+
+      const retyped = samples.find(p => p.id === "waiting-default");
+      await page.evaluate(p => window.mockSse.handlers.upsert({data:JSON.stringify(p)}), {...retyped, post_type:"ranked"});
+      assert.deepEqual(await rowNames("ranked"), [retyped.id, ...expected("ranked")]);
+      assert.deepEqual(await rowNames("casual"), expected("casual").filter(id => id !== retyped.id));
+      await page.evaluate(id => window.mockSse.handlers.close({data:JSON.stringify({id})}), retyped.id);
+      assert.deepEqual(await rowNames("ranked"), expected("ranked"));
     }
     assert.deepEqual(errors, []);
-    console.log("Lobby UI passed: avatar/name profile navigation, keyboard and open-menu navigation, unidentified users, JA/EN in both tables, rank evidence, safe text, messages and SSE.");
+    console.log("Lobby UI passed: waiting-first sorting, state/type changes and SSE reorder, avatar/name profile navigation, keyboard and open-menu navigation, unidentified users, JA/EN in both tables, rank evidence, safe text and messages.");
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

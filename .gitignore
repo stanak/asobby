@@ -31,6 +31,8 @@ client/version_info.txt
 
 # app
 *.json
+# Shared, synthetic ordering fixture for Python and browser tests.
+!server/app/tests/lobby_order_cases.json
 
 # th123data search UI (built from vendor/th123data)
 server/app/static/data/

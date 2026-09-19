@@ -1,0 +1,23 @@
+{
+  "posts": [
+    {"id": "playing-casual", "net_status": 4, "post_type": "casual", "created_at": 1000, "rank": "ph", "ranked_active": true},
+    {"id": "waiting-casual", "net_status": 3, "post_type": "casual", "created_at": 200, "guest_name": "Not a status flag", "match_status": "Display text only"},
+    {"id": "waiting-ranked-old", "net_status": 3, "post_type": "ranked", "created_at": 10, "rank": "easy", "ranked_active": false},
+    {"id": "waiting-ranked-b", "net_status": 3, "post_type": "ranked", "created_at": 20},
+    {"id": "connecting-ranked", "net_status": 2, "post_type": "ranked", "created_at": 700},
+    {"id": "unknown-casual", "post_type": "casual", "created_at": 1200},
+    {"id": "waiting-ranked-a", "net_status": 3, "post_type": "ranked", "created_at": 20},
+    {"id": "playing-ranked", "net_status": 4, "post_type": "ranked", "created_at": 600},
+    {"id": "connected-ranked", "net_status": 3, "guest_connected": true, "post_type": "ranked", "created_at": 800},
+    {"id": "unknown-ranked", "net_status": 0, "post_type": "ranked", "created_at": 1100},
+    {"id": "connecting-casual", "net_status": 2, "post_type": "casual", "created_at": 1100},
+    {"id": "connected-unknown-casual", "net_status": 0, "guest_connected": true, "post_type": "casual", "created_at": 1200},
+    {"id": "waiting-default", "net_status": 3, "created_at": 150}
+  ],
+  "expected": [
+    "waiting-ranked-a", "waiting-ranked-b", "waiting-ranked-old", "waiting-casual", "waiting-default",
+    "unknown-ranked", "unknown-casual",
+    "connected-ranked", "connecting-ranked", "playing-ranked",
+    "connected-unknown-casual", "connecting-casual", "playing-casual"
+  ]
+}

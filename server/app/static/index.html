@@ -1035,8 +1035,18 @@ function rankCell(p) {
   return cell;
 }
 
+// Same priorities as lobby_order.post_sort_key on the server.
+function postStateOrder(p) {
+  if (p.guest_connected || p.net_status === 2 || p.net_status === NET_BATTLE) return 2;
+  return p.net_status === 3 ? 0 : 1;
+}
+
 function sortPosts(list) {
   list.sort((a, b) => {
+    const ds = postStateOrder(a) - postStateOrder(b);
+    if (ds !== 0) return ds;
+    const dt = Number(a.post_type !== "ranked") - Number(b.post_type !== "ranked");
+    if (dt !== 0) return dt;
     const dc = (b.created_at || 0) - (a.created_at || 0);
     if (dc !== 0) return dc;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;

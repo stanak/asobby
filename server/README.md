@@ -156,7 +156,7 @@ Draft 2020-12。IP 提供あり・なしの両方を表現するため、`addr` 
 | `schema_version` | integer | 現在は `1`。サーバー全体の API バージョン `v0.2` とは別 |
 | `revision` | string | 返却する `posts` の内容から計算した64桁の SHA-256（小文字16進） |
 | `count` | integer | `posts.length` と同じ。0件でも本文は返り、`posts: []` になる |
-| `posts` | array of object | 公開中で期限切れでない募集。`created_at` 降順、同時刻は `id` 昇順 |
+| `posts` | array of object | 公開中で期限切れでない募集。状態優先 → `ranked` 優先 → `created_at` 降順 → `id` 昇順（下記参照） |
 | `lobby_url` | string | ロビーの URL。以下の URL 例は既定の `ASOBBY_BASE_URL=https://asobby.com` の場合 |
 | `posts[].id` | string | 募集 ID。操作権限を与えるトークンではない |
 | `posts[].owner_name` | string | ホスト表示名。値がなければ `""` |
@@ -193,6 +193,14 @@ Draft 2020-12。IP 提供あり・なしの両方を表現するため、`addr` 
 `status` の算出順は、元の募集の `net_status=4` → `playing`、それ以外で
 `guest_connected=true` または `net_status=2` → `connecting`、それ以外で `net_status=3` → `waiting`、
 それ以外 → `unknown`。`guest_name` や `match_status` の空・非空から状態を推測しない。
+
+一覧の並び順は、まず `waiting`（募集中）→ `unknown`（状態不明）→
+`connecting` / `playing`（接続中・対戦中は同順位）。その中で `post_type=ranked` → `casual`、
+さらに `created_at` 降順（新しい順）、同時刻なら `id` 昇順で並べる。
+募集中のCasualは対戦中のRankedより上になる。`rank`（E〜Ph）や `ranked_active` はソートに使わない。
+`GET /posts` とSSEの初期スナップショットも同じ順序。
+WebロビーはRanked・Casualの2つの表を維持し、各表内で同じ状態優先・新しい順を適用する。
+接続・対戦開始や募集再開の更新を受信した際も並べ直す。
 
 一覧 API はこのスキーマにあるフィールドだけを返す。特に `net_status`、`updated_at`、
 `owner_avatar`、`owner_profile_url`、`guest_avatar`、`guest_user_id`、`guest_connected`、`supports_messages`、

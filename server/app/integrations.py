@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import post_redis
+from lobby_order import post_sort_key, post_status
 
 MAX_INTEGRATIONS = 20
 MIN_DELIVERY_INTERVAL = 5.0
@@ -253,21 +254,15 @@ class IntegrationService:
 
     def snapshot(self, *, include_address: bool = False) -> dict[str, Any]:
         posts = []
-        for raw in self.read_posts():
+        for raw in sorted(self.read_posts(), key=post_sort_key):
             post = {key: raw[key] for key in LOBBY_FIELDS if key in raw}
             # Display symbols belong only at the integration API boundary;
             # stored ranks and the native client protocol keep their codes.
             post["rank"] = RANK_SYMBOLS.get(raw.get("rank"), "")
-            net_status = raw.get("net_status")
-            post["status"] = (
-                "playing" if net_status == 4 else
-                "connecting" if raw.get("guest_connected") or net_status == 2 else
-                "waiting" if net_status == 3 else "unknown"
-            )
+            post["status"] = post_status(raw)
             if include_address:
                 post["addr"] = raw.get("addr", "")
             posts.append(post)
-        posts.sort(key=lambda p: (-float(p.get("created_at", 0)), str(p.get("id", ""))))
         revision = hashlib.sha256(encode_json(posts)).hexdigest()
         return {
             "schema_version": 1, "revision": revision, "count": len(posts),

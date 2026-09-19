@@ -47,6 +47,7 @@ import geoip
 import post_redis
 import client_release
 import integrations
+from lobby_order import post_sort_key
 import chat_sync
 import udp_lobby
 import udp_probe
@@ -1938,11 +1939,10 @@ def _persist_announcement() -> None:
 
 
 def sorted_public_posts() -> list[dict[str, Any]]:
-    records = sorted(
-        RECORDS.values(),
-        key=lambda r: (-r.post.created_at, r.post.id),
+    return sorted(
+        (asdict(r.post) for r in RECORDS.values() if record_is_listed(r)),
+        key=post_sort_key,
     )
-    return [asdict(r.post) for r in records if record_is_listed(r)]
 
 
 def user_has_other_posts(user_id: str) -> bool:
