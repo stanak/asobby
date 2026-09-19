@@ -209,6 +209,120 @@ class SearchIn(BaseModel):
         return self
 
 
+AGE_BANDS = tuple((lo, lo + 9) for lo in range(0, 100, 10)) + ((100, None),)
+STATISTICS_MIN_PLAYERS = 5
+AgeBand = Literal["", "0", "10", "20", "30", "40", "50", "60", "70", "80", "90", "100", "unknown"]
+
+
+class StatisticsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    age_band: AgeBand = ""
+    rank: Rank | Literal[""] = ""
+    country_code: str = ""
+    device_type: Device | Literal["unknown"] = ""
+    character: int | None = Field(default=None, ge=0, le=20)
+    match_type: Literal["all", "ranked", "casual"] = "all"
+
+    @field_validator("country_code")
+    @classmethod
+    def valid_country(cls, value):
+        return value if value == "unknown" else ProfileIn.valid_country(value)
+
+
+async def filtered_statistics(s, filters: StatisticsIn) -> dict:
+    """Consented aggregate ages, all confirmed results, small-cell suppression."""
+    if s.bind.dialect.name == "postgresql":
+        # Suppression and displayed totals must use one consistent snapshot.
+        await s.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+    u, m = db.User, db.Match
+    on = today()
+    age_cases = []
+    for lo, hi in AGE_BANDS:
+        condition = u.birth_visibility.in_(("public", "statistics")) & (u.birth_date <= years_ago(on, lo))
+        if hi is not None:
+            condition &= u.birth_date > years_ago(on, hi + 1)
+        age_cases.append((condition, str(lo)))
+    age_group = case(*age_cases, else_="unknown")
+    rank_group = case((u.rank.in_(RANK_SYMBOLS), u.rank), else_="unknown")
+    country_group = case((u.country_code.in_(COUNTRIES), u.country_code), else_="unknown")
+    device_group = case((u.device_type.in_(("keyboard", "gamepad", "arcade", "other")), u.device_type), else_="unknown")
+
+    # One record per participant, never per report/replay. A selected-player mirror
+    # match contributes twice to participation counts but once to unique matches.
+    settled = m.winner.in_(("host", "guest", "draw"))
+    sides = []
+    for side, user_id, char in (("host", m.host_user_id, m.host_char), ("guest", m.guest_user_id, m.guest_char)):
+        query = select(m.id.label("match_id"), user_id.label("user_id"), char.label("character"),
+                       case((m.winner == side, 1), else_=0).label("win"),
+                       case((m.winner == "draw", 1), else_=0).label("draw")).where(settled, user_id.is_not(None))
+        if side == "guest":
+            query = query.where(or_(m.host_user_id.is_(None), m.host_user_id != m.guest_user_id))
+        if filters.character is not None:
+            query = query.where(char == filters.character)
+        if filters.match_type != "all":
+            query = query.where(m.ranked.is_(filters.match_type == "ranked"))
+        sides.append(query)
+    games = union_all(*sides).cte("statistics_games")
+    cohort_query = select(u.id, age_group.label("age_band"), rank_group.label("rank"),
+                          country_group.label("country"), device_group.label("device"))
+    for value, column in ((filters.age_band, age_group), (filters.rank, rank_group),
+                          (filters.country_code, country_group), (filters.device_type, device_group)):
+        if value:
+            cohort_query = cohort_query.where(column == value)
+    if filters.character is not None or filters.match_type != "all":
+        cohort_query = cohort_query.where(select(games.c.user_id).where(games.c.user_id == u.id).exists())
+    cohort = cohort_query.cte("statistics_cohort")
+    total = await s.scalar(select(func.count()).select_from(cohort))
+    result = {"filters": filters.model_dump(), "as_of": on.isoformat(), "total_players": None,
+              "match_players": None, "unique_matches": None, "participations": None,
+              "unknown_character_games": None, "distributions": {key: [] for key in ("age_band", "rank", "country", "device")},
+              "characters": [], "suppressed": total < STATISTICS_MIN_PLAYERS,
+              "min_players": STATISTICS_MIN_PLAYERS, "age_scope": "consented", "match_scope": "all_confirmed"}
+    # Do not distinguish zero people from 1–4, or expose any totals for that cohort.
+    if result["suppressed"]:
+        return result
+    distributions = {}
+    for field, keys in (("age_band", [str(lo) for lo, _ in AGE_BANDS] + ["unknown"]),
+                        ("rank", [*RANK_SYMBOLS, "unknown"]), ("country", None),
+                        ("device", ["keyboard", "gamepad", "arcade", "other", "unknown"])):
+        column = cohort.c[field]
+        counts = dict((await s.execute(select(column, func.count()).group_by(column))).all())
+        if keys is None:
+            keys = sorted(key for key in counts if key != "unknown") + ["unknown"]
+        hidden = {key for key, count in counts.items() if 0 < count < STATISTICS_MIN_PLAYERS}
+        # One hidden bucket is reconstructable from total minus visible buckets.
+        if len(hidden) == 1:
+            candidates = [key for key, count in counts.items() if count and key not in hidden]
+            if candidates:
+                hidden.add(min(candidates, key=lambda key: (counts[key], key)))
+        distributions[field] = [{"key": key, "count": None if key in hidden else counts.get(key, 0),
+                                  "suppressed": key in hidden} for key in keys]
+
+    selected_games = select(games).join(cohort, cohort.c.id == games.c.user_id).cte("statistics_selected_games")
+    participants, matches, participations = (await s.execute(select(
+        func.count(func.distinct(selected_games.c.user_id)), func.count(func.distinct(selected_games.c.match_id)),
+        func.count()).select_from(selected_games))).one()
+    rows = (await s.execute(select(selected_games.c.character, func.count(), func.sum(selected_games.c.win), func.sum(selected_games.c.draw),
+                                  func.count(func.distinct(selected_games.c.user_id)))
+        .where(selected_games.c.character.between(0, 20)).group_by(selected_games.c.character))).all()
+    by_character = {char: (n, w, d, players) for char, n, w, d, players in rows}
+    characters = []
+    for char in range(21):
+        n, w, d, players = by_character.get(char, (0, 0, 0, 0))
+        hidden = 0 < players < STATISTICS_MIN_PLAYERS
+        characters.append({"char": char, "games": None if hidden else n, "wins": None if hidden else w,
+                           "losses": None if hidden else n - w - d, "draws": None if hidden else d,
+                           "win_rate": round(w / n, 4) if n and not hidden else None, "suppressed": hidden})
+    unknown = participations - sum(n for n, _, _, _ in by_character.values())
+    # No side totals from which a suppressed character row could be subtracted.
+    hide_matches = any(row["suppressed"] for row in characters) or 0 < participants < STATISTICS_MIN_PLAYERS or unknown > 0
+    result.update(total_players=total, distributions=distributions, characters=characters,
+                  match_players=None if hide_matches else participants,
+                  unique_matches=None if hide_matches else matches, participations=None if hide_matches else participations,
+                  unknown_character_games=None if hide_matches else unknown)
+    return result
+
+
 async def profile_lists_for(s, user_ids: list[str]) -> dict:
     values = {uid: {field: [] for field in (*TAG_FIELDS, *CHARACTER_FIELDS)} for uid in user_ids}
     if not user_ids:
@@ -367,18 +481,17 @@ def build_router(resolve_session, refresh_names) -> APIRouter:
     async def population_statistics(request: Request, response: Response):
         await require_user(request, response)
         async with db.session() as s:
-            countries = (await s.execute(select(db.User.country_code, func.count()).where(
-                db.User.country_code != "").group_by(db.User.country_code).order_by(db.User.country_code))).all()
-            bands = [(0, 19), (20, 29), (30, 39), (40, 49), (50, 59), (60, None)]
-            conditions = []
-            for lo, hi in bands:
-                condition = (db.User.birth_date <= years_ago(today(), lo)) & db.User.birth_visibility.in_(("public", "statistics"))
-                if hi is not None:
-                    condition &= db.User.birth_date > years_ago(today(), hi + 1)
-                conditions.append(func.count(case((condition, 1))))
-            counts = (await s.execute(select(*conditions).select_from(db.User))).one()
-            return {"countries": [{"country_code": code, "count": n} for code, n in countries],
-                    "age_bands": [{"min": lo, "max": hi, "count": n} for (lo, hi), n in zip(bands, counts)]}
+            data = await filtered_statistics(s, StatisticsIn())
+            return {"suppressed": data["suppressed"], "min_players": data["min_players"],
+                    "countries": [{"country_code": row["key"], "count": row["count"]} for row in data["distributions"]["country"] if row["key"] != "unknown"],
+                    "age_bands": [{"min": int(row["key"]), "max": int(row["key"]) + 9 if row["key"] != "100" else None,
+                                   "count": row["count"]} for row in data["distributions"]["age_band"] if row["key"] != "unknown"]}
+
+    @router.get("/api/players/analytics")
+    async def player_analytics(request: Request, response: Response, filters: Annotated[StatisticsIn, Query()]):
+        await require_user(request, response)
+        async with db.session() as s:
+            return await filtered_statistics(s, filters)
 
     @router.get("/api/players/{user_id}")
     async def get_profile(user_id: str, request: Request, response: Response):

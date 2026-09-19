@@ -7,6 +7,8 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 
 ユーザーページ `/players/{id}`、プロフィール編集 `/profile`、検索 `/players` の
 公開範囲・入力制約・APIは[プレイヤープロフィール](docs/player-profiles.md)を参照。
+年齢層・ランク・国・デバイス・使用キャラで絞り込める `/players/statistics` は
+[プレイヤー統計](docs/player-statistics.md)を参照（非公開勝率も集団集計に含み、5人未満は非表示）。
 
 ## 外部連携（募集・チャット API・Webhook）
 

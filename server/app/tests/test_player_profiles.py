@@ -342,11 +342,13 @@ async def test_lobby_display_change_existing_new_guest_and_oauth_preservation(cl
 
 @pytest.mark.asyncio
 async def test_statistics_only_use_opted_in_fields(client):
+    async with db.session() as s, s.begin():
+        s.add_all([db.User(id=f"extra{i}") for i in range(5)])
     await save(client)
     stats = (await client.get("/api/players/statistics", headers=auth())).json()
-    assert stats["countries"] == [{"country_code": "JP", "count": 1}]
-    assert sum(b["count"] for b in stats["age_bands"]) == 1
-    assert stats["age_bands"][1] == {"min": 20, "max": 29, "count": 1}
+    assert stats["suppressed"] is False
+    assert stats["countries"] == [{"country_code": "JP", "count": None}]
+    assert stats["age_bands"][2] == {"min": 20, "max": 29, "count": None}
     await save(client, birth_date=None, birth_visibility="secret", country_code="")
     stats = (await client.get("/api/players/statistics", headers=auth())).json()
     assert stats["countries"] == [] and sum(b["count"] for b in stats["age_bands"]) == 0
@@ -354,8 +356,8 @@ async def test_statistics_only_use_opted_in_fields(client):
 
 @pytest.mark.asyncio
 async def test_birth_visibility_states_apply_to_all_outputs_and_search(client):
-    for visibility, visible_age, searchable, counted in [
-        ("public", 25, 1, 1), ("statistics", None, 0, 1), ("secret", None, 0, 0),
+    for visibility, visible_age, searchable in [
+        ("public", 25, 1), ("statistics", None, 0), ("secret", None, 0),
     ]:
         # Secret must erase the supplied date too, not just rely on the UI to omit it.
         await save(client, birth_visibility=visibility)
@@ -371,7 +373,7 @@ async def test_birth_visibility_states_apply_to_all_outputs_and_search(client):
             result = (await client.get(f"/api/players?{condition}", headers=auth("bob"))).json()
             assert result["total"] == searchable
         stats = (await client.get("/api/players/statistics", headers=auth("bob"))).json()
-        assert sum(row["count"] for row in stats["age_bands"]) == counted
+        assert stats["suppressed"] is True and stats["age_bands"] == []  # Only three users: do not expose small counts.
         async with db.session() as s:
             assert (await s.get(db.User, "alice")).birth_date == (None if visibility == "secret" else date(2000, 9, 20))
 

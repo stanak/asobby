@@ -9,7 +9,7 @@
   const charName = id => (getLang() === "ja" ? jaChars : enChars)[id] || "?";
   const countryNames = new Intl.DisplayNames([getLang()], { type:"region" });
   const countryName = code => code ? `${[...code].map(c => String.fromCodePoint(127397 + c.charCodeAt(0))).join("")} ${countryNames.of(code)}` : tr("unset");
-  let options, me;
+  let options, me, statisticsRequest = 0;
 
   function link(text, href, cls) { const a = el("a", text, cls); a.href = href; return a; }
   function safeProfileUrl(value) {
@@ -220,6 +220,80 @@
     return card;
   }
 
+  async function statisticsPage() {
+    const head = heading(tr("analyticsTitle"), tr("analyticsIntro"));
+    const layout = el("div", null, "search-layout"), side = el("aside"), form = el("form", null, "panel"), result = el("section");
+    form.id = "statistics-form"; result.id = "statistics-results"; side.append(form); layout.append(side, result);
+    $("content").replaceChildren(head, layout);
+    const values = new URLSearchParams(location.search);
+    const ageLabel = key => key === "unknown" ? tr("ageUnknown") : key === "100" ? tr("age100") : key === "0" ? tr("ageUnder10") : tr("ageDecade", {n:key});
+    const ageChoices = Array.from({length:11}, (_, i) => [String(i * 10), ageLabel(String(i * 10))]); ageChoices.push(["unknown", ageLabel("unknown")]);
+    const inputs = {};
+    for (const [name, label, choices] of [
+      ["age_band", tr("ageBand"), ageChoices], ["rank", tr("rank"), Object.entries(options.ranks)],
+      ["country_code", tr("country"), [["unknown", tr("unset")], ...countries()]],
+      ["device_type", tr("device"), [["unknown", tr("unset")], ...options.devices.map(d => [d, tr(d)])]],
+      ["character", tr("playedCharacter"), characterChoices(21)],
+    ]) inputs[name] = select(form, label, name, choices, values.get(name) || "", tr("all"));
+    inputs.match_type = select(form, tr("matchType"), "match_type", [["all", tr("allMatches")], ["ranked", tr("rankedMatches")], ["casual", tr("casualMatches")]], values.get("match_type") || "all", null);
+    form.append(el("p", tr("analyticsFilterHint"), "hint"));
+    const actions = el("div", null, "actions"), submit = el("button", tr("applyFilters"), "primary"); submit.type = "submit";
+    actions.append(submit, link(tr("reset"), "/players/statistics")); form.append(actions);
+    side.append(el("p", tr("analyticsPrivacy"), "hint"));
+    function render(data) {
+      result.replaceChildren();
+      if (data.suppressed) { panel(result, tr("analyticsHidden")).append(el("p", tr("analyticsHiddenHint", {n:data.min_players}), "hint")); return; }
+      const summary = panel(result, tr("analyticsSummary")), numbers = el("div", null, "numbers");
+      for (const [key, label] of [["total_players","cohortPlayers"],["match_players","matchPlayers"],["unique_matches","uniqueMatches"],["participations","participations"]]) {
+        const item = el("div"); item.append(el("div", data[key] == null ? "—" : data[key].toLocaleString(), "number"), el("div", tr(label), "muted")); numbers.append(item);
+      }
+      summary.append(numbers, el("p", tr("analyticsAsOf", {date:data.as_of}), "hint"), el("p", tr("participationHint"), "hint"));
+      const charts = el("div", null, "distribution-grid"); result.append(charts);
+      for (const [field, label, filter, name] of [
+        ["age_band", "ageDistribution", "age_band", ageLabel],
+        ["rank", "rankDistribution", "rank", key => options.ranks[key] || tr("unset")],
+        ["country", "countryDistribution", "country_code", key => key === "unknown" ? tr("unset") : countryName(key)],
+        ["device", "deviceDistribution", "device_type", key => key === "unknown" ? tr("unset") : tr(key)],
+      ]) {
+        const chart = panel(charts, tr(label)), list = el("ul", null, "distribution-list"); chart.dataset.distribution = field;
+        data.distributions[field].forEach(row => {
+          const item = el("li"), label = el("button", name(row.key), "distribution-label"), count = el("span", row.count == null ? tr("suppressed") : `${row.count} (${(100 * row.count / data.total_players).toFixed(1)}%)`, "distribution-count");
+          label.type = "button"; label.dataset.value = row.key;
+          label.disabled = row.count === 0 || !Array.from(inputs[filter].options).some(o => o.value === row.key);
+          label.onclick = () => { inputs[filter].value = row.key; run(); };
+          item.append(label, count);
+          if (row.count != null) { const track = el("div", null, "distribution-track"), bar = el("div", null, "distribution-bar"); track.setAttribute("aria-hidden", "true"); bar.style.width = `${100 * row.count / data.total_players}%`; track.append(bar); item.append(track); }
+          list.append(item);
+        });
+        chart.append(list);
+      }
+      const matches = panel(result, tr("characterStatistics")), wrap = el("div", null, "table-wrap"), table = el("table"), thead = el("thead"), header = el("tr"), body = el("tbody");
+      matches.append(el("p", tr("characterStatisticsHint", {n:data.min_players}), "hint"));
+      ["char", "matches", "wins", "losses", "draws", "rate"].forEach(key => { const th = el("th", tr(key)); th.scope = "col"; header.append(th); }); thead.append(header);
+      data.characters.forEach(row => {
+        const line = el("tr"), name = el("th"), button = el("button", charName(row.char), "distribution-label"); line.dataset.character = row.char; name.scope = "row"; button.type = "button";
+        button.onclick = () => { inputs.character.value = String(row.char); run(); }; name.append(button); line.append(name);
+        ["games","wins","losses","draws"].forEach(key => line.append(el("td", row[key] == null ? tr("suppressed") : row[key].toLocaleString())));
+        line.append(el("td", row.suppressed ? tr("suppressed") : row.win_rate == null ? "—" : `${(row.win_rate * 100).toFixed(1)}%`)); body.append(line);
+      });
+      table.append(thead, body); wrap.append(table); matches.append(wrap);
+      result.append(el("p", tr("analyticsPrivacy"), "hint"));
+    }
+    async function run(replace = false) {
+      const seq = ++statisticsRequest, query = new URLSearchParams();
+      for (const [key, value] of new FormData(form)) if (value && !(key === "match_type" && value === "all")) query.set(key, value);
+      const display = new URLSearchParams(query); if (values.get("lang")) display.set("lang", values.get("lang"));
+      history[replace ? "replaceState" : "pushState"](null, "", `/players/statistics?${display}`);
+      submit.disabled = true; result.setAttribute("aria-busy", "true"); result.replaceChildren(); status(t("common.loading"));
+      try { const data = await api(`/api/players/analytics?${query}`); if (seq === statisticsRequest) { render(data); status(); } }
+      catch (e) { if (seq === statisticsRequest) status(e.message, true); }
+      finally { if (seq === statisticsRequest) { submit.disabled = false; result.setAttribute("aria-busy", "false"); } }
+    }
+    form.onsubmit = event => { event.preventDefault(); run(); };
+    window.onpopstate = () => statisticsPage().catch(e => status(e.message, true));
+    await run(true);
+  }
+
   async function searchPage() {
     const head = heading(tr("title"), tr("intro")); head.append(link(tr("edit"), "/profile", "button"));
     const layout = el("div", null, "search-layout"), details = el("details", null, "panel"), form = el("form"), result = el("section");
@@ -231,10 +305,11 @@
     stats.ontoggle = async () => {
       if (!stats.open || statsLoaded) return; statsLoaded = true;
       try {
-        const population = await api("/api/players/statistics"); stats.append(el("p", tr("statsHint"), "hint"));
+        const population = await api("/api/players/statistics"); stats.append(el("p", tr("statsHint"), "hint"), link(tr("analyticsTitle"), "/players/statistics", "button"));
+        if (population.suppressed) { stats.append(el("p", tr("analyticsHiddenHint", {n:population.min_players}), "hint")); return; }
         const ages = el("dl"), countries = el("dl");
-        population.age_bands.forEach(band => { ages.append(el("dt", `${band.min}${band.max == null ? "+" : `–${band.max}`}`), el("dd", band.count)); });
-        population.countries.forEach(c => { countries.append(el("dt", countryName(c.country_code)), el("dd", c.count)); });
+        population.age_bands.forEach(band => { ages.append(el("dt", `${band.min}${band.max == null ? "+" : `–${band.max}`}`), el("dd", band.count == null ? tr("suppressed") : band.count)); });
+        population.countries.forEach(c => { countries.append(el("dt", countryName(c.country_code)), el("dd", c.count == null ? tr("suppressed") : c.count)); });
         stats.append(el("h2", tr("age")), ages, el("h2", tr("country")), countries);
       } catch (e) { statsLoaded = false; status(e.message, true); }
     };
@@ -336,6 +411,7 @@
     try {
       me = await api("/auth/me"); options = await api("/api/players/options");
       if (location.pathname === "/profile") await editProfile();
+      else if (location.pathname === "/players/statistics") await statisticsPage();
       else if (location.pathname.startsWith("/players/")) await profilePage(decodeURIComponent(location.pathname.slice(9)));
       else await searchPage();
       if (!$("status").classList.contains("error")) status();
