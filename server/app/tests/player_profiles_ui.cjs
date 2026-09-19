@@ -15,6 +15,8 @@ const { chromium } = require(process.argv[2] || "playwright");
     const player = {
       id:"alice", display_name:"あそび人", player_name:"あそび人", discord_name:"Alice", discord_username:"alice123",
       main_character:20,
+      bio:'対戦よろしくお願いします！\n<img src=x onerror="window.injected=1">',
+      profile_links:[{label:"YouTube",url:"https://www.youtube.com/@example"},{label:"<b>My site</b>",url:"https://example.com/"}],
       lobby_name:"あそび人", use_player_name:true, age:25, country_code:"JP", device_type:"gamepad", device_model:"RAP-4",
       rank:"ph", rank_symbol:"Ph", rating:39.3, avatar:"", favorite_players:["Top Player"],
       other_games:["STREET FIGHTER 6", '<img src=x onerror="window.injected=1">'], strong_characters:[0,5], weak_characters:[1,19],
@@ -60,12 +62,33 @@ const { chromium } = require(process.argv[2] || "playwright");
       }
       assert.equal(await page.locator('select[name="main_character"] option').count(),22); // 21 + unset
       assert.equal(await page.locator('select[name="main_character"]').inputValue(),"20");
+      assert.equal(await page.locator('[name="bio"]').inputValue(),player.bio);
+      assert.equal(await page.locator('[data-link-label]').count(),2);
+      assert.equal(await page.locator('[data-link-label]').first().inputValue(),"YouTube");
+      await page.locator('[name="bio"]').fill("😀".repeat(401));
+      assert.equal(await page.locator('[name="bio"]').evaluate(e => e.validity.valid),false);
+      assert.match(await page.locator('#bio-count').innerText(),/401 \/ 400/);
+      await page.locator('[name="bio"]').fill("😀".repeat(400));
+      assert.equal(await page.locator('[name="bio"]').evaluate(e => e.validity.valid),true);
+      assert.match(await page.locator('#bio-count').innerText(),/400 \/ 400/);
+      const newBio = "こんにちは😀\n対戦歓迎です！";
+      await page.locator('[name="bio"]').fill(newBio);
+      await page.locator('#add-profile-link').click();
+      await page.locator('[data-link-label]').last().fill("Twitch");
+      await page.locator('[data-link-url]').last().fill("javascript:alert(1)");
+      assert.equal(await page.locator('[data-link-url]').last().evaluate(e => e.validity.valid),false);
+      await page.locator('[data-link-url]').last().fill("https://user:pass@example.com/");
+      assert.equal(await page.locator('[data-link-url]').last().evaluate(e => e.validity.valid),false);
+      await page.locator('[data-link-url]').last().fill("https://www.twitch.tv/example");
+      assert.equal(await page.locator('[data-link-url]').last().evaluate(e => e.validity.valid),true);
       await page.locator('select[name="birth_visibility"]').selectOption("statistics");
       assert.equal(await page.locator('[name="birth_date"]').isEnabled(),true);
       await page.locator('#profile-form button[type="submit"]').click();
       await page.locator('#save-status.success').waitFor();
       assert.equal(writes.at(-1).birth_visibility,"statistics");
       assert.equal(writes.at(-1).birth_date,"2000-09-20");
+      assert.equal(writes.at(-1).bio,newBio);
+      assert.deepEqual(writes.at(-1).profile_links,[...player.profile_links,{label:"Twitch",url:"https://www.twitch.tv/example"}]);
       await page.locator('select[name="birth_visibility"]').selectOption("secret");
       assert.equal(await page.locator('[name="birth_date"]').isDisabled(),true);
       assert.equal(await page.locator('[name="birth_date"]').inputValue(),"");
@@ -87,6 +110,9 @@ const { chromium } = require(process.argv[2] || "playwright");
       assert.equal("weak_character" in writes.at(-1),false);
       assert.equal("rank" in writes.at(-1),false);
       await ready(`/profile?lang=${lang}`);
+      assert.equal(await page.locator('[name="bio"]').inputValue(),newBio);
+      assert.equal(await page.locator('[data-link-label]').count(),3);
+      assert.equal(await page.locator('[data-link-url]').last().inputValue(),"https://www.twitch.tv/example");
       assert.deepEqual(await page.locator('input[name="strong_characters"]:checked').evaluateAll(inputs => inputs.map(i => Number(i.value))),[0,5,6]);
       assert.deepEqual(await page.locator('input[name="weak_characters"]:checked').evaluateAll(inputs => inputs.map(i => Number(i.value))),[5,19]);
       for (const kind of ["strong","weak"]) {
@@ -98,6 +124,19 @@ const { chromium } = require(process.argv[2] || "playwright");
       assert.deepEqual(writes.at(-1).weak_characters,[]);
       await ready(`/profile?lang=${lang}`);
       assert.equal(await page.locator('.character-choices input:checked').count(),0);
+      for (let n = 3; n < 10; n++) await page.locator('#add-profile-link').click();
+      assert.equal(await page.locator('[data-link-label]').count(),10);
+      assert.equal(await page.locator('#add-profile-link').isDisabled(),true);
+      await page.locator('[data-remove-link]').first().click();
+      assert.equal(await page.locator('#add-profile-link').isEnabled(),true);
+      while (await page.locator('[data-remove-link]').count()) await page.locator('[data-remove-link]').first().click();
+      await page.locator('[name="bio"]').fill("");
+      await page.locator('#profile-form button[type="submit"]').click();
+      await page.locator('#save-status.success').waitFor();
+      assert.equal(writes.at(-1).bio,""); assert.deepEqual(writes.at(-1).profile_links,[]);
+      await ready(`/profile?lang=${lang}`);
+      assert.equal(await page.locator('[data-link-label]').count(),0);
+      assert.equal(await page.locator('[name="bio"]').inputValue(),"");
       saveError = true;
       await page.locator('[name="player_name"]').fill("あ".repeat(13));
       await page.locator('#profile-form button[type="submit"]').click();
@@ -140,6 +179,18 @@ const { chromium } = require(process.argv[2] || "playwright");
       assert.match(await page.locator('#content').innerText(),/Ph · 39.3/);
       assert.equal(await page.locator('#content table').count(),0);
       assert.doesNotMatch(await page.locator('#content').innerText(),/2000-09-20/);
+      assert.equal(await page.locator('#profile-bio .biography').textContent(),player.bio);
+      assert.equal(await page.locator('#profile-bio .biography').evaluate(e => getComputedStyle(e).whiteSpace),"pre-wrap");
+      assert.equal(await page.locator('#profile-bio img, #profile-links b').count(),0);
+      assert.equal(await page.locator('#content > :last-child').getAttribute("class"),"profile-footer");
+      assert.equal(await page.locator('#profile-links a').count(),2);
+      const external = page.locator('#profile-links a').first();
+      assert.equal(await external.getAttribute("href"),"https://www.youtube.com/@example");
+      assert.equal(await external.getAttribute("target"),"_blank");
+      assert.equal(await external.getAttribute("rel"),"noopener noreferrer nofollow ugc");
+      assert.equal(await external.getAttribute("referrerpolicy"),"no-referrer");
+      assert.match(await external.innerText(),/https:\/\/www.youtube.com\/@example/);
+      assert.equal(await page.evaluate(() => window.injected),undefined);
       for (const [kind, ids] of [["strong",[0,5]],["weak",[1,19]]]) {
         for (const id of ids) assert.equal(await page.locator(`#content a[href="/players?${kind}_char=${id}"]`).count(),1);
       }
@@ -150,6 +201,15 @@ const { chromium } = require(process.argv[2] || "playwright");
       allowRates = true; await ready(`/players/alice?lang=${lang}`);
       assert.match(await page.locator('table').innerText(),/40.0%/); await noOverflow(); allowRates = false;
     }
+    const originalBio = player.bio, originalLinks = player.profile_links;
+    player.profile_links = [...originalLinks,{label:"Unsafe",url:"javascript:alert(1)"},{label:"Credentials",url:"https://user:pass@example.com/"}];
+    await ready('/players/alice?lang=ja');
+    assert.equal(await page.locator('#profile-links a').count(),2);
+    assert.equal(await page.locator('a[href^="javascript:"]').count(),0);
+    player.bio = ""; player.profile_links = [];
+    await ready('/players/alice?lang=ja');
+    assert.equal(await page.locator('#profile-bio, #profile-links').count(),0);
+    player.bio = originalBio; player.profile_links = originalLinks;
     await ready('/players?lang=ja&name=nobody');
     assert.equal(await page.locator('.player-card').count(),0);
     await ready('/players/missing?lang=ja'); assert.match(await page.locator('#status').innerText(),/見つかりません/);
@@ -160,6 +220,6 @@ const { chromium } = require(process.argv[2] || "playwright");
     await page.setViewportSize({width:1280,height:900}); await ready('/players?lang=ja'); await page.locator('.player-card').waitFor(); await noOverflow();
     if (process.argv[3]) await page.screenshot({path:path.join(process.argv[3],"asobby-player-search.png"),fullPage:true});
     assert.deepEqual(errors,[]);
-    console.log("Player profile UI passed: JA/EN, mobile/desktop, multiple character editing/reload/clear, single-character search, privacy, validation errors, pagination/back, links, XSS, 404 and login gate.");
+    console.log("Player profile UI passed: JA/EN, mobile/desktop, bio Unicode limits, labelled link editing/reload/clear/limits, safe external links, multiple characters, search, privacy, XSS and login gate.");
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode=1; });

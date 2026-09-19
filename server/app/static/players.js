@@ -12,6 +12,13 @@
   let options, me;
 
   function link(text, href, cls) { const a = el("a", text, cls); a.href = href; return a; }
+  function safeProfileUrl(value) {
+    if (typeof value !== "string" || !/^https?:\/\/[^/?#]/i.test(value) || /[\s\\\p{C}]/u.test(value)) return null;
+    try {
+      const url = new URL(value);
+      return ["https:", "http:"].includes(url.protocol) && url.hostname && !url.username && !url.password ? url : null;
+    } catch { return null; }
+  }
   function searchLink(text, field, value) { const q = new URLSearchParams({ [field]: value }); return link(text, `/players?${q}`, "chip"); }
   function status(text = "", error = false) { $("status").textContent = text; $("status").className = error ? "error" : ""; }
   async function api(path, init) {
@@ -70,6 +77,53 @@
     return () => inputs.filter(input => input.checked).map(input => Number(input.value));
   }
 
+  function biographyEditor(parent, initial) {
+    const wrap = el("div", null, "field"), caption = el("label", tr("bio")), input = el("textarea");
+    input.id = "field-bio"; input.name = "bio"; input.rows = 7; input.value = initial || ""; caption.htmlFor = input.id;
+    const hint = el("span", tr("bioHint"), "hint"), count = el("span", null, "hint");
+    hint.id = "bio-hint"; count.id = "bio-count"; input.setAttribute("aria-describedby", "bio-hint bio-count");
+    const validate = () => {
+      const n = [...input.value].length; count.textContent = tr("bioCount", {n}); count.className = n > 400 ? "error" : "hint";
+      input.setCustomValidity(n > 400 ? tr("bioTooLong") : ""); return n <= 400;
+    };
+    input.oninput = validate; validate(); wrap.append(caption, input, hint, count); parent.append(wrap);
+    return () => { if (!validate()) throw new Error(tr("bioTooLong")); return input.value; };
+  }
+
+  function profileLinksEditor(parent, initial) {
+    parent.append(el("p", tr("linksHint"), "hint"));
+    const list = el("div", null, "link-editor"), add = el("button", tr("addLink")); add.id = "add-profile-link"; add.type = "button";
+    parent.append(list, add);
+    let rows = [], serial = 0;
+    function addRow(value = {label:"", url:""}, focus = false) {
+      if (rows.length >= 10) return;
+      const wrap = el("div", null, "link-editor-row"), fields = el("div", null, "two-col"), id = serial++;
+      wrap.append(fields);
+      const label = field(fields, tr("linkLabel"), `profile-link-${id}-label`, "text", value.label);
+      const url = field(fields, "URL", `profile-link-${id}-url`, "url", value.url);
+      label.dataset.linkLabel = ""; url.dataset.linkUrl = ""; url.maxLength = 2048;
+      label.placeholder = tr("linkLabelExample"); url.placeholder = "https://…";
+      const remove = el("button", tr("removeLink")); remove.type = "button"; remove.dataset.removeLink = ""; wrap.append(remove);
+      const validate = () => {
+        const name = label.value.trim(), address = url.value.trim(), empty = !name && !address;
+        label.setCustomValidity(empty || (name && [...name].length <= 40 && !/\p{C}/u.test(name)) ? "" : tr("linkLabelError"));
+        url.setCustomValidity(empty || safeProfileUrl(address) ? "" : tr("linkUrlError"));
+        remove.setAttribute("aria-label", tr("remove", {name:name || tr("linkLabel")}));
+        return label.validity.valid && url.validity.valid;
+      };
+      const row = {wrap, label, url, validate}; rows.push(row);
+      label.oninput = url.oninput = validate;
+      remove.onclick = () => { rows = rows.filter(item => item !== row); wrap.remove(); add.disabled = rows.length >= 10; add.focus(); };
+      validate(); list.append(wrap); add.disabled = rows.length >= 10; if (focus) label.focus();
+    }
+    initial.forEach(value => addRow(value)); add.onclick = () => addRow(undefined, true);
+    return () => rows.flatMap(row => {
+      if (!row.validate()) throw new Error(tr("linkInvalid"));
+      const label = row.label.value.trim(), url = row.url.value.trim();
+      return label || url ? [{label, url}] : [];
+    });
+  }
+
   function tagEditor(parent, key, initial, max, maxLength, hint) {
     const wrap = el("div", null, "field"), list = el("div", null, "chips"), entry = el("div", null, "tag-entry"), input = el("input"), add = el("button", tr("add"));
     const label = el("label", tr(key)); label.htmlFor = `tag-${key}`; input.id = label.htmlFor; input.maxLength = maxLength;
@@ -123,6 +177,8 @@
     const privacy = panel(form, tr("privacy"));
     const allow = check(privacy, tr("allowWinrates"), "character_winrates_public", "1", data.character_winrates_public);
     privacy.append(el("p", tr("privacyHint"), "hint"));
+    const introduction = panel(form, tr("bio")), bio = biographyEditor(introduction, data.bio);
+    const links = profileLinksEditor(panel(form, tr("links")), data.profile_links || []);
     const actions = el("div", null, "actions"), save = el("button", tr("save"), "primary"), message = el("span");
     save.type = "submit"; message.id = "save-status"; message.setAttribute("role", "status"); actions.append(save, message); form.append(actions);
     form.onsubmit = async event => {
@@ -136,6 +192,7 @@
           country_code:country.value, device_type:device.value, device_model:model.value,
           favorite_players:favorites(), other_games:games(), character_winrates_public:allow.checked,
           strong_characters:strongCharacters(), weak_characters:weakCharacters(),
+          bio:bio(), profile_links:links(),
         };
         save.disabled = true; save.textContent = tr("saving");
         await api("/user/profile", {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
@@ -253,7 +310,24 @@
       }
       rates.append(el("p", tr("rateHint"), "hint"));
     }
-    $("content").replaceChildren(top, columns); document.title = `${player.display_name} - asobby`;
+    const footer = el("div", null, "profile-footer");
+    if (player.bio?.trim()) {
+      const introduction = panel(footer, tr("bio")); introduction.id = "profile-bio";
+      introduction.append(el("p", player.bio, "biography"));
+    }
+    const externalLinks = (player.profile_links || []).map(item => ({...item, parsed:safeProfileUrl(item.url)})).filter(item => item.parsed);
+    if (externalLinks.length) {
+      const links = panel(footer, tr("links")); links.id = "profile-links";
+      links.append(el("p", tr("externalLinksHint"), "hint"));
+      const list = el("ul", null, "profile-links");
+      externalLinks.forEach(item => {
+        const entry = el("li"), anchor = link("", item.parsed.href, "profile-external-link");
+        anchor.target = "_blank"; anchor.rel = "noopener noreferrer nofollow ugc"; anchor.referrerPolicy = "no-referrer";
+        anchor.append(el("span", item.label, "external-label"), el("span", item.parsed.href, "muted")); entry.append(anchor); list.append(entry);
+      });
+      links.append(list);
+    }
+    $("content").replaceChildren(top, columns, footer); document.title = `${player.display_name} - asobby`;
   }
 
   async function init() {

@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import sqlite3
 import pytest
 
@@ -21,6 +22,30 @@ def test_profiles_migration_preserves_existing_names_ranks_and_privacy(tmp_path)
         assert conn.execute("SELECT name, rank, player_name, use_player_name, birth_date, country_code, character_winrates_public, birth_visibility FROM users").fetchone() == ("Discord Name", "ph", "", 0, None, "", 0, "secret")
         assert conn.execute("SELECT COUNT(*) FROM player_profile_tags").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM player_profile_characters").fetchone()[0] == 0
+        bio, links = conn.execute("SELECT bio, profile_links FROM users").fetchone()
+        assert bio == "" and json.loads(links) == []
+
+
+def test_bio_links_migration_preserves_profile_and_defaults(tmp_path):
+    app = Path(__file__).resolve().parents[1]
+    path = tmp_path / "bio.db"
+    config = Config(str(app / "alembic.ini"))
+    config.set_main_option("script_location", str(app / "migrations"))
+    config.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{path}")
+    command.upgrade(config, "0018")
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO users (id, name, created_at, rank, player_name, birth_visibility) VALUES ('u', 'Name', '2026-09-01', 'ph', 'Player', 'secret')")
+        conn.execute("INSERT INTO player_profile_characters VALUES ('u', 'strong_characters', 5)")
+    command.upgrade(config, "head")
+    command.upgrade(config, "head")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT name, rank, player_name, birth_visibility, bio FROM users").fetchone() == ("Name", "ph", "Player", "secret", "")
+        assert json.loads(conn.execute("SELECT profile_links FROM users").fetchone()[0]) == []
+        assert conn.execute("SELECT * FROM player_profile_characters").fetchall() == [("u", "strong_characters", 5)]
+    command.downgrade(config, "0018")
+    command.upgrade(config, "head")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT * FROM player_profile_characters").fetchall() == [("u", "strong_characters", 5)]
 
 
 def test_multiple_characters_migration_preserves_choices_and_safe_downgrade(tmp_path):

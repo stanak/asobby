@@ -40,6 +40,9 @@ def auth(uid="alice"):
 
 def example(**updates):
     return {"player_name": "あそび人", "main_character": 20, "use_player_name": True, "birth_date": "2000-09-20", "birth_visibility": "public",
+            "bio": "霊夢を使っています。\n対戦よろしくお願いします！",
+            "profile_links": [{"label": "YouTube", "url": "https://www.youtube.com/@example"},
+                              {"label": "個人サイト", "url": "https://example.com/"}],
             "country_code": "JP", "device_type": "gamepad", "device_model": "HORI ＲＡＰ-４",
             "favorite_players": ["  Top Player  ", "top player", "Other"],
             "other_games": ["STREET FIGHTER 6", "ぷよぷよ"], "strong_characters": [0, 5],
@@ -62,6 +65,7 @@ async def test_defaults_privacy_roundtrip_clear_and_auth(client):
     assert defaults["birth_visibility"] == "secret"
     assert defaults["country_code"] == ""  # Never inferred from last IP.
     assert defaults["strong_characters"] == defaults["weak_characters"] == []
+    assert defaults["bio"] == "" and defaults["profile_links"] == []
     await save(client)
     own = await client.get("/user/profile", headers=auth())
     assert own.headers["cache-control"] == "private, no-store"
@@ -99,6 +103,14 @@ async def test_defaults_privacy_roundtrip_clear_and_auth(client):
     {"main_character": 21}, {"main_character": -1}, {"main_character": True},
     {"birth_visibility": "invalid"}, {"birth_date": None, "birth_visibility": "public"},
     {"birth_date": None, "birth_visibility": "statistics"},
+    {"bio": "あ" * 401}, {"bio": "😀" * 401}, {"bio": "a\x00b"}, {"bio": "a\x7fb"},
+    {"bio": None}, {"bio": 123}, {"profile_links": None}, {"profile_links": "https://example.com/"},
+    {"profile_links": [{"label": "site", "url": "https://example.com/"}] * 11},
+    {"profile_links": [{"label": "site"}]}, {"profile_links": [{"url": "https://example.com/"}]},
+    {"profile_links": [{"label": " " * 2, "url": "https://example.com/"}]},
+    {"profile_links": [{"label": "a" * 41, "url": "https://example.com/"}]},
+    {"profile_links": [{"label": "site\n", "url": "https://example.com/"}]},
+    {"profile_links": [{"label": "site", "url": "https://example.com/", "html": "<b>x</b>"}]},
 ])
 @pytest.mark.asyncio
 async def test_invalid_values_cannot_mutate_profile(client, payload):
@@ -110,6 +122,61 @@ async def test_invalid_values_cannot_mutate_profile(client, payload):
 @pytest.mark.parametrize("name", ["あ" * 12, "a" * 24, "a" * 12 + "漢" * 6, "ｱ" * 24])
 def test_exact_cp932_limit(name):
     assert profiles.ProfileIn(player_name=name).player_name == name
+
+
+@pytest.mark.parametrize("url", [
+    "javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,<script>alert(1)</script>",
+    "file:///C:/test", "ftp://example.com/", "//example.com/", "/profile", "example.com", "https:example.com",
+    "https:///example.com", "https://", "https://?x=1", "https://user:pass@example.com/",
+    "https://user@example.com/", "https://example.com\\@evil.example/", "https://exam\nple.com/",
+    "https://example.com/has space", "https://example.com/\x00", "https://example.com/\u200b",
+    "https://example.com:99999/", "https://[invalid]/", "https://example.com/" + "x" * 2048,
+])
+def test_profile_links_reject_unsafe_or_malformed_urls(url):
+    with pytest.raises(ValueError):
+        profiles.ProfileLinkIn(label="site", url=url)
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.youtube.com/@example", "https://www.twitch.tv/example", "https://x.com/example",
+    "http://example.com/path?lang=ja#about", "https://example.com/日本語", "https://例え.jp/",
+])
+def test_profile_links_allow_generic_http_urls(url):
+    link = profiles.ProfileLinkIn(label=" My site ", url=url)
+    assert link.label == "My site" and link.url.startswith(("http://", "https://"))
+
+
+@pytest.mark.asyncio
+async def test_bio_links_roundtrip_limits_clear_and_atomic_validation(client):
+    bio = "こんにちは👩‍💻\r\n対戦歓迎\r<img src=x onerror=alert(1)>\n\tよろしく！"
+    links = [{"label": " YouTube ", "url": "HTTPS://WWW.YOUTUBE.COM/@example"},
+             {"label": "個人サイト", "url": "http://example.com/"}]
+    await save(client, bio=bio, profile_links=links)
+    expected_bio = bio.replace("\r\n", "\n").replace("\r", "\n")
+    expected_links = [{"label": "YouTube", "url": "https://www.youtube.com/@example"}, links[1]]
+    for path, uid in [("/user/profile", "alice"), ("/api/players/alice", "bob"), ("/api/players?name=login_alice", "bob")]:
+        data = (await client.get(path, headers=auth(uid))).json()
+        if "players" in data:
+            data = data["players"][0]
+        assert data["bio"] == expected_bio and data["profile_links"] == expected_links
+    for updates in ({"bio": "x" * 401}, {"profile_links": [{"label": "bad", "url": "javascript:alert(1)"}]}):
+        result = await client.put("/user/profile", headers=auth(), json=example(**updates))
+        assert result.status_code == 422
+        own = (await client.get("/user/profile", headers=auth())).json()
+        assert own["bio"] == expected_bio and own["profile_links"] == expected_links
+    links = [{"label": "😀" * 40, "url": f"https://example.com/{n}"} for n in range(10)]
+    for bio in ("あ" * 400, "😀" * 400, "x" * 398 + "\r\n\t"):
+        await save(client, bio=bio, profile_links=links)
+        own = (await client.get("/user/profile", headers=auth())).json()
+        assert len(own["bio"]) == 400 and own["profile_links"] == links
+    assert (await client.get("/user/profile", headers=auth("bob"))).json()["profile_links"] == []
+    await save(client, bio="", profile_links=[])
+    own = (await client.get("/user/profile", headers=auth())).json()
+    assert own["bio"] == "" and own["profile_links"] == []
+    await save(client)
+    assert (await client.put("/user/profile", headers=auth(), json={})).status_code == 200
+    own = (await client.get("/user/profile", headers=auth())).json()
+    assert own["bio"] == "" and own["profile_links"] == []
 
 
 def test_edit_documentation_covers_entire_input_schema():

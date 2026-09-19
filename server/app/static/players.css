@@ -33,6 +33,12 @@ button:hover:not(:disabled),.button:hover { border-color:var(--accent); } :focus
 .check { display:flex; gap:8px; align-items:center; font-size:14px; margin-bottom:10px; cursor:pointer; }
 .character-choices { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:4px 16px; }
 .character-choices .check { min-height:36px; margin:0; }
+.biography { white-space:pre-wrap; overflow-wrap:anywhere; margin:0; }
+textarea { resize:vertical; }
+.link-editor-row { border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:14px; }
+.profile-links { list-style:none; padding:0; margin:0; display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr)); gap:12px; }
+.profile-external-link { display:flex; flex-direction:column; border:1px solid var(--border); border-radius:8px; padding:12px 16px; overflow-wrap:anywhere; }
+.external-label { font-weight:600; }
 fieldset { border:0; padding:0; margin:0 0 18px; min-width:0; } legend { padding:0; margin-bottom:10px; }
 .tag-entry { display:flex; gap:8px; margin:8px 0; } .tag-entry input { flex:1; } .tag-entry button { flex:none; }
 .actions,.pagination { display:flex; align-items:center; gap:12px; flex-wrap:wrap; } .pagination { justify-content:center; margin-top:24px; }

@@ -76,6 +76,8 @@ class User(Base):
     # Discord display name stays in `name`; never overwrite it with a player name.
     discord_username: Mapped[str] = mapped_column(String(100), default="", nullable=False)
     player_name: Mapped[str] = mapped_column(String(24), default="", nullable=False)
+    bio: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    profile_links: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list, nullable=False)
     main_character: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True, index=True)
     # Legacy single-value mirrors for rollback. PlayerProfileCharacter is authoritative.
     strong_character: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True, index=True)

@@ -4,9 +4,10 @@ from __future__ import annotations
 from datetime import date, timedelta, timezone
 from typing import Annotated, Literal
 import unicodedata
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 from sqlalchemy import case, delete, func, or_, select, union_all
 
 import db
@@ -19,7 +20,7 @@ Rank = Literal["easy", "normal", "ex", "hard", "luna", "ph"]
 Char = Annotated[int, Field(strict=True, ge=0, le=19)]
 TAG_FIELDS = ("favorite_players", "other_games")
 CHARACTER_FIELDS = ("strong_characters", "weak_characters")
-SCALAR_FIELDS = ("player_name", "main_character", "use_player_name", "birth_date", "birth_visibility", "country_code",
+SCALAR_FIELDS = ("player_name", "bio", "main_character", "use_player_name", "birth_date", "birth_visibility", "country_code",
                  "device_type", "device_model", "character_winrates_public")
 
 
@@ -49,9 +50,42 @@ def clean_text(value: str) -> str:
     return value.strip()
 
 
+class ProfileLinkIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    label: str = Field(min_length=1, max_length=40)
+    url: str = Field(min_length=1, max_length=2048)
+
+    @field_validator("label")
+    @classmethod
+    def valid_label(cls, value):
+        value = clean_text(value)
+        if not value:
+            raise ValueError("リンクのラベルを入力してください / Enter a link label")
+        return value
+
+    @field_validator("url")
+    @classmethod
+    def valid_url(cls, value):
+        value = value.strip()
+        if (not value.lower().startswith(("https://", "http://")) or "\\" in value
+                or any(c.isspace() or unicodedata.category(c).startswith("C") for c in value)):
+            raise ValueError("http(s)://で始まるURLを入力してください / Enter an absolute HTTP(S) URL")
+        if not urlsplit(value).hostname:
+            raise ValueError("URLのホスト名が必要です / URL must include a hostname")
+        url = HttpUrl(value)
+        if url.username is not None or url.password is not None:
+            raise ValueError("認証情報を含むURLは使えません / URL credentials are not allowed")
+        result = str(url)
+        if len(result) > 2048:
+            raise ValueError("URLは2048文字以内 / URL must fit in 2048 characters")
+        return result
+
+
 class ProfileIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     player_name: str = Field(default="", max_length=24)
+    bio: str = Field(default="", max_length=400)
+    profile_links: list[ProfileLinkIn] = Field(default_factory=list, max_length=10)
     main_character: Annotated[int, Field(strict=True, ge=0, le=20)] | None = None
     use_player_name: bool = False
     birth_date: date | None = None
@@ -64,6 +98,18 @@ class ProfileIn(BaseModel):
     strong_characters: list[Char] = Field(default_factory=list, max_length=20)
     weak_characters: list[Char] = Field(default_factory=list, max_length=20)
     character_winrates_public: bool = False
+
+    @field_validator("bio", mode="before")
+    @classmethod
+    def normalize_bio(cls, value):
+        return value.replace("\r\n", "\n").replace("\r", "\n") if isinstance(value, str) else value
+
+    @field_validator("bio")
+    @classmethod
+    def valid_bio(cls, value):
+        if any(unicodedata.category(c) in ("Cc", "Cs") and c not in "\n\t" for c in value):
+            raise ValueError("自己紹介に制御文字は使用できません / Control characters are not allowed")
+        return value
 
     @field_validator("strong_characters", "weak_characters")
     @classmethod
@@ -184,6 +230,7 @@ def public_profile(user: db.User, tags: dict) -> dict:
     # Whitelist, never model_dump()/__dict__: raw birthdays are owner-only.
     return {
         "id": user.id, "player_name": user.player_name, "discord_name": user.name,
+        "bio": user.bio, "profile_links": user.profile_links,
         "main_character": user.main_character,
         "discord_username": user.discord_username, "display_name": user.player_name or user.name,
         "lobby_name": db.lobby_display_name(user), "use_player_name": user.use_player_name,
@@ -288,6 +335,7 @@ def build_router(resolve_session, refresh_names) -> APIRouter:
             user = await s.scalar(select(db.User).where(db.User.id == sess["id"]).with_for_update())
             for field in SCALAR_FIELDS:
                 setattr(user, field, getattr(body, field))
+            user.profile_links = [link.model_dump() for link in body.profile_links]
             await s.execute(delete(db.PlayerProfileCharacter).where(db.PlayerProfileCharacter.user_id == user.id))
             for kind in CHARACTER_FIELDS:
                 values = getattr(body, kind)
