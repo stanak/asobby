@@ -43,6 +43,7 @@
   }
   header {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
     gap: 12px;
     padding: 16px 20px 8px;
@@ -67,6 +68,7 @@
     margin-left: auto;
     font-size: 13px;
     display: flex;
+    flex-wrap: wrap;
     gap: 12px;
     align-items: center;
   }
@@ -734,6 +736,8 @@
     <a href="/data/" data-i18n="nav.frameData">フレームデータ</a>
     <a href="/guide" data-i18n="nav.guide">使い方</a>
     <a href="/settings" data-i18n="nav.settings">設定</a>
+    <a href="/players" data-i18n="nav.players">プレイヤー検索</a>
+    <a href="/profile" data-i18n="nav.profile">プロフィール編集</a>
     <a href="/feedback" data-i18n="nav.feedback">意見・報告</a>
     <a id="nav-client-dl" href="https://github.com/stanak/asobby/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="nav.clientDownload">クライアント DL</a>
     <a href="https://buy.stripe.com/6oU7sM0Hm7xsfpd2fafIs00" target="_blank" rel="noopener noreferrer" data-i18n="nav.support">ご支援</a>
@@ -1452,7 +1456,14 @@ function buildRow(p) {
     userInner.appendChild(img);
   }
   if (p.owner_name) {
-    userInner.appendChild(document.createTextNode(p.owner_name));
+    if (/^\/players\/[A-Za-z0-9_%.-]+$/.test(p.owner_profile_url || "")) {
+      const profile = document.createElement("a");
+      profile.href = p.owner_profile_url;
+      profile.textContent = p.owner_name;
+      userInner.appendChild(profile);
+    } else {
+      userInner.appendChild(document.createTextNode(p.owner_name));
+    }
   }
   if (p.guest_name) {
     if (p.owner_name) {
@@ -1469,7 +1480,14 @@ function buildRow(p) {
       gimg.alt = "";
       userInner.appendChild(gimg);
     }
-    userInner.appendChild(document.createTextNode(p.guest_name));
+    if (p.guest_user_id) {
+      const profile = document.createElement("a");
+      profile.href = `/players/${encodeURIComponent(p.guest_user_id)}`;
+      profile.textContent = p.guest_name;
+      userInner.appendChild(profile);
+    } else {
+      userInner.appendChild(document.createTextNode(p.guest_name));
+    }
   }
   userCell.appendChild(userInner);
   tr.appendChild(userCell);

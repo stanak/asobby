@@ -8,12 +8,12 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, SmallInteger, String, UniqueConstraint, and_, exists, func, or_, select, union, update
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, SmallInteger, String, Text, UniqueConstraint, and_, exists, func, or_, select, union, update
 from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -73,6 +73,35 @@ class User(Base):
     # 最後に確認した asobby クライアント版 (X-Asobby-Client-Version)
     client_version: Mapped[str] = mapped_column(String(32), default="", nullable=False)
     settings: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # Discord display name stays in `name`; never overwrite it with a player name.
+    discord_username: Mapped[str] = mapped_column(String(100), default="", nullable=False)
+    player_name: Mapped[str] = mapped_column(String(24), default="", nullable=False)
+    main_character: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True, index=True)
+    strong_character: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True, index=True)
+    weak_character: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True, index=True)
+    use_player_name: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    birth_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    birth_visibility: Mapped[str] = mapped_column(String(16), default="secret", nullable=False)
+    country_code: Mapped[str] = mapped_column(String(2), default="", nullable=False, index=True)
+    device_type: Mapped[str] = mapped_column(String(16), default="", nullable=False, index=True)
+    device_model: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    device_model_search: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    character_winrates_public: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class PlayerProfileTag(Base):
+    """Multiple free-text favourite players and games."""
+    __tablename__ = "player_profile_tags"
+    __table_args__ = (Index("ix_profile_tag_kind_user", "kind", "user_id"),)
+
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(24), primary_key=True)
+    value: Mapped[str] = mapped_column(String(120), primary_key=True)
+    search_value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+def lobby_display_name(user: User) -> str:
+    return user.player_name if user.use_player_name and user.player_name else user.name
 
 
 PH_CHAR_IDS: tuple[int, ...] = tuple(range(21))  # 0–19 + Random (20)
@@ -340,7 +369,7 @@ def _ipv4_or_empty(ip: str) -> str:
 
 
 async def upsert_user_on_login(
-    user_id: str, name: str, ip: str, avatar: str = ""
+    user_id: str, name: str, ip: str, avatar: str = "", discord_username: str = ""
 ) -> User:
     """ログイン完了時のユーザー登録/更新。IP が変わっていれば更新する。"""
     ip = _ipv4_or_empty(ip)
@@ -351,6 +380,7 @@ async def upsert_user_on_login(
             user = User(
                 id=user_id,
                 name=name,
+                discord_username=discord_username,
                 avatar=avatar,
                 token_version=1,
                 last_ip=ip,
@@ -361,6 +391,8 @@ async def upsert_user_on_login(
             s.add(user)
         else:
             user.name = name
+            if discord_username:
+                user.discord_username = discord_username
             user.avatar = avatar
             if ip and user.last_ip != ip:
                 user.last_ip = ip

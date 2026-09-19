@@ -61,6 +61,16 @@ const { chromium } = require(process.argv[2] || "playwright");
     // A normal client-backed post still gets its message action.
     await page.evaluate(p => window.mockSse.handlers.upsert({ data: JSON.stringify(p) }), { ...post, supports_messages: true, giuroll: false });
     assert.equal(await row.locator(".msg-btn").count(), 1);
+    await page.evaluate(p => window.mockSse.handlers.upsert({ data: JSON.stringify(p) }), {
+      ...post, owner_profile_url: "/players/123", guest_user_id: "456", guest_name: "Guest",
+    });
+    assert.equal(await row.locator('a[href="/players/123"]').innerText(), post.owner_name);
+    assert.equal(await row.locator('a[href="/players/456"]').innerText(), "Guest");
+    assert.equal(await row.locator(".user-cell img").count(), 0);
+    await page.evaluate(p => window.mockSse.handlers.upsert({ data: JSON.stringify(p) }), {
+      ...post, owner_profile_url: "javascript:alert(1)",
+    });
+    assert.equal(await row.locator(".user-cell a").count(), 0);
     await page.evaluate(() => window.mockSse.handlers.close({ data: JSON.stringify({ id: "udp" }) }));
     assert.equal(await row.count(), 0);
     // Same normal rank, different evidence: both lobby tables and languages.

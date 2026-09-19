@@ -42,6 +42,7 @@ from sqlalchemy import select
 
 import db
 import match_identity
+import player_profiles
 import geoip
 import post_redis
 import client_release
@@ -486,12 +487,13 @@ def _apply_guest_identity(rec: PostRecord, user: db.User) -> bool:
         rec.guest_user_id == user.id
         and rec.guest_rank == user.rank
         and post.guest_user_id == user.id
+        and post.guest_name == db.lobby_display_name(user)
     ):
         return False
     rec.guest_user_id = user.id
     rec.guest_rank = user.rank
     post.guest_user_id = user.id
-    post.guest_name = user.name
+    post.guest_name = db.lobby_display_name(user)
     post.guest_avatar = discord_avatar_url(user.id, user.avatar)
     return True
 
@@ -930,7 +932,8 @@ class Post:
     reachability_lost: bool = False  # 募集中の再検証に連続失敗 (⚠ 現在凸れない可能性)
     match_status: str = ""
     net_status: int = 0
-    owner_name: str = ""  # Discord ログイン時の表示名（未ログインなら空）
+    owner_name: str = ""  # Discord 表示名、または本人が選択したプレイヤーネーム
+    owner_profile_url: str = ""  # OAuth 確認済みの asobby ユーザーページのみ
     owner_avatar: str = ""
     guest_name: str = ""  # 対戦中ゲストが Discord ログイン済みなら表示名
     guest_avatar: str = ""
@@ -1386,6 +1389,7 @@ async def resolve_session(request: Request) -> Optional[dict[str, Any]]:
     return {
         "id": user.id,
         "name": user.name,
+        "lobby_name": db.lobby_display_name(user),
         "avatar": discord_avatar_url(user.id, user.avatar),
         "rank": user.rank,
         "rating": rating,
@@ -1558,6 +1562,10 @@ async def _hydrate_records_from_redis() -> None:
             continue
         if rec.monitor is None and rec.owner_user_id and db.is_configured():
             apply_post_rank(rec, await host_rank_for_post(rec.owner_user_id))
+            owner = await db.get_user(rec.owner_user_id)
+            if owner is not None:
+                rec.post.owner_name = db.lobby_display_name(owner)
+                rec.post.owner_profile_url = f"/players/{quote(owner.id, safe='')}"
         RECORDS[rec.post.id] = rec
         restored += 1
         # 対戦中の再起動では「対戦開始」のエッジ検知 (entering_battle) が
@@ -2068,6 +2076,32 @@ async def guide_page() -> FileResponse:
 @app.get("/settings")
 async def settings_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "settings.html")
+
+
+@app.get("/players")
+@app.get("/players/{user_id}")
+@app.get("/profile")
+async def players_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "players.html")
+
+
+async def refresh_profile_names(user: db.User) -> None:
+    """Persist and broadcast name changes, including already active listings."""
+    for rec in list(RECORDS.values()):
+        changed = False
+        if rec.monitor is None and rec.owner_user_id == user.id:
+            rec.post.owner_name = db.lobby_display_name(user)
+            rec.post.owner_profile_url = f"/players/{quote(user.id, safe='')}"
+            changed = True
+        if rec.post.guest_user_id == user.id:
+            rec.post.guest_name = db.lobby_display_name(user)
+            changed = True
+        if changed:
+            await _persist_record(rec)
+            await HUB.publish("upsert", asdict(rec.post))
+
+
+app.include_router(player_profiles.build_router(resolve_session, refresh_profile_names))
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -3481,7 +3515,8 @@ async def auth_discord_callback(
     if is_web:
         _, next_path = WEB_LOGINS.pop(state, (0.0, "/"))
         user_row = await db.upsert_user_on_login(
-            user["id"], user["name"], ip=client_ip(request), avatar=avatar
+            user["id"], user["name"], ip=client_ip(request), avatar=avatar,
+            discord_username=str(me.get("username") or ""),
         )
         token = make_session_token(user, user_row.token_version)
         response = RedirectResponse(next_path or "/", status_code=302)
@@ -3499,7 +3534,8 @@ async def auth_discord_callback(
     # デバイスコードフロー: users テーブルに upsert。IP はブラウザ経由の
     # 可能性があるため、クライアント本体からのポーリング時に更新する。
     user_row = await db.upsert_user_on_login(
-        user["id"], user["name"], ip="", avatar=avatar
+        user["id"], user["name"], ip="", avatar=avatar,
+        discord_username=str(me.get("username") or ""),
     )
 
     login.user = user
@@ -3918,7 +3954,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
     if sess is None:
         raise HTTPException(status_code=401, detail="discord login required")
 
-    owner_name = sess["name"]
+    owner_name = sess.get("lobby_name", sess["name"])
     owner_avatar = sess["avatar"]
     owner_user_id = sess["id"]
 
@@ -3974,6 +4010,7 @@ async def create_post(body: CreatePostIn, request: Request) -> dict[str, Any]:
         ping_warn_ms=body.ping_warn_ms,
         ping_warn_giuroll_ms=body.ping_warn_giuroll_ms,
         owner_name=owner_name,
+        owner_profile_url=f"/players/{quote(owner_user_id, safe='')}",
         owner_avatar=owner_avatar,
         updated_at=now,
         created_at=now,

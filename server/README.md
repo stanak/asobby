@@ -5,6 +5,9 @@ FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧�
 戦績の共有試合ID・時計ずれ対策・保留報告・既存データの監査は
 [戦績の同一試合判定](docs/match-identity.md)を参照。
 
+ユーザーページ `/players/{id}`、プロフィール編集 `/profile`、検索 `/players` の
+公開範囲・入力制約・APIは[プレイヤープロフィール](docs/player-profiles.md)を参照。
+
 ## 外部連携（募集・チャット API・Webhook）
 
 管理者が `/admin` の「外部連携」から登録します。特定の Bot やサービスには依存せず、
@@ -190,7 +193,7 @@ Draft 2020-12。IP 提供あり・なしの両方を表現するため、`addr` 
 それ以外 → `unknown`。`guest_name` や `match_status` の空・非空から状態を推測しない。
 
 一覧 API はこのスキーマにあるフィールドだけを返す。特に `net_status`、`updated_at`、
-`owner_avatar`、`guest_avatar`、`guest_user_id`、`guest_connected`、`supports_messages`、
+`owner_avatar`、`owner_profile_url`、`guest_avatar`、`guest_user_id`、`guest_connected`、`supports_messages`、
 `ping_warn_enabled`、`ping_warn_ms`、`ping_warn_giuroll_ms` は返さない。
 `owner_token`、内部監視情報、受信メッセージ、API キーも含めない。
 
@@ -821,6 +824,7 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
     "owner_name": "プレイヤー",
     "discord_user_id": "123456789012345678",
     "discord_user_id_source": "integration",
+    "owner_profile_url": "",
     "owner_avatar": "",
     "guest_name": "",
     "guest_avatar": "",
@@ -837,10 +841,10 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
 }
 ```
 
-`post` は公開用 `Post` の31フィールドに Discord ID 関連の2フィールドを加えたもので、
+`post` は公開用 `Post` の32フィールドに Discord ID 関連の2フィールドを加えたもので、
 **一覧 API の `posts[]` と同じスキーマではない**。
 共通22フィールドの型は一覧 API と同じだが、合成フィールド `status` は存在しない。
-代わりに、一覧 API では常に除外される以下の10フィールドと、常に存在する `addr` がある。
+代わりに、一覧 API では常に除外される以下の11フィールドと、常に存在する `addr` がある。
 
 | フィールド | 型 | 登録結果での内容 |
 | --- | --- | --- |
@@ -848,6 +852,7 @@ dpalette の汎用 Webhook は受信用 URL のトークンで保護される。
 | `updated_at` | number | Unix 時刻（秒、小数可）。登録時または募集内容が変化した時刻で、毎回の UDP 確認時刻ではない |
 | `net_status` | integer | UDP 監視では `0` 不明 / `2` 接続中 / `3` 待機相当。試合中を確定できないので `4` は設定しない |
 | `owner_avatar` | string | API 登録では `""` |
+| `owner_profile_url` | string | 本人確認済み asobby ユーザーへの相対URL。API 登録では `""` |
 | `guest_avatar` | string | API 登録では `""` |
 | `guest_user_id` | string | API 登録では `""`。既存アカウントに推測で紐付けない |
 | `guest_connected` | boolean | UDP の応答から接続中と判定したか。対戦相手の同定済みとは限らない |
@@ -1096,7 +1101,7 @@ DATABASE_URL=... ../bin/alembic revision --autogenerate -m "add xxx"
 ## Discord ログイン（募集投稿に必須）
 
 募集の投稿には Discord ログインが必須（対戦相手の同定のため）。
-ログインすると投稿に Discord の表示名（`owner_name`）が載り、
+ログインすると投稿に Discord の表示名（`owner_name`、プロフィールで選択した場合はプレイヤーネーム）が載り、
 ロビーの User 列に表示される。
 
 **ロビーの募集一覧閲覧（`GET /posts`, `GET /sse/posts`）は Discord ログイン必須。**

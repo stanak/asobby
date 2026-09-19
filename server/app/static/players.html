@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="same-origin">
+  <title>asobby - プレイヤー</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/players.css?v=1">
+  <script src="/static/i18n.js?v=profiles-1"></script>
+  <script src="/static/players.js?v=1" defer></script>
+</head>
+<body>
+  <header>
+    <a href="/" class="logo" aria-label="asobby"><img src="/static/logo-header.png" alt="asobby" width="170" height="56"></a>
+    <nav aria-label="Navigation">
+      <a href="/" data-i18n="nav.lobby">ロビー</a>
+      <a href="/players" data-i18n="nav.players">プレイヤー検索</a>
+      <a href="/stats" data-i18n="nav.stats">戦績</a>
+      <a href="/profile" data-i18n="nav.profile">プロフィール編集</a>
+      <a href="/settings" data-i18n="nav.settings">設定</a>
+      <button type="button" id="lang-toggle"></button>
+    </nav>
+  </header>
+  <main id="app" aria-busy="true">
+    <p id="status" role="status" aria-live="polite" data-i18n="common.loading">読み込み中...</p>
+    <section id="gate" class="panel" hidden>
+      <h1 data-i18n="players.loginHint">プロフィールの閲覧・検索・編集にはDiscordログインが必要です。</h1>
+      <a id="login" class="button primary" data-i18n="players.login">Discordでログイン</a>
+    </section>
+    <div id="content"></div>
+  </main>
+</body>
+</html>
