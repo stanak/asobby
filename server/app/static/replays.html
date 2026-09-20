@@ -335,6 +335,7 @@ const CHAR_NAME = {
   5: "Youmu", 6: "Remilia", 7: "Yuyuko", 8: "Yukari", 9: "Suica",
   10: "Reisen", 11: "Aya", 12: "Komachi", 13: "Iku", 14: "Tenshi",
   15: "Sanae", 16: "Cirno", 17: "Meiling", 18: "Utsuho", 19: "Suwako",
+  20: "Random",
 };
 
 const RANK_LABEL = {
@@ -364,7 +365,7 @@ function fillCharSelect(sel) {
   empty.value = "";
   empty.textContent = t("common.unspecified");
   sel.appendChild(empty);
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 21; i++) {
     const opt = document.createElement("option");
     opt.value = String(i);
     opt.textContent = CHAR_NAME[i] || String(i);
@@ -460,9 +461,10 @@ async function downloadReplayBlob(matchId, fallbackName, linkEl) {
   }
 }
 
-function playerSideLabel(name, profile, rank, rating, charId) {
+function playerSideLabel(name, profile, rank, rating, charId, actualCharId) {
   const player = playerLabel(name, profile, rank, rating);
-  const chr = charName(charId);
+  const chr = charName(charId) + (charId === 20 && actualCharId != null && actualCharId !== 20
+    ? " (" + charName(actualCharId) + ")" : "");
   if (chr === "-") return player;
   return player + " / " + chr;
 }
@@ -473,14 +475,14 @@ function renderRow(r) {
 
   const hostTd = document.createElement("td");
   hostTd.textContent = playerSideLabel(
-    r.host_name, r.host_profile, r.host_rank, r.host_rating, r.host_char
+    r.host_name, r.host_profile, r.host_rank, r.host_rating, r.host_char, r.host_actual_char
   );
   if (r.winner === "host") hostTd.className = "winner";
   tr.appendChild(hostTd);
 
   const guestTd = document.createElement("td");
   guestTd.textContent = playerSideLabel(
-    r.guest_name, r.guest_profile, r.guest_rank, r.guest_rating, r.guest_char
+    r.guest_name, r.guest_profile, r.guest_rank, r.guest_rating, r.guest_char, r.guest_actual_char
   );
   if (r.winner === "guest") guestTd.className = "winner";
   tr.appendChild(guestTd);

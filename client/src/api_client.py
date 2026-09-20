@@ -22,15 +22,19 @@ class ApiClient:
         self.base = base.rstrip("/")
         self.session_token: str = ""  # Discord ログイン時のセッション（任意）
         self._match_protocol_version = 0
+        self._random_selection_supported = False
 
-    async def _require_match_identity(self) -> None:
-        if self._match_protocol_version >= 2:
+    async def _require_match_identity(self, *, random_selection: bool = False) -> None:
+        if self._match_protocol_version >= 2 and (not random_selection or self._random_selection_supported):
             return
         r = await self.http.get(f"{self.base}/matches/protocol", headers=self._request_headers())
         r.raise_for_status()
         self._match_protocol_version = int(r.json().get("report_version", 0))
+        self._random_selection_supported = r.json().get("random_selection") is True
         if self._match_protocol_version < 2:
             raise httpx.RequestError("Server update required for safe match reporting", request=r.request)
+        if random_selection and not self._random_selection_supported:
+            raise httpx.RequestError("Server update required for Random selection reporting", request=r.request)
 
     def _request_headers(self) -> dict:
         headers = {"X-Asobby-Client-Version": __version__}
@@ -127,9 +131,11 @@ class ApiClient:
         client_id: str = "",
         match_id: str = "",
         duration_sec: float | None = None,
+        host_random: bool | None = None,
+        guest_random: bool | None = None,
     ) -> dict:
         if report_version == 2:
-            await self._require_match_identity()
+            await self._require_match_identity(random_selection=host_random is not None or guest_random is not None)
         payload: dict = {
             "id": post_id,
             "owner_token": owner_token,
@@ -141,6 +147,7 @@ class ApiClient:
             "played_at": played_at,
             "report_version": report_version, "client_id": client_id,
             "match_id": match_id, "duration_sec": duration_sec,
+            "host_random": host_random, "guest_random": guest_random,
         }
         if host_wins is not None and guest_wins is not None:
             payload["host_wins"] = host_wins
@@ -167,9 +174,11 @@ class ApiClient:
         client_id: str = "",
         match_id: str = "",
         duration_sec: float | None = None,
+        host_random: bool | None = None,
+        guest_random: bool | None = None,
     ) -> dict:
         if report_version == 2:
-            await self._require_match_identity()
+            await self._require_match_identity(random_selection=host_random is not None or guest_random is not None)
         payload: dict = {
             "winner": winner,
             "host_char": host_char,
@@ -179,6 +188,7 @@ class ApiClient:
             "played_at": played_at,
             "report_version": report_version, "client_id": client_id,
             "match_id": match_id, "duration_sec": duration_sec,
+            "host_random": host_random, "guest_random": guest_random,
         }
         if host_wins is not None and guest_wins is not None:
             payload["host_wins"] = host_wins
@@ -317,7 +327,8 @@ class ApiClient:
     async def sync_matches(self, matches: list[dict]) -> dict:
         """未送信のローカル戦績をサーバーへ同期する。"""
         if any(row.get("report_version") == 2 for row in matches):
-            await self._require_match_identity()
+            await self._require_match_identity(random_selection=any(
+                row.get(f"{side}_random") is not None for row in matches for side in ("host", "guest")))
         r = await self.http.post(
             f"{self.base}/matches/sync",
             json={"matches": matches},

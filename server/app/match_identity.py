@@ -20,6 +20,20 @@ START_JOIN_SECONDS = 3
 CORE_FIELDS = ("winner", "host_char", "guest_char", "host_profile", "guest_profile", "host_wins", "guest_wins")
 
 
+def random_choice(reports: list[db.MatchReport], side: str) -> bool | None:
+    """Prefer the participant's own observation; old clients omit this field.
+
+    These flags are NOT result identity fields: actual fighters still must
+    agree. Use the first persisted report, never a retry's changed selection.
+    """
+    own = next((r for r in reports if r.side == side), None)
+    if own is not None and type(own.payload.get(f"{side}_random")) is bool:
+        return own.payload[f"{side}_random"]
+    values = {r.payload[f"{side}_random"] for r in reports
+              if type(r.payload.get(f"{side}_random")) is bool}
+    return values.pop() if len(values) == 1 else None
+
+
 def utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
@@ -240,8 +254,16 @@ async def submit(*, user_id: str, client_id: str, match_id: str, side: str, payl
                     count += 1
                     last = utc(m.played_at)
             ranked = count < ranked_limit
+        host_random, guest_random = (random_choice(reports, side) for side in ("host", "guest"))
+        host_actual, guest_actual = payload.get("host_char"), payload.get("guest_char")
+        # An observed Random selection is meaningful only with a real fighter.
+        host_random = host_random if type(host_actual) is int and 0 <= host_actual < 20 else None
+        guest_random = guest_random if type(guest_actual) is int and 0 <= guest_actual < 20 else None
         match = db.Match(id=ticket.match_id, host_user_id=host_id, guest_user_id=guest_id,
-            winner=payload["winner"], host_char=payload.get("host_char"), guest_char=payload.get("guest_char"),
+            winner=payload["winner"], host_char=20 if host_random else host_actual,
+            guest_char=20 if guest_random else guest_actual,
+            host_actual_char=host_actual, guest_actual_char=guest_actual,
+            host_random=host_random, guest_random=guest_random,
             host_profile=ticket.host_profile, guest_profile=ticket.guest_profile,
             host_wins=payload.get("host_wins"), guest_wins=payload.get("guest_wins"),
             ranked=ranked, match_rank=rank if ranked else None,

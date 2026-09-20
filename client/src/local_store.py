@@ -85,6 +85,11 @@ class LocalStore:
         for name, kind in (("battle_id", "TEXT"), ("duration_sec", "REAL"), ("report_version", "INTEGER NOT NULL DEFAULT 1"), ("report_status", "TEXT NOT NULL DEFAULT ''")):
             if name not in columns:
                 conn.execute(f"ALTER TABLE matches ADD COLUMN {name} {kind}")
+        for side in ("host", "guest"):
+            for field in ("actual_char", "random"):
+                name = f"{side}_{field}"
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE matches ADD COLUMN {name} INTEGER")
         conn.execute("UPDATE matches SET my_side = 'client' WHERE my_side = 'guest'")
 
     @staticmethod
@@ -109,6 +114,8 @@ class LocalStore:
         match_id: str = "",
         duration_sec: float | None = None,
         report_version: int = 1,
+        host_random: bool | None = None,
+        guest_random: bool | None = None,
     ) -> str:
         """ローカル対戦を記録する。戻り値は生成した id (重複時は既存 id)。"""
         if played_at is None:
@@ -140,8 +147,8 @@ class LocalStore:
                     played_at,
                     my_side,
                     winner,
-                    host_char,
-                    guest_char,
+                    20 if host_random is True else host_char,
+                    20 if guest_random is True else guest_char,
                     host_profile or "",
                     guest_profile or "",
                     0 if report_version == 2 else ranked,
@@ -152,6 +159,8 @@ class LocalStore:
             )
             conn.execute("UPDATE matches SET battle_id = ?, duration_sec = ?, report_version = ? WHERE id = ?",
                          (match_id or None, duration_sec, report_version, local_id))
+            conn.execute("UPDATE matches SET host_actual_char = ?, guest_actual_char = ?, host_random = ?, guest_random = ? WHERE id = ?",
+                         (host_char, guest_char, host_random, guest_random, local_id))
         return local_id
 
     def _find_recent_duplicate(
@@ -255,6 +264,7 @@ class LocalStore:
                             server_id,
                         ),
                     )
+                    self._merge_character_metadata(conn, row, existing)
                     continue
 
                 if row.get("report_version") == 2:
@@ -324,6 +334,7 @@ class LocalStore:
                             local_match["id"],
                         ),
                     )
+                    self._merge_character_metadata(conn, row, local_match)
                     continue
 
                 if row.get("report_version") == 2:
@@ -384,8 +395,24 @@ class LocalStore:
                 )
                 if row.get("report_version") == 2:
                     conn.execute("UPDATE matches SET report_version = 2, battle_id = ?, report_status = 'confirmed' WHERE server_id = ?", (server_id, server_id))
+                self._merge_character_metadata(conn, row, None)
                 inserted += 1
         return inserted
+
+    @staticmethod
+    def _merge_character_metadata(conn: sqlite3.Connection, row: dict, existing: sqlite3.Row | None) -> None:
+        for side in ("host", "guest"):
+            selected = row.get(f"{side}_char")
+            actual_key, random_key = f"{side}_actual_char", f"{side}_random"
+            actual = row.get(actual_key, existing[actual_key] if existing is not None else None)
+            random = row.get(random_key, existing[random_key] if existing is not None else None)
+            # A server predating this feature omits metadata. Do not erase local
+            # evidence on a pull of the same resolved fighter. A feature-aware
+            # server's explicit null/false, however, is authoritative.
+            if random_key not in row and random and selected == actual:
+                selected = 20
+            conn.execute(f"UPDATE matches SET {side}_char = ?, {actual_key} = ?, {random_key} = ? WHERE server_id = ?",
+                         (selected, actual, random, str(row["id"])))
 
     def fetch_unpushed(self, min_age_sec: float = 0) -> list[dict]:
         """未送信のローカル戦績を返す。

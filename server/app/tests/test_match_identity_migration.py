@@ -19,6 +19,7 @@ def test_identity_migration_does_not_rewrite_existing_matches(tmp_path, monkeypa
         conn.execute("INSERT INTO users (id, created_at) VALUES ('u', '2026-09-01 00:00:00')")
         conn.execute("INSERT INTO matches (id, host_user_id, winner, played_at, created_at) VALUES ('m', 'u', 'host', '2026-09-19 04:36:29', '2026-09-19 04:42:57')")
         before = conn.execute("SELECT * FROM matches").fetchall()
+        old_columns = ", ".join(row[1] for row in conn.execute("PRAGMA table_info(matches)"))
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{path}")
     exported = asyncio.run(audit("u", datetime(2026, 9, 19, tzinfo=timezone.utc), datetime(2026, 9, 20, tzinfo=timezone.utc)))
     assert exported["read_only"] and not exported["report_table_present"]
@@ -26,7 +27,7 @@ def test_identity_migration_does_not_rewrite_existing_matches(tmp_path, monkeypa
     command.upgrade(config, "head")
     command.upgrade(config, "head")
     with sqlite3.connect(path) as conn:
-        assert conn.execute("SELECT * FROM matches").fetchall() == before
+        assert conn.execute(f"SELECT {old_columns} FROM matches").fetchall() == before
         assert conn.execute("SELECT COUNT(*) FROM battle_tickets").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM match_reports").fetchone()[0] == 0
         indexes = conn.execute("PRAGMA index_list(battle_tickets)").fetchall()

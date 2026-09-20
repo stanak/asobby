@@ -32,6 +32,7 @@ CHAR_NAME: dict[int, str] = {
     17: "Meiling",
     18: "Utsuho",
     19: "Suwako",
+    20: "Random",
 }
 
 _ALL_IID = "__all__"

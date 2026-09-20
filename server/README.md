@@ -1152,6 +1152,10 @@ Web ページのログインはクッキーセッション（`asobby_session`、
 
 ### 戦績
 
+ランダム選択を観測した試合は戦績・統計・PhレートでRandom枠を使い、実キャラは
+照合・リプレイ検索用に別途保持する。新旧互換API・DB移行0020・検出条件の詳細は
+[ランダム選択の記録仕様](docs/random-selection.md)を参照。
+
 KO 報告 (`POST /posts/result`) には使用キャラとプロファイル名も含まれる。
 ホスト非導入時はゲスト報告 (`POST /matches/report`) でも戦績が残るが、
 `ranked=False` でランク評価・TrueSkill 更新の対象外となる。

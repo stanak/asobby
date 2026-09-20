@@ -54,6 +54,19 @@ async def get(client, query=""):
     return result.json()
 
 
+@pytest.mark.asyncio
+async def test_random_selection_is_counted_only_in_random_cohort(client):
+    async with db.session() as s, s.begin():
+        for i in range(5):
+            match = await s.get(db.Match, f"ranked{i}")
+            match.host_char, match.host_actual_char, match.host_random = 20, 0, True
+    data = await get(client, "character=20&match_type=ranked")
+    assert data["total_players"] == data["characters"][20]["games"] == 5
+    assert data["characters"][20]["wins"] == 4 and data["characters"][20]["draws"] == 1
+    assert data["characters"][0]["games"] == 0
+    assert (await get(client, "character=0&match_type=ranked"))["suppressed"] is True
+
+
 def counts(data, field):
     return {row["key"]: row["count"] for row in data["distributions"][field]}
 

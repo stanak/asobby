@@ -37,7 +37,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 from sqlalchemy import select
 
 import db
@@ -1105,6 +1105,15 @@ class ResultIdentityIn(BaseModel):
     client_id: str = Field(default="", pattern=r"^(?:[0-9a-f]{32})?$")
     match_id: str = Field(default="", pattern=r"^(?:[0-9a-f]{32})?$")
     duration_sec: Optional[float] = Field(default=None, ge=0, le=7200, allow_inf_nan=False)
+    # Input char IDs stay resolved fighters for backwards-compatible matching.
+    host_random: Optional[StrictBool] = None
+    guest_random: Optional[StrictBool] = None
+
+    @model_validator(mode="after")
+    def validate_random_protocol(self):
+        if self.report_version != 2 and (self.host_random is not None or self.guest_random is not None):
+            raise ValueError("Random selection requires report_version=2")
+        return self
 
 
 class ReportResultIn(ResultIdentityIn):
@@ -2723,10 +2732,21 @@ async def _legacy_clock_guard(user_id: str, side: str, payload: dict, *, live: b
             ).limit(3))).all())
         if candidates:
             compatible = [m for m in candidates if abs((match_identity.utc(m.played_at) - reported_at).total_seconds()) <= db.MATCH_DEDUP_WINDOW_SEC
-                          and all(getattr(m, k) == payload.get(k) for k in ("winner", "host_char", "guest_char"))]
+                          and m.winner == payload.get("winner")
+                          and all(_actual_character(m, side) == payload.get(f"{side}_char") for side in ("host", "guest"))]
             if len(compatible) != 1:
                 return await match_identity.quarantine(user_id, side, payload, "legacy_ambiguous_match", client_id)
     return None
+
+
+def _actual_character(match: db.Match, side: str) -> Optional[int]:
+    actual = getattr(match, f"{side}_actual_char", None)
+    return actual if actual is not None else getattr(match, f"{side}_char")
+
+
+def _match_character_metadata(match: db.Match) -> dict[str, Any]:
+    return {f"{side}_{field}": getattr(match, f"{side}_{field}", None)
+            for side in ("host", "guest") for field in ("actual_char", "random")}
 
 
 def _match_to_stats_item(match: db.Match, user_id: str, has_replay: bool) -> dict[str, Any]:
@@ -2738,6 +2758,7 @@ def _match_to_stats_item(match: db.Match, user_id: str, has_replay: bool) -> dic
         "winner": match.winner,
         "host_char": match.host_char,
         "guest_char": match.guest_char,
+        **_match_character_metadata(match),
         "host_profile": match.host_profile or "",
         "guest_profile": match.guest_profile or "",
         "ranked": match.ranked,
@@ -2821,6 +2842,7 @@ def _replay_search_item(
         "winner": match.winner,
         "host_char": match.host_char,
         "guest_char": match.guest_char,
+        **_match_character_metadata(match),
         "host_profile": match.host_profile or "",
         "guest_profile": match.guest_profile or "",
         "host_name": host_user.name if host_user else None,
@@ -2924,8 +2946,8 @@ async def replays_page() -> FileResponse:
 @app.get("/replays/search")
 async def search_replays(
     player: str = "",
-    char1: Optional[int] = Query(None, ge=0, le=19),
-    char2: Optional[int] = Query(None, ge=0, le=19),
+    char1: Optional[int] = Query(None, ge=0, le=20),
+    char2: Optional[int] = Query(None, ge=0, le=20),
     date_from: str = "",
     date_to: str = "",
     sort: Literal["date", "rank"] = "date",
@@ -2937,8 +2959,7 @@ async def search_replays(
     if not db.is_configured():
         return {"ok": True, "total": 0, "replays": []}
 
-    norm_char1 = _normalize_char(char1)
-    norm_char2 = _normalize_char(char2)
+    norm_char1, norm_char2 = char1, char2  # Query-validated; 20 searches Random selections.
     dt_from = _parse_jst_date_start(date_from) if date_from.strip() else None
     dt_to = _parse_jst_date_end(date_to) if date_to.strip() else None
     player_q = player.strip()
@@ -3056,6 +3077,7 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
                     "duration_sec": item.duration_sec,
                     "host_char": item.my_char if host_side else item.opp_char,
                     "guest_char": item.opp_char if host_side else item.my_char,
+                    "host_random": item.host_random, "guest_random": item.guest_random,
                     "host_profile": item.my_profile if host_side else item.opp_profile,
                     "guest_profile": item.opp_profile if host_side else item.my_profile,
                     "host_wins": item.host_wins, "guest_wins": item.guest_wins,
@@ -3246,7 +3268,7 @@ async def sync_matches(body: SyncMatchesIn, request: Request) -> dict[str, Any]:
 
 @app.get("/matches/protocol")
 async def match_protocol() -> dict:
-    return {"report_version": 2}
+    return {"report_version": 2, "random_selection": True}
 
 
 @app.get("/matches/reports")
@@ -4372,8 +4394,8 @@ def build_replay_filename(match: db.Match) -> str:
     """リプレイファイル名を生成する。"""
     played = match.played_at or db.utcnow()
     ts = played.astimezone(JST).strftime("%Y%m%d%H%M%S")
-    host_char = _char_label(match.host_char)
-    guest_char = _char_label(match.guest_char)
+    host_char = _char_label(_actual_character(match, "host"))
+    guest_char = _char_label(_actual_character(match, "guest"))
     host_profile = _sanitize_profile_for_filename(match.host_profile)
     guest_profile = _sanitize_profile_for_filename(match.guest_profile)
     if match.winner == "host":

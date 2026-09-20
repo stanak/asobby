@@ -7,6 +7,15 @@ Mode = Literal["idle", "host_wait", "charsel", "loading", "battle", "other"]
 
 
 @dataclass(frozen=True)
+class CharacterSelection:
+    scene_address: int
+    left_stage: int
+    right_stage: int
+    left_char: int
+    right_char: int
+
+
+@dataclass(frozen=True)
 class DetectionState:
     alive: bool
     mode: Mode
@@ -53,3 +62,6 @@ class DetectionState:
 
     # server チェーン周辺のメモリダンプ (異常時と host_wait 時のみ)
     dump: str = ""
+
+    process_id: Optional[int] = None
+    character_selection: Optional[CharacterSelection] = None

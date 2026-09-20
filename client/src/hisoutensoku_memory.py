@@ -8,7 +8,7 @@ import ntpath
 import os
 import time
 
-from detect_api import DetectionState
+from detect_api import CharacterSelection, DetectionState
 from profile_gating import gate_profiles_for_scene
 
 import logging
@@ -36,6 +36,8 @@ TH32CS_SNAPPROCESS = 0x00000002
 PNETOBJECT = 0x008986A0
 COMMMODE = 0x00898690
 SCENEID = 0x008A0044
+PCURRENTSCENE = 0x008A000C
+SELECT_STAGES_OFF = 0x22C0  # SokuLib::Select left/rightSelectionStage
 
 # COMMMODE の値 (天則観 SWRSAddrDef.h 準拠)
 COMM_SERVER = 4
@@ -133,6 +135,30 @@ def _char_name(cid: Optional[int]) -> str:
     if cid is None:
         return "?"
     return CHAR_NAME.get(cid, f"CHAR_{cid}")
+
+
+def _read_character_selection(h: wt.HANDLE, scene_id: Optional[int]) -> Optional[CharacterSelection]:
+    """Read only the Select scene; never interpret a Battle object as Select.
+
+    SokuLib Scenes.hpp: currentScene=0x8A000C, stages at Select+0x22C0.
+    InfiniteDecks/selectProcessCommon observes stage 3 on BOTH sides before
+    random IDs resolve during the transition to Loading. RandomDeck is a deck
+    choice flag, not reliable evidence of a Random character, so do not use it.
+    """
+    if scene_id not in NET_CHARSEL_SCENES:
+        return None
+    scene = _read_u32le(h, PCURRENTSCENE)
+    if not scene:
+        return None
+    stages = _read_bytes(h, scene + SELECT_STAGES_OFF, 2)
+    left, right = _read_u32le(h, LCHARID), _read_u32le(h, RCHARID)
+    if (not stages or len(stages) != 2 or any(stage > 3 for stage in stages)
+            or left not in CHAR_NAME or right not in CHAR_NAME
+            or stages != _read_bytes(h, scene + SELECT_STAGES_OFF, 2)
+            or scene != _read_u32le(h, PCURRENTSCENE)
+            or scene_id != _read_u32le(h, SCENEID)):
+        return None
+    return CharacterSelection(scene, stages[0], stages[1], left, right)
 
 
 MEM_COMMIT = 0x1000
@@ -860,6 +886,8 @@ def read_detection_state() -> DetectionState:
             raw=raw,
             modules=modules,
             dump=dump,
+            process_id=pid,
+            character_selection=_read_character_selection(h, scene_id),
         )
     finally:
         kernel32.CloseHandle(h)

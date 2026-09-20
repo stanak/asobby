@@ -230,6 +230,12 @@ class Match(Base):
     winner: Mapped[str] = mapped_column(String(8), default="")
     host_char: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
     guest_char: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    # Recorded choice (above) may be Random=20; retain the resolved fighter for
+    # result verification/replay search. NULL metadata means unobserved/legacy.
+    host_actual_char: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    guest_actual_char: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    host_random: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    guest_random: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     host_profile: Mapped[str] = mapped_column(String(64), default="")
     guest_profile: Mapped[str] = mapped_column(String(64), default="")
     ranked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -1508,16 +1514,23 @@ async def search_replay_matches(
         )
 
     if char1 is not None:
+        # Normal-character searches use the fighter actually in the replay;
+        # Random searches use the player's recorded selection.
+        def character_condition(side: str, char: int):
+            selected = getattr(Match, f"{side}_char")
+            actual = getattr(Match, f"{side}_actual_char")
+            return (selected if char == 20 else func.coalesce(actual, selected)) == char
+
         if char2 is not None:
             q = q.where(
                 or_(
-                    and_(Match.host_char == char1, Match.guest_char == char2),
-                    and_(Match.host_char == char2, Match.guest_char == char1),
+                    and_(character_condition("host", char1), character_condition("guest", char2)),
+                    and_(character_condition("host", char2), character_condition("guest", char1)),
                 )
             )
         else:
             q = q.where(
-                or_(Match.host_char == char1, Match.guest_char == char1)
+                or_(character_condition("host", char1), character_condition("guest", char1))
             )
 
     if date_from is not None:

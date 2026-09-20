@@ -10,7 +10,7 @@ if sys.platform != "win32":
     pytest.skip("controller imports Win32 memory bindings", allow_module_level=True)
 
 import controller
-from detect_api import DetectionState
+from detect_api import CharacterSelection, DetectionState
 
 
 @pytest.mark.asyncio
@@ -24,6 +24,8 @@ async def test_detector_keeps_id_through_rollback_and_rotates_only_for_next_game
     for name in ("_round_battle_engaged", "_close_pending", "_result_reported", "_replay_pending", "_battle_presence_announced"):
         setattr(ctrl, name, False)
     ctrl._round_char_ids = (None, None)
+    ctrl._random_selection = controller.RandomSelectionTracker()
+    ctrl._battle_random_choices = (None, None)
     ctrl._last_ko_fingerprint = ""
     ctrl._pending_local_match = None
     ctrl._battle_identity = None
@@ -38,11 +40,12 @@ async def test_detector_keeps_id_through_rollback_and_rotates_only_for_next_game
     ctrl._schedule_replay_upload = AsyncMock()
     events = []
 
-    def tick(*, mode="battle", left=1, right=1):
+    def tick(*, mode="battle", left=1, right=1, chars=(0, 5), stages=(3, 3)):
         st = DetectionState(alive=True, mode=mode, port=None, giuroll=True, autopunch=False,
                             lprof="hp", rprof="gp", lchar_id=0, rchar_id=5,
                             lchar_name="Reimu", rchar_name="Youmu", net_side="host",
-                            btl_mode=5 if max(left, right) >= 2 else 2, lwin=left, rwin=right)
+                            btl_mode=5 if max(left, right) >= 2 else 2, lwin=left, rwin=right,
+                            character_selection=CharacterSelection(100, *stages, *chars) if mode == "charsel" else None)
         ctrl.on_detect(st, my_ip="")
         if ctrl._pending_local_match:
             events.append(ctrl._pending_local_match)
@@ -54,6 +57,8 @@ async def test_detector_keeps_id_through_rollback_and_rotates_only_for_next_game
     for _ in range(15):
         tick(left=2)
     assert ctrl._battle_identity is None and not events
+    tick(mode="charsel", chars=(20, 5), stages=(1, 1))
+    tick(mode="charsel", chars=(20, 5))
     for _ in range(20):
         tick()
     original = ctrl._battle_identity.client_id
@@ -64,7 +69,9 @@ async def test_detector_keeps_id_through_rollback_and_rotates_only_for_next_game
     clocks[0] -= 382  # Wall-clock correction must not change the identity/duration.
     tick(left=1, right=2)
     assert len(events) == 1 and events[0]["client_id"] == original
+    assert events[0]["host_char"] == 0 and events[0]["host_random"] is True
     assert ctrl._battle_identity.client_id == original
+    tick(mode="charsel", stages=(1, 1))
     for _ in range(12):
         tick(mode="charsel")
     assert ctrl._battle_identity is None
@@ -72,4 +79,17 @@ async def test_detector_keeps_id_through_rollback_and_rotates_only_for_next_game
         tick()
     tick(left=2)
     assert len(events) == 2 and events[1]["client_id"] != original
+    assert events[1]["host_random"] is False
     assert events[1]["duration_sec"] < 2
+
+
+@pytest.mark.parametrize("my_side, my_char, opp_char", [("host", 0, 5), ("client", 5, 0), ("guest", 5, 0)])
+def test_batch_sync_sends_actual_ids_not_random_category(my_side, my_char, opp_char):
+    ctrl = controller.Controller.__new__(controller.Controller)
+    row = dict(id="a"*32, battle_id="b"*32, played_at=1, report_version=2, duration_sec=120,
+               my_side=my_side, winner="host", host_char=20, guest_char=5,
+               host_actual_char=0, guest_actual_char=5, host_random=1, guest_random=0)
+    payload = ctrl._sync_payload_from_row(row)
+    assert (payload["my_char"], payload["opp_char"]) == (my_char, opp_char)
+    assert payload["host_random"] is True and payload["guest_random"] is False
+    assert row["host_char"] == 20  # No mutation of local history.

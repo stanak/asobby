@@ -60,6 +60,99 @@ async def matches():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("new_side", ["host", "guest"])
+@pytest.mark.parametrize("guest_first", [False, True])
+async def test_random_mixed_clients_rate_random_once_keep_actual_and_search(database, new_side, guest_first):
+    async with db.session() as s, s.begin():
+        for uid in ("host", "guest"):
+            (await s.get(db.User, uid)).rank = "ph"
+    ids, mid = await pair(database, rank="ph", guest_first=guest_first)
+    database[0] += timedelta(seconds=120)
+    payloads = {side: result(database) for side in ("host", "guest")}
+    payloads[new_side].update(host_random=True, guest_random=False)
+    for side in (("guest", "host") if guest_first else ("host", "guest")):
+        reply = await submit(ids, mid, side, payloads[side])
+    assert reply["ranked"] and reply["newly_recorded"]
+    match = (await matches())[0]
+    assert (match.host_char, match.guest_char, match.host_actual_char, match.guest_actual_char) == (20, 5, 0, 5)
+    assert match.host_random is True and match.guest_random is False
+    async with db.session() as s:
+        rows = (await s.scalars(select(db.UserCharRating).where(db.UserCharRating.user_id == "host"))).all()
+        before = {r.char_id: (r.ts_mu, r.ts_sigma) for r in rows}
+    assert len(before) == 21 and before[20][0] > db.DEFAULT_TS_MU
+    assert before[0][0] == db.DEFAULT_TS_MU
+    for side in ("host", "guest"):
+        # Even a modified optional flag on retry must not reclassify/re-rate.
+        reply = await submit(ids, mid, side, {**payloads[side], "host_random": False})
+        assert reply["duplicate"]
+    async with db.session() as s:
+        rows = (await s.scalars(select(db.UserCharRating).where(db.UserCharRating.user_id == "host"))).all()
+    assert {r.char_id: (r.ts_mu, r.ts_sigma) for r in rows} == before
+    assert (await matches())[0].host_char == 20
+    filename = main.build_replay_filename(match)
+    assert "Reimu" in filename and "Random" not in filename
+    await db.insert_replay(mid, filename, b"random replay")
+    for a, b in ((0, None), (20, None), (0, 5), (5, 0), (20, 5), (5, 20)):
+        found = await db.search_replay_matches(char1=a, char2=b)
+        assert [r[0].id for r in found] == [mid]
+    assert await db.search_replay_matches(char1=1) == []
+    async with AsyncClient(transport=ASGITransport(app=main.app), base_url="https://test") as c:
+        for character in (0, 20):
+            reply = await c.get("/replays/search", params={"char1": character})
+            assert reply.status_code == 200 and reply.json()["total"] == 1
+            replay = reply.json()["replays"][0]
+            assert replay["host_char"] == 20 and replay["host_actual_char"] == 0
+    item = main._match_to_stats_item(match, "host", True)
+    assert item["host_char"] == 20 and item["host_actual_char"] == 0 and item["host_random"] is True
+
+
+@pytest.mark.asyncio
+async def test_random_does_not_hide_real_character_disagreement(database):
+    ids, mid = await pair(database)
+    database[0] += timedelta(seconds=120)
+    await submit(ids, mid, "host", {**result(database), "host_random": True})
+    reply = await submit(ids, mid, "guest", {**result(database), "host_char": 1, "host_random": True})
+    assert reply["status"] == "conflict" and not await matches()
+
+
+@pytest.mark.asyncio
+async def test_own_selection_takes_precedence_over_peer_observation(database):
+    ids, mid = await pair(database)
+    database[0] += timedelta(seconds=120)
+    await submit(ids, mid, "host", {**result(database), "host_random": False, "guest_random": False})
+    await submit(ids, mid, "guest", {**result(database), "host_random": True, "guest_random": True})
+    match = (await matches())[0]
+    assert (match.host_char, match.guest_char) == (0, 20)
+    assert (match.host_random, match.guest_random) == (False, True)
+
+
+@pytest.mark.asyncio
+async def test_random_flags_survive_guest_report_and_host_batch_sync(database):
+    ids, mid = await pair(database)
+    database[0] += timedelta(seconds=120)
+    async with AsyncClient(transport=ASGITransport(app=main.app), base_url="https://test") as c:
+        def auth(side):
+            return {"Authorization": "Bearer " + main.make_session_token({"id": side, "name": side}, 1)}
+        data = {**result(database), "report_version": 2, "client_id": ids["guest"], "match_id": mid,
+                "host_random": None, "guest_random": True}
+        reply = await c.post("/matches/report", json=data, headers=auth("guest"))
+        assert reply.status_code == 200 and reply.json()["status"] == "pending", reply.text
+        batch = {**result(database), "report_version": 2, "client_id": ids["host"], "match_id": mid,
+                 "my_side": "host", "my_char": 0, "opp_char": 5, "my_profile": "hp", "opp_profile": "gp",
+                 "host_random": True, "guest_random": None}
+        reply = await c.post("/matches/sync", json={"matches": [batch]}, headers=auth("host"))
+        assert reply.status_code == 200 and reply.json()["results"][0]["status"] == "imported", reply.text
+        reports = await c.get("/matches/reports", headers=auth("guest"))
+        item = reports.json()["reports"][0]["match"]
+        assert (item["host_char"], item["guest_char"]) == (20, 20)
+        assert (item["host_actual_char"], item["guest_actual_char"]) == (0, 5)
+        bad = await c.post("/matches/report", json={**data, "host_random": "true"}, headers=auth("guest"))
+        assert bad.status_code == 422
+        bad = await c.post("/matches/report", json={**data, "report_version": 1}, headers=auth("guest"))
+        assert bad.status_code == 422
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("guest_first", [False, True])
 async def test_clock_skew_never_creates_duplicate_or_rewrites_previous(database, guest_first):
     now = database

@@ -20,6 +20,7 @@ from host_clipboard import (
 )
 from api_client import ApiClient
 from battle_identity import BattleIdentity
+from random_selection import RandomSelectionTracker
 from detect_api import DetectionState
 from hisoutensoku_memory import read_detection_state
 from local_store import LocalStore
@@ -240,6 +241,8 @@ class Controller:
         self._last_ko_played_at = 0.0
         self._round_battle_engaged = False
         self._round_char_ids: tuple[Optional[int], Optional[int]] = (None, None)
+        self._random_selection = RandomSelectionTracker()
+        self._battle_random_choices = (None, None)
         self._pending_local_match: Optional[dict] = None
 
         self.owner_token: str = ""
@@ -1432,7 +1435,7 @@ class Controller:
                             played_at=act.payload.get("played_at", 0),
                             host_wins=act.payload.get("host_wins"),
                             guest_wins=act.payload.get("guest_wins"),
-                            **{k: act.payload[k] for k in ("report_version", "client_id", "match_id", "duration_sec") if k in act.payload},
+                            **{k: act.payload[k] for k in ("report_version", "client_id", "match_id", "duration_sec", "host_random", "guest_random") if k in act.payload},
                         )
                         self._replay_result_reported = True
                         server_id = str(resp.get("match_id") or "")
@@ -1467,7 +1470,7 @@ class Controller:
                             played_at=act.payload.get("played_at", 0),
                             host_wins=act.payload.get("host_wins"),
                             guest_wins=act.payload.get("guest_wins"),
-                            **{k: act.payload[k] for k in ("report_version", "client_id", "match_id", "duration_sec") if k in act.payload},
+                            **{k: act.payload[k] for k in ("report_version", "client_id", "match_id", "duration_sec", "host_random", "guest_random") if k in act.payload},
                         )
                         if resp.get("recorded") or resp.get("reason") == "duplicate":
                             self._replay_result_reported = True
@@ -1514,6 +1517,7 @@ class Controller:
     # -----------------
     def on_detect(self, st: DetectionState, *, my_ip: str) -> Optional[Action]:
         now = time.time()
+        self._random_selection.observe(st)
 
         # 一時停止が自然に切れたら一度だけ通知する (無期限停止は除く)
         if (
@@ -1618,6 +1622,9 @@ class Controller:
         if is_battle and st.net_side in ("host", "client") and self._battle_identity is None and not _ko_decided(st):
             if self._stable_for("identity_battle_enter", 0.15, seen=True):
                 self._battle_identity = BattleIdentity(time.monotonic())
+                # Bind once per match ID: rollback/KO/next-select samples cannot
+                # rewrite this game's choices or affect its retry payloads.
+                self._battle_random_choices = self._random_selection.battle_choices
                 self._battle_identity_profiles = (st.lprof or "", st.rprof or "", st.net_side)
                 self._result_reported = False
                 self._last_ko_fingerprint = ""
@@ -1671,6 +1678,8 @@ class Controller:
                 **_ko_result_core(st),
                 "host_char": host_char,
                 "guest_char": guest_char,
+                "host_random": self._battle_random_choices[0],
+                "guest_random": self._battle_random_choices[1],
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
                 "ranked": ranked,
@@ -1705,6 +1714,8 @@ class Controller:
                 **_ko_result_core(st),
                 "host_char": host_char,
                 "guest_char": guest_char,
+                "host_random": self._battle_random_choices[0],
+                "guest_random": self._battle_random_choices[1],
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
                 "played_at": played_at,
@@ -1733,6 +1744,8 @@ class Controller:
                 **_ko_result_core(st),
                 "host_char": host_char,
                 "guest_char": guest_char,
+                "host_random": self._battle_random_choices[0],
+                "guest_random": self._battle_random_choices[1],
                 "host_profile": (st.lprof or ""),
                 "guest_profile": (st.rprof or ""),
                 "played_at": played_at,
@@ -2162,7 +2175,9 @@ class Controller:
     async def _record_local_match(self, payload: dict) -> None:
         try:
             match_id = await asyncio.to_thread(self.local_store.record_local, **payload)
-            self.log_sink("info", f"Local match recorded: {match_id}")
+            self.log_sink("info", f"Local match recorded: {match_id} "
+                          f"actual_chars={payload.get('host_char')}/{payload.get('guest_char')} "
+                          f"random={payload.get('host_random')}/{payload.get('guest_random')}")
             if self.is_logged_in():
                 unpushed = await asyncio.to_thread(
                     self.local_store.fetch_unpushed_by_id, match_id
@@ -2237,6 +2252,11 @@ class Controller:
         return inserted
 
     def _sync_payload_from_row(self, row: dict) -> dict:
+        # Local history uses selected IDs; the wire always uses actual fighters.
+        row = dict(row)
+        for side in ("host", "guest"):
+            if row.get(f"{side}_actual_char") is not None:
+                row[f"{side}_char"] = row[f"{side}_actual_char"]
         my_side = row["my_side"]
         if my_side == "client":
             my_side = "guest"
@@ -2260,6 +2280,8 @@ class Controller:
             "my_profile": my_profile or "",
             "opp_profile": opp_profile or "",
             "ranked": bool(row.get("ranked", 0)),
+            **{f"{side}_random": bool(row[f"{side}_random"]) if row.get(f"{side}_random") is not None else None
+               for side in ("host", "guest")},
         }
         if row.get("report_version") == 2:
             payload.update(report_version=2, match_id=row.get("battle_id") or "", duration_sec=row.get("duration_sec"))
