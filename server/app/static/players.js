@@ -151,6 +151,47 @@
     return () => { if (!commit()) throw new Error(tr("tagLimit")); return values; };
   }
 
+  function rankChangeSettings() {
+    const wrap = el("section", null, "editor rank-settings"), details = el("details", null, "panel");
+    details.id = "rank-change-panel";
+    details.append(el("summary", tr("rankChangeTitle")), el("p", tr("rankChangeHelp"), "hint"), el("p", tr("rankChangeImmediate"), "hint"));
+    const buttons = el("div", null, "rank-change-buttons"), error = el("p", null, "error"), result = el("p", null, "success");
+    buttons.id = "rank-change-btns"; error.id = "rank-change-error"; error.hidden = true; error.setAttribute("role", "alert");
+    result.id = "rank-change-result"; result.hidden = true; result.setAttribute("role", "status");
+    details.append(buttons, error); wrap.append(details, result);
+    let busy = false;
+    function updateDisabled() {
+      for (const button of buttons.children) button.disabled = busy || !me.can_change_rank || button.dataset.rank === me.rank;
+    }
+    for (const [rank, suffix] of [["easy","Easy"],["normal","Normal"],["ex","Ex"],["hard","Hard"],["luna","Luna"]]) {
+      const label = options.ranks[rank], button = el("button"); button.type = "button"; button.dataset.rank = rank;
+      button.append(el("span", label, "rank-label"), el("span", t(`lobby.rankDesc${suffix}`), "hint"));
+      button.onclick = async () => {
+        if (busy || !me.can_change_rank || me.rank === "ph" || rank === me.rank) return;
+        if (!confirm(tr("rankChangeConfirm", {current:options.ranks[me.rank], label}))) return;
+        busy = true; updateDisabled(); error.hidden = true;
+        try {
+          // Separate from profile saving: never reload or discard an unfinished edit.
+          const response = await fetch("/rank/change", {
+            method:"POST", credentials:"same-origin", headers:{"Content-Type":"application/json"}, body:JSON.stringify({rank}),
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            error.textContent = data.detail ? tError(data.detail) : t("common.errorWithStatus", {status:response.status});
+            error.hidden = false; return;
+          }
+          me.rank = rank; me.can_change_rank = false;
+          details.hidden = true; result.textContent = tr("rankChanged", {rank:label}); result.hidden = false;
+          result.tabIndex = -1; result.focus();
+        } catch (_) {
+          error.textContent = t("common.networkError"); error.hidden = false;
+        } finally { busy = false; updateDisabled(); }
+      };
+      buttons.append(button);
+    }
+    updateDisabled(); return wrap;
+  }
+
   async function editProfile() {
     const data = await api("/user/profile"), form = el("form", null, "editor"); form.id = "profile-form";
     const head = heading(tr("edit"), tr("editHint")); head.append(link(tr("view"), `/players/${encodeURIComponent(me.id)}`, "button")); form.append(head);
@@ -201,6 +242,7 @@
       finally { save.disabled = false; save.textContent = tr("save"); }
     };
     $("content").replaceChildren(form);
+    if (me.can_change_rank && me.rank !== "ph") $("content").append(rankChangeSettings());
   }
 
   function playerCard(player) {

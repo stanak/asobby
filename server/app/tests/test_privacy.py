@@ -77,4 +77,5 @@ def test_public_page_navigation_links_to_policy(page):
     doc = Document(source)
     assert any(tag == "a" and attrs.get("href") == "/privacy"
                and attrs.get("data-i18n") == "nav.privacy" for tag, attrs in doc.elements)
-    assert "/static/i18n.js?v=privacy-1" in source
+    assert any(tag == "script" and attrs.get("src", "").startswith("/static/i18n.js?v=")
+               for tag, attrs in doc.elements)

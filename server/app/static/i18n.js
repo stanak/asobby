@@ -135,9 +135,11 @@
     "lobby.loggedInAs": "{name} でログイン中 ({rank})",
     "lobby.rankConfirm":
       "開始ランクを {label} にします。この選択は一度だけです。よろしいですか？",
-    "lobby.rankChangeTitle": "ランクを変更する（1回のみ）",
-    "lobby.rankChangeHelp": "初回選択とは別に、E・N・Ex・H・Lへ一度だけ変更できます。現在Phの方は対象外です。戦績は残り、昇降格の判定は変更後の対戦から始め直します。",
-    "lobby.rankChangeConfirm": "ランクを {current} から {label} に変更します。一度しか使えず、取り消せません。戦績は残り、昇降格の判定は変更後から始め直します。よろしいですか？",
+    "players.rankChangeTitle": "ランクを変更する（1回のみ）",
+    "players.rankChangeHelp": "初回選択とは別に、E・N・Ex・H・Lへ一度だけ変更できます。現在Phの方は対象外です。戦績は残り、昇降格の判定は変更後の対戦から始め直します。",
+    "players.rankChangeConfirm": "ランクを {current} から {label} に変更します。一度しか使えず、取り消せません。戦績は残り、昇降格の判定は変更後から始め直します。よろしいですか？",
+    "players.rankChangeImmediate": "プロフィールの保存とは別に、確認後すぐに適用されます。編集中のプロフィールは保存・破棄されません。",
+    "players.rankChanged": "ランクを {rank} に変更しました。プロフィールを編集している場合は、別途「保存」してください。",
     "lobby.rankDescEasy": "初心者にお勧め",
     "lobby.rankDescNormal": "通常のスタート地点・初級者以上",
     "lobby.rankDescEx": "中級者層",
@@ -433,7 +435,7 @@
     "guide.sectionRanked": "ランクマの仕様",
     "guide.rankedIntro":
       "ランクマ募集で、同じランク帯の Discord ログイン済み相手と対戦すると、条件を満たす対戦はランクマとして記録されます。",
-    "guide.rankedManualChange": "開始ランクの初回選択とは別に、ロビーの「ランクを変更する（1回のみ）」からE・N・Ex・H・Lへ一度だけ変更できます。現在Phの方は利用できません。戦績は残り、昇降格の50戦集計は変更後から始め直します。",
+    "guide.rankedManualChange": "開始ランクの初回選択とは別に、「プロフィール編集」ページ下部の「ランクを変更する（1回のみ）」からE・N・Ex・H・Lへ一度だけ変更できます。現在Phの方は利用できません。戦績は残り、昇降格の50戦集計は変更後から始め直します。",
     "guide.rankedSessionLimit":
       "同じ相手との連続対戦では、ランクマとして数えられるのは最初の 5 戦までです。6 戦目以降はカジュアル扱いになります（募集タイプがランクマのままでも）。",
     "guide.rankedGuestReset":
@@ -770,9 +772,11 @@
     "lobby.loggedInAs": "Logged in as {name} ({rank})",
     "lobby.rankConfirm":
       "Set starting rank to {label}. This choice is one-time only. Continue?",
-    "lobby.rankChangeTitle": "Change rank (once only)",
-    "lobby.rankChangeHelp": "In addition to your initial choice, you may change once to E, N, Ex, H or L. Current Ph players are not eligible. Match history is kept; promotion/demotion evaluation restarts with games played after the change.",
-    "lobby.rankChangeConfirm": "Change rank from {current} to {label}? This can only be used once and cannot be undone. Match history is kept; promotion/demotion evaluation restarts after this change. Continue?",
+    "players.rankChangeTitle": "Change rank (once only)",
+    "players.rankChangeHelp": "In addition to your initial choice, you may change once to E, N, Ex, H or L. Current Ph players are not eligible. Match history is kept; promotion/demotion evaluation restarts with games played after the change.",
+    "players.rankChangeConfirm": "Change rank from {current} to {label}? This can only be used once and cannot be undone. Match history is kept; promotion/demotion evaluation restarts after this change. Continue?",
+    "players.rankChangeImmediate": "This takes effect immediately after confirmation, separately from saving your profile. Unfinished profile edits are neither saved nor discarded.",
+    "players.rankChanged": "Rank changed to {rank}. If you are editing your profile, save those changes separately.",
     "lobby.rankDescEasy": "Recommended for beginners",
     "lobby.rankDescNormal": "Default start · beginners and up",
     "lobby.rankDescEx": "Intermediate tier",
@@ -1067,7 +1071,7 @@
     "guide.sectionRanked": "Ranked rules",
     "guide.rankedIntro":
       "On ranked posts, qualifying matches against a logged-in opponent in the same rank band are recorded as ranked.",
-    "guide.rankedManualChange": "In addition to your initial rank choice, use “Change rank (once only)” in the lobby to change once to E, N, Ex, H or L. Current Ph players are not eligible. Match history is kept; the 50-game evaluation window restarts after the change.",
+    "guide.rankedManualChange": "In addition to your initial rank choice, use “Change rank (once only)” at the bottom of the Edit profile page to change once to E, N, Ex, H or L. Current Ph players are not eligible. Match history is kept; the 50-game evaluation window restarts after the change.",
     "guide.rankedSessionLimit":
       "With the same opponent in one session, only the first 5 matches count as ranked. From the 6th onward they are casual, even if your post stays ranked.",
     "guide.rankedGuestReset":

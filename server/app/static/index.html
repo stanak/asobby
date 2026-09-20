@@ -8,7 +8,7 @@
 <link rel="icon" href="/static/favicon-64.png" type="image/png" sizes="64x64">
 <link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-<script src="/static/i18n.js?v=privacy-1"></script>
+<script src="/static/i18n.js?v=rank-settings-1"></script>
 <script src="/static/client-update.js"></script>
 <script src="/static/favicon-notify.js"></script>
 <script src="/static/favicon-badge.js"></script>
@@ -298,7 +298,7 @@
     color: var(--muted);
     line-height: 1.3;
   }
-  #rank-choice-error, #rank-change-error {
+  #rank-choice-error {
     margin-top: 10px;
     font-size: 13px;
     color: var(--err);
@@ -781,13 +781,6 @@
   <div id="rank-choice-error" hidden></div>
 </div>
 
-<details id="rank-change-panel" class="rank-choice-panel" hidden>
-  <summary data-i18n="lobby.rankChangeTitle">ランクを変更する（1回のみ）</summary>
-  <p data-i18n="lobby.rankChangeHelp">初回選択とは別に、E・N・Ex・H・Lへ一度だけ変更できます。現在Phの方は対象外です。戦績は残り、昇降格の判定は変更後の対戦から始め直します。</p>
-  <div class="rank-choice-btns" id="rank-change-btns"></div>
-  <div id="rank-change-error" role="alert" hidden></div>
-</details>
-
 <div id="login-gate" class="gate" hidden>
   <p>
     <span data-i18n="lobby.loginGateLine1">募集一覧を見るには Discord ログインが必要です。</span><br>
@@ -1002,9 +995,6 @@ const authInfoEl = document.getElementById("auth-info");
 const rankChoiceBannerEl = document.getElementById("rank-choice-banner");
 const rankChoiceBtnsEl = document.getElementById("rank-choice-btns");
 const rankChoiceErrorEl = document.getElementById("rank-choice-error");
-const rankChangePanelEl = document.getElementById("rank-change-panel");
-const rankChangeBtnsEl = document.getElementById("rank-change-btns");
-const rankChangeErrorEl = document.getElementById("rank-change-error");
 let rankChoiceBusy = false;
 const pingBannerEl = document.getElementById("ping-banner");
 const pingBannerBodyEl = document.getElementById("ping-banner-body");
@@ -1630,38 +1620,31 @@ function td(text) {
   return el;
 }
 
-function showRankChoiceError(msg, manual = false) {
-  const el = manual ? rankChangeErrorEl : rankChoiceErrorEl;
-  el.textContent = msg;
-  el.hidden = !msg;
+function showRankChoiceError(msg) {
+  rankChoiceErrorEl.textContent = msg;
+  rankChoiceErrorEl.hidden = !msg;
 }
 
 function updateRankChoiceDisabled() {
   for (const btn of rankChoiceBtnsEl.querySelectorAll("button")) btn.disabled = rankChoiceBusy;
-  for (const btn of rankChangeBtnsEl.querySelectorAll("button")) {
-    btn.disabled = rankChoiceBusy || btn.dataset.rank === myRank;
-  }
 }
 
-async function chooseRank(rank, label, manual = false) {
-  if (rankChoiceBusy || (manual && rank === myRank)) return;
-  if (!confirm(t(manual ? "lobby.rankChangeConfirm" : "lobby.rankConfirm", {
-    label, current: RANK_LABEL[myRank] || myRank,
-  }))) {
+async function chooseRank(rank, label) {
+  if (rankChoiceBusy) return;
+  if (!confirm(t("lobby.rankConfirm", { label }))) {
     return;
   }
   rankChoiceBusy = true;
   updateRankChoiceDisabled();
-  showRankChoiceError("", manual);
+  showRankChoiceError("");
   try {
-    const res = await fetch(manual ? "/rank/change" : "/rank/initial", {
+    const res = await fetch("/rank/initial", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ rank }),
     });
     if (res.ok) {
       rankChoiceBannerEl.hidden = true;
-      rankChangePanelEl.hidden = true;
       location.reload();
       return;
     }
@@ -1670,17 +1653,16 @@ async function chooseRank(rank, label, manual = false) {
       data.detail
         ? tError(data.detail)
         : t("common.errorWithStatus", { status: res.status }),
-      manual,
     );
   } catch (_) {
-    showRankChoiceError(t("common.networkError"), manual);
+    showRankChoiceError(t("common.networkError"));
   } finally {
     rankChoiceBusy = false;
     updateRankChoiceDisabled();
   }
 }
 
-function renderRankChoices(container, manual) {
+function renderRankChoices(container) {
   container.textContent = "";
   for (const c of INITIAL_RANK_CHOICES) {
     const btn = document.createElement("button");
@@ -1695,18 +1677,15 @@ function renderRankChoices(container, manual) {
     desc.textContent = t(c.descKey);
     btn.appendChild(lbl);
     btn.appendChild(desc);
-    btn.addEventListener("click", () => chooseRank(c.rank, c.label, manual));
+    btn.addEventListener("click", () => chooseRank(c.rank, c.label));
     container.appendChild(btn);
   }
 }
 
 function setupRankChoiceBanner(user) {
   rankChoiceBannerEl.hidden = !user.can_choose_rank || user.rank === "ph";
-  rankChangePanelEl.hidden = !user.can_change_rank || user.rank === "ph";
-  if (!rankChoiceBannerEl.hidden) renderRankChoices(rankChoiceBtnsEl, false);
-  if (!rankChangePanelEl.hidden) renderRankChoices(rankChangeBtnsEl, true);
+  if (!rankChoiceBannerEl.hidden) renderRankChoices(rankChoiceBtnsEl);
   showRankChoiceError("");
-  showRankChoiceError("", true);
   updateRankChoiceDisabled();
 }
 
@@ -1754,7 +1733,6 @@ function showLoginRequired() {
     pingTimer = null;
   }
   rankChoiceBannerEl.hidden = true;
-  rankChangePanelEl.hidden = true;
   updatePingBanner();
   authInfoEl.hidden = true;
   lobbyChatRootEl.hidden = true;
