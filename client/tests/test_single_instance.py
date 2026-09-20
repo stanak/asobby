@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import queue
 import subprocess
 import sys
@@ -15,6 +16,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import single_instance as mod
+import i18n
+
+
+@pytest.fixture(autouse=True)
+def isolate_startup_preferences(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ASOBBY_WINE", raising=False)
+    monkeypatch.setattr(i18n, "_lang", "ja")
+    monkeypatch.setattr(i18n, "_on_change", None)
 
 
 @pytest.fixture
@@ -114,6 +124,62 @@ def test_guard_initialization_failure_stops_startup(monkeypatch):
     assert mod.run_single_instance(start) == 1
     start.assert_not_called()
     assert notice.call_args.kwargs == {"error": True}
+
+
+@pytest.mark.parametrize("lang", ["ja", "en"])
+@pytest.mark.parametrize("wine", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_duplicate_notice_uses_saved_preferences_without_starting_or_writing(api, monkeypatch, lang, wine, enabled):
+    from config_manager import CONFIG_PATH, ConfigManager
+    kernel, state = api
+    state["create_error"] = mod.ERROR_ALREADY_EXISTS
+    if wine:
+        monkeypatch.setenv("ASOBBY_WINE", "1")
+    original = json.dumps({"options": {"locale": lang, "startup_notify_enabled": enabled}})
+    CONFIG_PATH.write_text(original, encoding="utf-8")
+    notice, start, persist = Mock(), Mock(), Mock()
+    monkeypatch.setattr(i18n, "_on_change", persist)
+    monkeypatch.setattr(ConfigManager, "load", Mock(side_effect=AssertionError("must not construct ConfigManager")))
+    monkeypatch.setattr(mod, "_show_notice", notice)
+    assert mod.run_single_instance(start) == 0
+    assert i18n.get_lang() == lang
+    if enabled:
+        notice.assert_called_once_with(i18n._TABLE[lang]["wine.already_running" if wine else "tray.already_running"])
+    else:
+        notice.assert_not_called()
+    persist.assert_not_called()
+    start.assert_not_called()
+    kernel.CloseHandle.assert_called_once_with(state["handle"])
+    assert CONFIG_PATH.read_text(encoding="utf-8") == original
+    assert sorted(p.name for p in Path.cwd().iterdir()) == ["asobby_config.json"]
+
+
+@pytest.mark.parametrize("wine", [False, True])
+def test_real_lock_failure_stays_visible_and_localized_with_notices_off(api, monkeypatch, wine):
+    from config_manager import CONFIG_PATH
+    _, state = api
+    state.update(handle=None, create_error=5)
+    if wine:
+        monkeypatch.setenv("ASOBBY_WINE", "1")
+    CONFIG_PATH.write_text(json.dumps({"options": {"locale": "en-US", "startup_notify_enabled": False}}), encoding="utf-8")
+    notice, start = Mock(), Mock()
+    monkeypatch.setattr(mod, "_show_notice", notice)
+    assert mod.run_single_instance(start) == 1
+    start.assert_not_called()
+    assert i18n.get_lang() == "en"
+    assert notice.call_args.kwargs == {"error": True}
+    assert "startup was cancelled" in notice.call_args.args[0]
+
+
+def test_normal_start_initializes_language_before_app_construction(api, monkeypatch):
+    from config_manager import CONFIG_PATH
+    CONFIG_PATH.write_text('{"options":{"locale":"en","startup_notify_enabled":false}}', encoding="utf-8")
+    notice = Mock()
+    monkeypatch.setattr(mod, "_show_notice", notice)
+    observed = []
+    assert mod.run_single_instance(lambda: observed.append(i18n.get_lang())) == 0
+    assert observed == ["en"]
+    notice.assert_not_called()
 
 
 @pytest.mark.parametrize("error", [False, True])

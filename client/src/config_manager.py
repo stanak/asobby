@@ -60,6 +60,28 @@ def _merge_defaults(base: dict[str, Any], loaded: dict[str, Any]) -> dict[str, A
     return out
 
 
+def read_startup_preferences(path: str | Path = CONFIG_PATH) -> tuple[str, bool]:
+    """Read only: a rejected second process must not create or repair config.
+
+    Use the same working-directory path and defaults as ConfigManager, without
+    constructing it (load() can write), opening the DB or starting the app.
+    """
+    defaults = DEFAULT_CONFIG["options"]
+    options: dict[str, Any] = {}
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and isinstance(raw.get("options"), dict):
+            options = raw["options"]
+    except (OSError, ValueError, UnicodeError):
+        pass
+    locale = options.get("locale", defaults["locale"])
+    enabled = options.get("startup_notify_enabled", defaults["startup_notify_enabled"])
+    return (
+        locale if isinstance(locale, str) else defaults["locale"],
+        enabled if isinstance(enabled, bool) else defaults["startup_notify_enabled"],
+    )
+
+
 class ConfigManager:
     def __init__(
         self,

@@ -72,9 +72,12 @@ def _show_notice(message: str, *, error: bool = False) -> None:
 
 def run_single_instance(start: Callable[[], None]) -> int:
     """Acquire before constructing the app (DB, local API, detector, hotkeys)."""
-    from i18n import t
+    from config_manager import read_startup_preferences
+    from i18n import set_lang, t
     from runtime_compat import is_wine
 
+    locale, show_startup_notice = read_startup_preferences()
+    set_lang(locale, persist=False)
     try:
         guard = SingleInstance()
         acquired = guard.acquire()
@@ -83,7 +86,8 @@ def run_single_instance(start: Callable[[], None]) -> int:
         _show_notice(t(key, error=str(exc)), error=True)
         return 1
     if not acquired:
-        _show_notice(t("wine.already_running" if is_wine() else "tray.already_running"))
+        if show_startup_notice:
+            _show_notice(t("wine.already_running" if is_wine() else "tray.already_running"))
         return 0
     try:
         start()

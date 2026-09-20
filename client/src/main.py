@@ -904,7 +904,7 @@ class TrayApp:
             self.icon.run_detached()
         if self.controller.hotkeys_enabled():
             self._start_hotkeys()
-        # 初期状態では常駐を案内する。トレイ設定でこの通知だけ無効にできる。
+        # 常駐案内を遅延表示。起動通知OFFなら重複起動の案内も抑制する。
         self.tk_root.after(1500, self._show_startup_notice)
         self.tk_root.mainloop()
 

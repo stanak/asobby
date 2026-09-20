@@ -12,7 +12,11 @@ import runtime_compat as compat
 
 
 @pytest.fixture(autouse=True)
-def clear_runtime_cache(monkeypatch):
+def clear_runtime_cache(monkeypatch, tmp_path):
+    import i18n
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(i18n, "_lang", "ja")
+    monkeypatch.setattr(i18n, "_on_change", None)
     compat.wine_version.cache_clear()
     monkeypatch.delenv("ASOBBY_WINE", raising=False)
     yield
