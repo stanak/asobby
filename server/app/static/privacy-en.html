@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="How asobby collects, shares and retains information, including dpalette integration, replays and privacy requests.">
+  <title>asobby - Privacy policy</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/privacy.css?v=1">
+  <link rel="alternate" hreflang="ja" href="/privacy?lang=ja">
+</head>
+<body>
+<a class="skip" href="#policy">Skip to content</a>
+<header>
+  <a href="/?lang=en" aria-label="asobby lobby"><img src="/static/logo-header.png" alt="asobby" height="48"></a>
+  <nav aria-label="Pages and languages">
+    <a href="/?lang=en">Lobby</a><a href="/guide?lang=en">Guide</a><a href="#contact">Contact</a>
+    <a href="/privacy?lang=ja" lang="ja" hreflang="ja">日本語</a><span aria-current="page">English</span>
+  </nav>
+</header>
+<main id="policy">
+  <h1>Privacy policy</h1>
+  <p class="meta">Document updated: <time datetime="2026-09-20">September 20, 2026</time></p>
+  <p>This policy describes information handling by asobby.com and asobby clients connected to that service. It does not cover servers run by other operators using the same software. The operator's contact is <a href="#contact">midorist</a>.</p>
+  <aside class="panel summary" aria-label="Key points">
+    <ul>
+      <li>There is no account-closure procedure. You can stop using the client by exiting it and removing files you no longer need.</li>
+      <li><strong>Stopping use, logging out or uninstalling does not automatically delete or unpublish stored profiles, names, match records or replays.</strong></li>
+      <li>Replays can be searched and downloaded without logging in. Aggregate statistics include players whose individual character win rates are private.</li>
+      <li>You can request access, correction, deletion or restriction of information through the <a href="#contact">contact below</a>, without logging in to asobby.</li>
+    </ul>
+  </aside>
+  <nav aria-label="Contents">
+    <a href="#collection">Collection</a><a href="#sharing">Sharing</a><a href="#statistics">Age and statistics</a>
+    <a href="#replays">Replays</a><a href="#services">Cookies and services</a><a href="#retention">Retention and stopping use</a>
+    <a href="#security">Security</a><a href="#contact">Contact</a><a href="#changes">Changes</a>
+  </nav>
+
+  <section id="collection" class="panel">
+    <h2>1. Information collected and its purposes</h2>
+    <p>Depending on the features you use, we collect and use the following:</p>
+    <ul>
+      <li><strong>Account information:</strong> Discord user ID, username, display name, avatar, login and activity timestamps, client version and related information. Used for authentication, identifying and displaying users, retaining preferences and support. We do not receive your Discord password. The current login integration requests the <code>identify</code> scope, not permission to obtain your email address.</li>
+      <li><strong>Optional profile information:</strong> player name, date of birth, country of residence, input device and model, main/strong/weak characters, favorite players and games, biography and links. Used for profiles, player searches and aggregate statistics.</li>
+      <li><strong>Listings and connection information:</strong> IP addresses and ports, hosting/connection status, latency, tools such as Giuroll and AutoPunch, comments and stream URLs. Used for publishing listings, connecting players, UDP host checks, identifying opponents, preventing abusive/duplicate listings and diagnosing problems. A country may be inferred from an IP address.</li>
+      <li><strong>Match information:</strong> player identifiers, both players' IP addresses, in-game profile names, characters, results, scores, timestamps, ranks/ratings, match identifiers and replays. Used for recording and synchronizing results, matching reports, rank calculations, statistics and replay access.</li>
+      <li><strong>Messages and inquiries:</strong> chat and play/watch requests, author information, timestamps, feedback, bug reports and contact details. Used for communication, notifications, synchronization and support. Feedback contents, author information and versions may be sent to a Discord destination used for handling reports.</li>
+      <li><strong>Usage information:</strong> cookies and similar identifiers, access times, visited pages, browser/device information, access and error logs. Used for sessions, visitor counts, analytics, maintenance and security.</li>
+    </ul>
+    <p>The client inspects running processes/modules, target game memory and replay files to detect Hisoutensoku and supported tools and automate listings and match records. Settings, logs and match records are also stored on your device; match information is synchronized with the server when logged in.</p>
+    <p>We may receive listing, match and related information from opponents' clients or integrations. An opponent may record your in-game name and results even if you do not use the asobby client yourself.</p>
+  </section>
+
+  <section id="sharing" class="panel">
+    <h2>2. Visibility and dpalette integration</h2>
+    <p>The lobby, lobby chat and player profile viewing/search generally require Discord login. Public profile information includes Discord identifiers, public profile fields, rank, the rating for Ph players, total matches and distinct opponent counts. Listings provide other users with the IP address and port needed to connect.</p>
+    <p><strong>dpalette is operated by the same operator as asobby.</strong> Listing/chat synchronization uses display names, Discord user IDs, ranks/status, comments, stream URLs, chat text and timestamps. Connection addresses are included in the integration API only where the administrator has granted that permission.</p>
+    <p>Information posted to Discord is also sent to Discord and is visible to people with access to the destination server/channel. The audience can differ from the asobby lobby. Other API/webhook integrations operate within the information and permissions configured by the administrator. You can ask the contact below about actual destinations and shared fields.</p>
+    <p>Names and Discord IDs supplied by an integration may be claims made by that source, not identities verified through asobby login. A listing ending, a setting changing or information being deleted in asobby does not necessarily make the same change to Discord posts or copies already obtained by others.</p>
+  </section>
+
+  <section id="statistics" class="panel">
+    <h2>3. Dates of birth, age and aggregate statistics</h2>
+    <p>Your full date of birth is not exposed to other users in profile or search APIs. You can review it in your own profile editor.</p>
+    <table>
+      <caption>How date-of-birth settings work</caption>
+      <tbody>
+        <tr><th scope="row">Public and searchable</th><td>Only your age is displayed. Your age is used in player searches and aggregate statistics.</td></tr>
+        <tr><th scope="row">Private, statistics allowed</th><td>Your age is neither shown on your individual profile nor used in age-based player searches. It is included in filtered aggregate statistics.</td></tr>
+        <tr><th scope="row">Secret</th><td>No date of birth is stored in your profile or used for age-based searches/statistics. A previously entered date is removed from the profile's stored data. See section 6 for backups and other copies.</td></tr>
+      </tbody>
+    </table>
+    <p>We provide aggregate distributions and match/character statistics by age band, rank, country, device and similar categories. <strong>These aggregates include players whose individual character win rates are private.</strong> A secret date of birth does not exclude a player from statistics unrelated to age.</p>
+    <p>Statistical responses omit individual names, IDs and dates of birth. Groups of fewer than 5 players and some other totals/buckets that could reveal small counts by subtraction are suppressed. Making your individual win rates private does not hide public replay results or records held by your opponents.</p>
+  </section>
+
+  <section id="replays" class="panel">
+    <h2>4. Replay storage and publication</h2>
+    <p>Clients send eligible match replays for server storage. <strong>Stored replays and their match times, names, characters and results can be searched and downloaded without login.</strong> Search results and replay filenames include in-game names.</p>
+    <p>You can limit new uploads using the replay-saving refusal setting in the client or other provided settings. New replays are not stored unless both players are identified as logged-in asobby users, and storage is blocked when the server confirms either player's refusal. Synchronizing a setting to the server requires a working connection.</p>
+    <p>Refusing replay saving, stopping use or uninstalling does not automatically delete or unpublish past replays. They remain stored and public together with in-game names and match information to maintain match history and provide replay viewing. Requests for deletion or restriction are handled through section 8 in accordance with applicable law and service terms.</p>
+    <p>asobby cannot directly delete files that other people have already downloaded.</p>
+  </section>
+
+  <section id="services" class="panel">
+    <h2>5. Cookies, local storage and external services</h2>
+    <p>Cookies maintain login sessions and visitor identifiers. Local storage retains language/display preferences and cached match records. Login and visitor cookies expire 30 days after issuance. You can delete or restrict browser storage, but some features may stop working.</p>
+    <p>Some web pages use Google Analytics, which sends information such as visited pages and browser/device details to Google using cookies and related technologies. See <a href="https://policies.google.com/technologies/partner-sites?hl=en" rel="noreferrer">how Google uses information</a>. Supported browsers can use the <a href="https://tools.google.com/dlpage/gaoptout?hl=en" rel="noreferrer">opt-out add-on</a>. This policy page itself does not include analytics tags.</p>
+    <ul>
+      <li><a href="https://fly.io/legal/privacy-policy/" rel="noreferrer">Fly.io</a>: server hosting and file storage.</li>
+      <li><a href="https://neon.com/privacy-policy" rel="noreferrer">Neon</a>: database storage of accounts, profiles, match records and replays.</li>
+      <li><a href="https://discord.com/privacy" rel="noreferrer">Discord</a>: login, avatar display, listings, chat and support integrations.</li>
+      <li>dpalette: listing/chat integration run by the same operator.</li>
+      <li><a href="https://policies.google.com/privacy?hl=en" rel="noreferrer">Google Analytics</a>: website usage analytics.</li>
+      <li><a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" rel="noreferrer">GitHub</a>: client update information and downloads. Update checks may connect to GitHub directly.</li>
+    </ul>
+    <p>Country inference uses a server-side MaxMind GeoLite2 database rather than sending each user's IP address to MaxMind for lookup. Connection assistance such as AutoPunch exchanges necessary connection information with its corresponding relay service.</p>
+    <p>Opening the Stripe support link or a user-provided stream/social link also sends access information to that destination. Consult the destination service's policy for its information handling.</p>
+    <p>External services may process information outside Japan. You can contact us about the storage regions in use and security measures.</p>
+  </section>
+
+  <section id="retention" class="panel">
+    <h2>6. Retention and stopping use</h2>
+    <p><strong>There is no dedicated account-closure feature or procedure for stopping use.</strong> Exit the client and, if desired, remove its executable, settings and local match files. Removing only the executable may leave settings, logs and records on your device.</p>
+    <p>The server cannot detect uninstallation. Stopping use or logging out does not automatically delete or unpublish stored profiles, Discord identifiers, names, match records or replays. Removing your client also does not stop information received from an opponent's client, dpalette or another integration.</p>
+    <p>Account/profile information is retained for identification and continuity of settings and records on returning. Match records, in-game names and replays are retained for history, statistics and replay access. These categories currently have no uniform automatic age-based deletion deadline. This is not unconditional permanent retention: information no longer needed for its purposes, or requiring action under applicable law or terms, is subject to deletion or restriction.</p>
+    <p>IP addresses and logs are handled as needed for matching reports, troubleshooting and abuse prevention. Normal chat display covers up to 100 messages from the last hour, but disappearance from the display and removal from persistent storage may not occur together. A listing ending does not delete related match records, logs or integration copies.</p>
+    <p>Backups and copies in external services may not be deleted at the same time as primary records. When handling requests, we check the affected information, applicable law/terms and storage mechanisms. You can also ask about specific retention periods and the scope of processing.</p>
+  </section>
+
+  <section id="security" class="panel">
+    <h2>7. Security</h2>
+    <p>We use HTTPS for web/API communications, authentication and administrator/integration permissions to help prevent unauthorized access and disclosure. Game connections and UDP traffic use mechanisms separate from HTTPS. We do not guarantee that every item of information or connection is encrypted, or that all risks can be eliminated.</p>
+    <p>Information is handled as needed for operation and maintenance. If an incident occurs, we investigate, remediate and make necessary notifications in accordance with applicable law and terms.</p>
+  </section>
+
+  <section id="contact" class="panel">
+    <h2>8. Access, correction, deletion and restriction requests</h2>
+    <p>You can edit your profile and visibility settings in the provided editor. For requests or complaints concerning access, correction, deletion, restriction or stopping third-party disclosure, use the contact below. <strong>No asobby login or post in a public channel is required.</strong></p>
+    <address>
+      Operator contact: midorist<br>
+      Email: <a href="mailto:midoristar@empengineer.cool">midoristar@empengineer.cool</a><br>
+      Discord: <a href="https://discord.com/users/204966469593858048" rel="noreferrer">midorist</a><br>
+      Discord user ID: <code>204966469593858048</code>
+    </address>
+    <p>Please provide information that identifies the affected data, such as your Discord user ID or profile/replay URL, and the action requested. We verify identity using the minimum information needed and handle requests according to applicable law and terms. Do not send passwords, session tokens or API keys.</p>
+    <p>Discord API data is deleted in accordance with Discord's developer terms when the relevant user requests deletion, when retention is no longer needed for the functionality, and in other required cases, except where retention is legally required. Requests requiring deletion or restriction of in-game names, replays or other information are also handled individually; we do not apply a blanket refusal.</p>
+    <p>If you cannot contact us through Discord, use email. The same contact accepts inquiries about operator information, purposes, retention and security measures.</p>
+  </section>
+
+  <section id="changes" class="panel">
+    <h2>9. Changes to this policy</h2>
+    <p>Changes in information handling and their effective timing will be announced here or through other appropriate notices. Where law or external service terms require consent or other steps, those steps will be taken separately. Publication of this policy or continued use alone is not treated as obtaining every necessary consent.</p>
+  </section>
+</main>
+</body>
+</html>

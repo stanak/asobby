@@ -1,8 +1,8 @@
 # Linux / Wine（実験的対応）
 
 Windows 版 `asobby.exe` を Wine 上で実行します。Linux の Python から直接起動する
-ネイティブ Linux 版ではありません。この変更を含むソースからビルドした exe が必要です。
-従来のリリース exe にはこの対応は含まれません。
+ネイティブ Linux 版ではありません。[v0.8.7以降のWindows版](https://github.com/stanak/asobby/releases/latest)
+またはこの変更を含むソースからビルドした exe が必要です。v0.8.6以前にはこの対応は含まれません。
 
 ## 起動
 

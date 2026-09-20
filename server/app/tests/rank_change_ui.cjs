@@ -5,7 +5,7 @@ const path = require("node:path");
 const { chromium } = require(process.argv[2] || "playwright");
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, ...(process.platform === "win32" ? {channel:"msedge"} : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const errors = [];

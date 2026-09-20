@@ -39,6 +39,8 @@
     "nav.settings": "設定",
     "nav.support": "ご支援",
     "nav.feedback": "意見・報告",
+    "nav.privacy": "プライバシーポリシー",
+    "common.privacyHint": "取得する情報・公開範囲・保存方針・利用終了について",
 
     "clientUpdate.banner": "Windows クライアント v{version} が公開されています",
     "clientUpdate.download": "GitHub で見る",
@@ -674,6 +676,8 @@
     "nav.settings": "Settings",
     "nav.support": "Support us",
     "nav.feedback": "Feedback",
+    "nav.privacy": "Privacy policy",
+    "common.privacyHint": "Information collected, visibility, retention and stopping use",
 
     "clientUpdate.banner": "Windows client v{version} is available",
     "clientUpdate.download": "View on GitHub",
@@ -1594,6 +1598,13 @@
 
   function applyDocumentI18n() {
     document.documentElement.lang = lang;
+    // Keep the script-free policy page in the reader's selected language.
+    for (const link of document.querySelectorAll('a[data-i18n="nav.privacy"]')) {
+      link.href = `/privacy?lang=${lang}`;
+    }
+    for (const link of document.querySelectorAll('a[data-privacy-contact]')) {
+      link.href = `/privacy?lang=${lang}#contact`;
+    }
     for (const el of document.querySelectorAll("[data-i18n]")) {
       const key = el.getAttribute("data-i18n");
       if (key) el.textContent = t(key);

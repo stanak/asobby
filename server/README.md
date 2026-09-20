@@ -2,6 +2,9 @@
 
 FastAPI ベースのロビーサーバー。募集の API に加えて、閲覧用 Web ページ（`GET /`）を配信する。
 
+プライバシーポリシーは `/privacy`（日本語）、`/privacy?lang=en`（英語）。ログイン・DB・JavaScriptなしで読めます。
+文面、問い合わせ対応、公開時の確認事項は[プライバシー運用](docs/privacy-operations.md)を参照してください。
+
 戦績の共有試合ID・時計ずれ対策・保留報告・既存データの監査は
 [戦績の同一試合判定](docs/match-identity.md)を参照。
 

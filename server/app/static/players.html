@@ -7,7 +7,7 @@
   <title>asobby - プレイヤー</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/players.css?v=4">
-  <script src="/static/i18n.js?v=profiles-4"></script>
+  <script src="/static/i18n.js?v=privacy-1"></script>
   <script src="/static/players.js?v=4" defer></script>
 </head>
 <body>
@@ -20,6 +20,7 @@
       <a href="/stats" data-i18n="nav.stats">戦績</a>
       <a href="/profile" data-i18n="nav.profile">プロフィール編集</a>
       <a href="/settings" data-i18n="nav.settings">設定</a>
+      <a href="/privacy" data-i18n="nav.privacy">プライバシーポリシー</a>
       <button type="button" id="lang-toggle"></button>
     </nav>
   </header>
@@ -28,6 +29,7 @@
     <section id="gate" class="panel" hidden>
       <h1 data-i18n="players.loginHint">プロフィールの閲覧・検索・編集にはDiscordログインが必要です。</h1>
       <a id="login" class="button primary" data-i18n="players.login">Discordでログイン</a>
+      <p><a href="/privacy" data-i18n="nav.privacy">プライバシーポリシー</a></p>
     </section>
     <div id="content"></div>
   </main>

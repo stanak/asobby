@@ -2073,6 +2073,17 @@ async def guide_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "guide.html")
 
 
+@app.get("/privacy", include_in_schema=False)
+async def privacy_page(lang: str = "ja") -> FileResponse:
+    # Public even when OAuth/DB is unavailable. Never interpolate user input
+    # into a filename; both languages work without JS, cookies or analytics.
+    filename = "privacy-en.html" if lang == "en" else "privacy.html"
+    return FileResponse(
+        STATIC_DIR / filename,
+        headers={"Cache-Control": "no-cache", "Referrer-Policy": "no-referrer"},
+    )
+
+
 @app.get("/settings")
 async def settings_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "settings.html")

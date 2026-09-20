@@ -249,6 +249,10 @@ class TrayApp:
     def _open_lobby(self) -> None:
         webbrowser.open(self.controller.lobby_url())
 
+    def _open_privacy(self) -> None:
+        base = self.controller.config_mgr.get_api_base().rstrip("/")
+        webbrowser.open(f"{base}/privacy?lang={get_lang()}")
+
     def _on_tk(self, fn) -> None:
         """tkinter メインスレッドで fn を実行する。"""
         if self.tk_root is not None:
@@ -759,6 +763,7 @@ class TrayApp:
                 visible=lambda item: self.controller.is_logged_in(),
             ),
             MenuItem(t("tray.open_lobby"), lambda: self._open_lobby()),
+            MenuItem(t("tray.privacy"), lambda: self._open_privacy()),
             Menu.SEPARATOR,
             self._section_header("tray.section.lobby"),
             MenuItem(
