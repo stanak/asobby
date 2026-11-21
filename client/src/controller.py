@@ -729,7 +729,7 @@ class Controller:
         self._addr_copy_pending = True
         try:
             uses_ap = self._host_uses_autopunch(st)
-            direct_ok = await self._probe_host_reachable(addr, autopunch=False)
+            direct_ok = await self._probe_host_reachable(addr, autopunch=False, giuroll=bool(st.giuroll))
             if not self.is_detect_paused():
                 return
             flags = reachability_flags_for_clipboard(
@@ -951,14 +951,14 @@ class Controller:
         if changed:
             self.detect_ui_sink()
 
-    async def _probe_host_reachable(self, addr: str, autopunch: bool) -> bool:
+    async def _probe_host_reachable(self, addr: str, autopunch: bool, *, giuroll: bool = False) -> bool:
         try:
             host, port_s = addr.rsplit(":", 1)
             port = int(port_s)
         except ValueError:
             return False
         rtt = await asyncio.to_thread(
-            probe_rtt_ms, host, port, autopunch=autopunch
+            probe_rtt_ms, host, port, autopunch=autopunch, giuroll=giuroll
         )
         return rtt is not None
 
@@ -966,13 +966,13 @@ class Controller:
         if not self.is_detect_paused():
             return
         uses_ap = self._host_uses_autopunch(st)
-        direct_ok = await self._probe_host_reachable(addr, autopunch=False)
+        direct_ok = await self._probe_host_reachable(addr, autopunch=False, giuroll=bool(st.giuroll))
         if not self.is_detect_paused():
             return
         if direct_ok:
             ok = True
         elif uses_ap:
-            ok = await self._probe_host_reachable(addr, autopunch=True)
+            ok = await self._probe_host_reachable(addr, autopunch=True, giuroll=bool(st.giuroll))
         else:
             ok = False
         if not self.is_detect_paused():

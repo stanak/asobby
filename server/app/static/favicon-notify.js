@@ -126,6 +126,7 @@
         host: parsed.host,
         port: parsed.port,
         autopunch: !!post.autopunch,
+        giuroll: !!post.giuroll,
       });
     }
     if (!targets.length) return true;

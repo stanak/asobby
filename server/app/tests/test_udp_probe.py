@@ -89,9 +89,22 @@ class Socket:
             return self.responses.pop(0)
         raise socket.timeout()
 
+    def exchange(self, target, payload, accept, timeout=0.35):
+        if self.bound is None:
+            self.bind(("0.0.0.0", 10800))
+        self.sendto(payload, target)
+        for _ in range(64):
+            try:
+                data, sender = self.recvfrom(4096)
+            except socket.timeout:
+                return None
+            if sender == target and accept(data):
+                return data
+        return None
+
 
 def run(monkeypatch, sock, **kwargs):
-    monkeypatch.setattr(socket, "socket", lambda *args: sock)
+    monkeypatch.setattr(mod, "get_transport", lambda *args: sock)
     monkeypatch.setattr(socket, "gethostbyname", lambda host: RELAY[0])
     return mod.check(HOST + ":10800", echo=ECHO, lock=threading.Lock(),
                      bind_host="0.0.0.0", bind_port=10800, relay="relay.example:14763", **kwargs)
@@ -100,14 +113,44 @@ def run(monkeypatch, sock, **kwargs):
 def test_direct_giuroll_and_no_relay_side_effect(monkeypatch):
     sock = Socket(direct=True, giu=True)
     result = run(monkeypatch, sock)
-    assert result == mod.Result(alive=True, state="waiting", giuroll=True, direct=True)
+    assert result == mod.Result(alive=True, giuroll=True, direct=True, state_checked=False)
     assert all(target == TARGET for _, target in sock.sent)
-    assert sock.closed
+    assert not sock.closed
+    assert sock.sent == [(b"\x6c\x00", TARGET)]
 
 
 def test_giuroll_pong_is_liveness_not_waiting(monkeypatch):
     result = run(monkeypatch, Socket(direct=True, giu=True, echo=False))
     assert result.alive and result.giuroll and result.state == "unknown"
+
+
+def test_explicit_state_query_is_separate_from_giuroll_liveness(monkeypatch):
+    sock = Socket(direct=True, giu=True)
+    result = run(monkeypatch, sock, query_state=True)
+    assert result.state == "waiting" and result.state_checked and result.giuroll
+    assert sock.sent == [(b"\x6c\x00", TARGET), (ECHO, TARGET)]
+
+
+def test_known_giuroll_timeout_does_not_send_spectator_request(monkeypatch):
+    sock = Socket(direct=True, echo=True, registered=False)
+    result = run(monkeypatch, sock, known_giuroll=True)
+    assert not result.alive
+    assert not any(data == ECHO for data, _ in sock.sent)
+
+
+def test_pong_keeps_liveness_when_optional_state_query_exceeds_budget(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(mod.time, "monotonic", lambda: now[0])
+    sock = Socket(direct=True, giu=True)
+    original = sock.exchange
+    def exchange(*args):
+        reply = original(*args)
+        now[0] = 103.0
+        return reply
+    sock.exchange = exchange
+    result = run(monkeypatch, sock, query_state=True, deadline=103.0)
+    assert result.alive and result.giuroll and result.state == "unknown"
+    assert sock.sent == [(b"\x6c\x00", TARGET)]
 
 
 def test_absent_giuroll_reply_does_not_fail_normal_host(monkeypatch):
@@ -155,7 +198,7 @@ def test_ap_lookup_and_game_probe_share_socket_and_direct_goes_first(monkeypatch
     sock = Socket(ap=True, giu=True)
     result = run(monkeypatch, sock)
     assert result.alive and result.autopunch and result.giuroll and not result.direct
-    assert sock.sent[:2] == [(ECHO, TARGET), (b"\x6c\x00", TARGET)]
+    assert sock.sent[:2] == [(b"\x6c\x00", TARGET), (ECHO, TARGET)]
     assert sock.sent[2][1] == RELAY
     assert sock.sent[-1] == (b"\x6c\x00", (HOST, 19000))
 
@@ -215,7 +258,7 @@ def test_expired_admission_deadline_never_opens_socket(monkeypatch):
 
 def test_fixed_socket_lock_wait_respects_admission_deadline(monkeypatch):
     sock = Socket(direct=True)
-    monkeypatch.setattr(socket, "socket", lambda *args: sock)
+    monkeypatch.setattr(mod, "get_transport", lambda *args: sock)
     lock = threading.Lock()
     lock.acquire()
     before = time.monotonic()
@@ -240,14 +283,14 @@ def test_each_exchange_uses_remaining_total_budget(monkeypatch):
     sock = Socket()
     assert run(monkeypatch, sock, deadline=100.5).timed_out
     assert timeouts == pytest.approx([0.35, 0.15])
-    assert sock.closed
+    assert not sock.closed
 
 
 def test_slow_relay_dns_cannot_send_udp_after_deadline(monkeypatch):
     now = [100.0]
     monkeypatch.setattr(mod.time, "monotonic", lambda: now[0])
     sock = Socket()
-    monkeypatch.setattr(socket, "socket", lambda *args: sock)
+    monkeypatch.setattr(mod, "get_transport", lambda *args: sock)
     def resolve(host):
         now[0] = 104.0
         return RELAY[0]
@@ -255,8 +298,8 @@ def test_slow_relay_dns_cannot_send_udp_after_deadline(monkeypatch):
     lock = threading.Lock()
     result = mod.check(HOST + ":10800", echo=ECHO, lock=lock,
                        bind_host=None, bind_port=10800, relay="relay.example:14763", deadline=103.0)
-    assert result.timed_out and not lock.locked() and sock.closed
-    assert sock.sent == [(ECHO, TARGET), (b"\x6c\x00", TARGET)]
+    assert result.timed_out and not lock.locked() and not sock.closed
+    assert sock.sent == [(b"\x6c\x00", TARGET), (ECHO, TARGET)]
 
 
 @pytest.mark.parametrize("ap,giu", [(False, False), (False, True), (True, False), (True, True)])
@@ -265,3 +308,31 @@ def test_admission_deadline_preserves_direct_ap_and_giuroll_detection(monkeypatc
                  deadline=time.monotonic() + 3)
     assert result.alive and not result.timed_out
     assert result.direct is not ap and result.autopunch is ap and result.giuroll is giu
+
+
+def test_native_giuroll_liveness_uses_pong_without_spectating(monkeypatch):
+    import main
+    sock = Socket(direct=True, giu=True)
+    monkeypatch.setattr(mod, "get_transport", lambda *args: sock)
+    assert main.check_hostable_once(*TARGET, giuroll=True)
+    assert sock.sent == [(mod.GIUROLL_PING, TARGET)]
+
+
+def test_native_guest_identification_still_requests_state(monkeypatch):
+    import main
+    sock = Socket(direct=True)
+    monkeypatch.setattr(mod, "get_transport", lambda *args: sock)
+    monkeypatch.setattr(main, "soku_echo_packet", lambda: ECHO)
+    assert main.probe_post_status(*TARGET, False) == WAITING
+    assert sock.sent == [(ECHO, TARGET)]
+
+
+def test_native_autopunch_lookup_and_ping_use_same_transport(monkeypatch):
+    import main
+    sock = Socket(ap=True, giu=True)
+    monkeypatch.setattr(mod, "get_transport", lambda *args: sock)
+    monkeypatch.setattr(socket, "gethostbyname", lambda _: RELAY[0])
+    assert main.check_hostable_autopunch(*TARGET, giuroll=True) == (True, True)
+    assert sock.sent[0][1] == RELAY
+    assert sock.sent[-1] == (mod.GIUROLL_PING, (HOST, 19000))
+    assert len(sock.sent) == 2 and not sock.closed

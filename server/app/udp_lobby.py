@@ -23,6 +23,7 @@ from udp_probe import Result, public_address, same_address
 CHECK_INTERVAL = 15.0
 MIN_TICK = 1.0
 GIUROLL_CHECK_INTERVAL = 60.0
+STATE_CHECK_INTERVAL = 60.0  # Pong-only checks between game-state samples
 FAILURES_TO_CLOSE = 3
 FAILURE_GRACE = 2.0  # consecutive silence, NOT a publication lifetime
 FAILURE_RECHECK_INTERVAL = 1.0
@@ -48,9 +49,11 @@ def apply_alive(rec, result, now):
     post.direct_reachable = result.direct
     post.reachability_uncertain = result.autopunch and not result.direct
     post.reachability_lost = False
-    post.net_status = {"waiting": 3, "connecting": 2}.get(result.state, 0)
-    # A Giuroll pong proves liveness, not a free player slot.
-    post.guest_connected = result.state == "connecting"
+    if result.state_checked:
+        post.net_status = {"waiting": 3, "connecting": 2}.get(result.state, 0)
+        # A Giuroll pong proves liveness, not a free player slot.
+        post.guest_connected = result.state == "connecting"
+        monitor.last_state_check_at = now
 
 
 class Registration(BaseModel):
@@ -95,6 +98,7 @@ class Monitor:
     last_success_at: float = 0
     last_check_at: float = 0
     last_giuroll_check_at: float = 0
+    last_state_check_at: float = 0
     next_check_at: float = 0
     failures: int = 0
     first_failure_at: float = 0
@@ -272,7 +276,8 @@ class Service:
         started = asyncio.Event()
         try:
             job = asyncio.create_task(self._check(
-                rec.post.addr, started=started, detect_giuroll=True, deadline=deadline,
+                rec.post.addr, started=started, detect_giuroll=True,
+                query_state=True, deadline=deadline,
             ))
             self._checks.add(job)
             job.add_done_callback(self._check_done)
@@ -358,6 +363,8 @@ class Service:
             rec.post.addr,
             prefer_autopunch=rec.post.autopunch and not rec.post.direct_reachable,
             detect_giuroll=detect_giuroll,
+            known_giuroll=rec.post.giuroll,
+            query_state=now - rec.monitor.last_state_check_at >= STATE_CHECK_INTERVAL,
         )
         async with self._lock:
             if self.records.get(rec.post.id) is not rec:

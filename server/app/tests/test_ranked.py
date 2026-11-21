@@ -1052,7 +1052,7 @@ async def test_guest_name_cleared_when_leaving_battle_on_heartbeat():
         assert rec.guest_user_id == "888"
         assert rec.post.ranked_active is True
         assert rec.guest_ip == ""
-        assert rec in main.probe_target_records()
+        assert rec not in main.probe_target_records()  # Waiting needs no guest lookup.
 
 
 @pytest.mark.asyncio

@@ -87,6 +87,41 @@ def due(service):
 
 
 @pytest.mark.asyncio
+async def test_giuroll_pong_ticks_preserve_state_between_minute_samples(service, monkeypatch):
+    s, _, _ = service
+    cred = await credential(s)
+    item = s.integrations.get(cred["integration"]["id"])
+    clock = [time.time()]
+    monkeypatch.setattr(mod.time, "time", lambda: clock[0])
+    queries = []
+    def probe(*args, **kwargs):
+        queries.append(kwargs["query_state"])
+        if kwargs["query_state"]:
+            return Result(alive=True, giuroll=True, direct=True, state="connecting")
+        assert kwargs["known_giuroll"]
+        return Result(alive=True, giuroll=True, direct=True, state_checked=False)
+    s.probe = probe
+    reg, _ = await s.register(item, body())
+    ident = reg["id"]
+    for _ in range(4):
+        clock[0] += mod.CHECK_INTERVAL
+        await s.tick()
+        assert s.records[ident].post.net_status == 2
+        assert s.records[ident].post.guest_connected
+    assert queries == [True, False, False, False, True]
+
+
+@pytest.mark.asyncio
+async def test_giuroll_pong_only_admission_does_not_claim_waiting(service):
+    s, _, _ = service
+    cred = await credential(s)
+    s.probe = lambda *args, **kwargs: Result(alive=True, giuroll=True, direct=True, state_checked=False)
+    reg, _ = await s.register(s.integrations.get(cred["integration"]["id"]), body())
+    post = s.records[reg["id"]].post
+    assert post.net_status == 0 and not post.guest_connected
+
+
+@pytest.mark.asyncio
 async def test_api_scope_pending_hidden_until_checked_and_casual_publication(service):
     s, saved, events = service
     readonly = await s.integrations.create(integrations.IntegrationInput(name="read"))
@@ -285,7 +320,7 @@ async def test_enabling_giuroll_after_registration_updates_same_listing(service,
     giuroll_running = [False]
     attempts = []
     monkeypatch.setattr(mod.time, "time", lambda: clock[0])
-    monkeypatch.setattr(udp_probe.socket, "socket", MagicMock())
+    monkeypatch.setattr(udp_probe, "get_transport", MagicMock())
     echo = b"ordinary-probe"
     def exchange(sock, target, payload, accept, timeout=0.35):
         assert target == ("93.184.216.34", 10800)  # No real socket or relay traffic.

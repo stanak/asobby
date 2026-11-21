@@ -61,15 +61,15 @@ async def app_client() -> AsyncIterator[AsyncClient]:
 
 
 @pytest.mark.asyncio
-async def test_verify_direct_strict_wins_without_waiting_for_ap(monkeypatch):
-    """direct strict が通れば AP チェックの完了を待たずに確定する。"""
+async def test_verify_direct_strict_never_starts_ap(monkeypatch):
+    """Direct success must not start even a cancelled/background relay lookup."""
     calls: list[str] = []
 
     def fake_direct(host: str, port: int, **kwargs):
         calls.append("direct")
         return True
 
-    def fake_ap(host: str, port: int):
+    def fake_ap(host: str, port: int, **kwargs):
         calls.append("autopunch")
         return False, True
 
@@ -82,8 +82,7 @@ async def test_verify_direct_strict_wins_without_waiting_for_ap(monkeypatch):
     )
     assert direct is True
     assert autopunch is False
-    # direct は lenient + strict の 2 回。AP は並行実行 (キャンセルされ得る)
-    assert calls.count("direct") == 2
+    assert calls == ["direct", "direct"]
 
 
 @pytest.mark.asyncio
@@ -135,7 +134,7 @@ async def test_verify_autopunch_requires_ap_when_direct_fails(monkeypatch):
         calls.append("direct")
         return False
 
-    def fake_ap(host: str, port: int):
+    def fake_ap(host: str, port: int, **kwargs):
         calls.append("autopunch")
         return True, True
 
@@ -168,7 +167,7 @@ async def test_verify_autopunch_only_marks_not_direct(monkeypatch):
     def fake_direct(host: str, port: int, **kwargs):
         return False
 
-    def fake_ap(host: str, port: int):
+    def fake_ap(host: str, port: int, **kwargs):
         return True, True
 
     monkeypatch.setattr(main, "HOSTCHECK_ENABLED", True)
@@ -370,7 +369,7 @@ def test_probe_target_records_skips_connection_in_progress():
     main.RECORDS["busy_id"] = busy_identified
     try:
         targets = main.probe_target_records()
-        assert [rec.post.id for rec in targets] == ["busy", "quiet"]
+        assert [rec.post.id for rec in targets] == ["busy"]
     finally:
         main.RECORDS.clear()
     main.RANKED_SESSIONS.clear()

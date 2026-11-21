@@ -14,6 +14,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable
 
+from probe_transport import get_transport
+
+GIUROLL_PING = b"\x6c\x00"
+GIUROLL_PONG = b"\x6d\x61"
+
 
 @dataclass(frozen=True)
 class Result:
@@ -24,6 +29,7 @@ class Result:
     autopunch: bool = False
     inconclusive: bool = False  # local/relay outage is not host death
     timed_out: bool = False  # admission deadline, not proof the host is dead
+    state_checked: bool = True  # False: pong only; preserve the last state sample
 
 
 class ProbeDeadline(Exception):
@@ -94,26 +100,36 @@ def game_state(reply: bytes) -> str | None:
 
 
 def exchange(sock, target, payload, accept: Callable[[bytes], bool], timeout=0.35):
-    sock.sendto(payload, target)
-    deadline = time.monotonic() + timeout
-    # Also bound the packet count: invalid traffic cannot monopolize a worker.
-    for _ in range(64):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        sock.settimeout(remaining)
-        try:
-            data, sender = sock.recvfrom(4096)
-        except (socket.timeout, ConnectionResetError, ConnectionRefusedError):
-            break
-        if sender[:2] == target and accept(data):
-            return data
-    return None
+    return sock.exchange(target, payload, accept, timeout)
+
+
+def probe_reply(sock, target, echo, *, try_giuroll=True, known_giuroll=False, query_state=False,
+                timeout=0.35, deadline=None):
+    """Pong is liveness only. Ask for spectator state only when it is needed."""
+    def attempt(payload, accept):
+        budget = timeout if deadline is None else min(timeout, remaining_time(deadline))
+        return exchange(sock, target, payload, accept, budget)
+
+    pong = attempt(GIUROLL_PING, lambda data: data == GIUROLL_PONG) if try_giuroll else None
+    if pong is not None and not query_state:
+        return pong, True, False
+    if known_giuroll and not query_state:
+        return None, False, False  # Packet loss is not a reason to try a session request.
+    try:
+        reply = attempt(echo, lambda data: game_state(data) is not None)
+    except ProbeDeadline:
+        if pong is None:
+            raise
+        return pong, True, True
+    if reply is None and not try_giuroll:
+        pong = attempt(GIUROLL_PING, lambda data: data == GIUROLL_PONG)
+    return reply if reply is not None else pong, pong is not None, True
 
 
 def check(
     addr: str, *, echo: bytes, lock, bind_host: str | None, bind_port: int,
-    relay: str, prefer_autopunch=False, detect_giuroll=True, deadline: float | None = None,
+    relay: str, prefer_autopunch=False, detect_giuroll=True, query_state=False, known_giuroll=False,
+    deadline: float | None = None,
 ) -> Result:
     host, port = public_address(addr)  # revalidate restored data before sending
 
@@ -123,23 +139,15 @@ def check(
         return exchange(sock, target, payload, accept, timeout)
 
     def host_check(sock, target, *, direct=False, autopunch=False):
-        reply = attempt(sock, target, echo, lambda data: game_state(data) is not None)
-        # A host may enable Giuroll between periodic capability checks and
-        # stop answering the ordinary spectator probe. Before counting that
-        # silence as a failure, try its pong on this same verified endpoint.
-        # Healthy ordinary hosts still keep the slower discovery cadence.
-        try:
-            giuroll = bool((detect_giuroll or reply is None) and attempt(
-                sock, target, b"\x6c\x00", lambda data: data == b"\x6d\x61",
-            ))
-        except ProbeDeadline:
-            if reply is None:
-                raise
-            giuroll = False  # Capability discovery must not invalidate an echo.
+        reply, giuroll, state_checked = probe_reply(
+            sock, target, echo, try_giuroll=detect_giuroll or known_giuroll, known_giuroll=known_giuroll,
+            query_state=query_state, deadline=deadline,
+        )
         return Result(
-            alive=reply is not None or giuroll,
-            state=game_state(reply) if reply is not None else "unknown",
+            alive=reply is not None,
+            state=(game_state(reply) or "unknown") if reply is not None else "unknown",
             giuroll=giuroll, direct=direct, autopunch=autopunch,
+            state_checked=state_checked,
         )
 
     # Shared with existing game probes: the fixed Fly UDP port must not have
@@ -147,46 +155,40 @@ def check(
     # while its thread is still sending/receiving.
     try:
         with probe_lock(lock, deadline):
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                if bind_host:
-                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    sock.bind((bind_host, bind_port))
-                else:
-                    sock.bind(("0.0.0.0", 0))
-                # Do this BEFORE relay lookup, which opens a hole to us and
-                # could make an AP-only host subsequently appear direct.
-                if not prefer_autopunch:
-                    result = host_check(sock, (host, port), direct=True)
-                    if result.alive:
-                        return result
+            sock = get_transport(bind_host, bind_port)
+            # Check direct BEFORE relay lookup, which opens a hole to us.
+            if not prefer_autopunch:
+                result = host_check(sock, (host, port), direct=True)
+                if result.alive:
+                    return result
 
-                relay_host, relay_port = relay.rsplit(":", 1)
-                relay_addr = (socket.gethostbyname(relay_host), int(relay_port))
-                if not attempt(sock, relay_addr, b"\x00", lambda data: data == b"\x00", 0.7):
-                    return Result(inconclusive=True)
-                lookup = struct.pack("!H4sH", sock.getsockname()[1], socket.inet_aton(host), port)
+            relay_host, relay_port = relay.rsplit(":", 1)
+            relay_addr = (socket.gethostbyname(relay_host), int(relay_port))
+            if not attempt(sock, relay_addr, b"\x00", lambda data: data == b"\x00", 0.7):
+                return Result(inconclusive=True)
+            lookup = struct.pack("!H4sH", sock.getsockname()[1], socket.inet_aton(host), port)
 
-                def valid_mapping(data):
-                    return (
-                        len(data) == 8 and data[4:8] == socket.inet_aton(host)
-                        and int.from_bytes(data[0:2], "big") > 0
-                        and int.from_bytes(data[2:4], "big") > 0
-                        and port in (
-                            int.from_bytes(data[0:2], "big"), int.from_bytes(data[2:4], "big"),
-                        )
+            def valid_mapping(data):
+                return (
+                    len(data) == 8 and data[4:8] == socket.inet_aton(host)
+                    and int.from_bytes(data[0:2], "big") > 0
+                    and int.from_bytes(data[2:4], "big") > 0
+                    and port in (
+                        int.from_bytes(data[0:2], "big"), int.from_bytes(data[2:4], "big"),
                     )
+                )
 
-                mapping = attempt(sock, relay_addr, lookup, valid_mapping, 0.7)
-                if mapping is None:
-                    return Result()
-                target = (host, int.from_bytes(mapping[2:4], "big"))
-                # Allow the host's hole-punch loop to run; never establish a
-                # playing connection or send rollback input packets.
-                for _ in range(2):
-                    result = host_check(sock, target, autopunch=True)
-                    if result.alive:
-                        return result
+            mapping = attempt(sock, relay_addr, lookup, valid_mapping, 0.7)
+            if mapping is None:
                 return Result()
+            target = (host, int.from_bytes(mapping[2:4], "big"))
+            # Allow the host's hole-punch loop to run; never establish a
+            # playing connection or send rollback input packets.
+            for _ in range(2):
+                result = host_check(sock, target, autopunch=True)
+                if result.alive:
+                    return result
+            return Result()
     except ProbeDeadline:
         return Result(timed_out=True)
     except (OSError, ValueError):

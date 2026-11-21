@@ -118,7 +118,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(422, {"ok": False, "detail": "too many targets"})
             return
 
-        jobs: list[tuple[str, str, int, bool]] = []
+        jobs: list[tuple[str, str, int, bool, bool]] = []
         for item in targets:
             if not isinstance(item, dict):
                 continue
@@ -131,12 +131,12 @@ class _Handler(BaseHTTPRequestHandler):
             if not post_id or not host:
                 continue
             autopunch = bool(item.get("autopunch"))
-            jobs.append((post_id, host, port, autopunch))
+            jobs.append((post_id, host, port, autopunch, bool(item.get("giuroll"))))
 
         if not ping_probes_allowed():
             results = [
                 {"id": post_id, "rtt_ms": None, "ok": False, "skipped": True}
-                for post_id, _host, _port, _ap in jobs
+                for post_id, _host, _port, _ap, _giuroll in jobs
             ]
             self._send_json(200, {"ok": True, "results": results, "paused": True})
             return
@@ -148,8 +148,9 @@ class _Handler(BaseHTTPRequestHandler):
                 host,
                 port,
                 autopunch=autopunch,
+                giuroll=giuroll,
             ): post_id
-            for post_id, host, port, autopunch in jobs
+            for post_id, host, port, autopunch, giuroll in jobs
         }
         for fut in as_completed(futures):
             post_id = futures[fut]

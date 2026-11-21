@@ -51,6 +51,7 @@ from lobby_order import post_sort_key
 import chat_sync
 import udp_lobby
 import udp_probe
+from probe_transport import close_transports
 
 ALLOWED_STREAM_DOMAINS = {
     "youtube.com",
@@ -969,6 +970,8 @@ class PostRecord:
     # giuroll_request / casual_invite の送信ログ (返信 API 用。配送キューとは別)
     sent_log: dict[str, dict] = field(default_factory=dict)
     last_hostcheck_at: float = 0.0
+    last_guest_probe_at: float = 0.0  # monotonic, never persisted
+    guest_probe_pending: bool = False
     hostcheck_fail_streak: int = 0  # 募集中再検証の連続失敗回数 (到達性喪失検知用)
     monitor: Optional[udp_lobby.Monitor] = None
 
@@ -1734,13 +1737,7 @@ async def guest_probe_loop() -> None:
                 await asyncio.sleep(tick_sleep)
                 continue
 
-            reply = await asyncio.to_thread(
-                probe_post_status,
-                host,
-                port,
-                post.autopunch,
-            )
-            await apply_guest_probe(rec, reply)
+            await probe_guest_for_record(rec)
         except Exception as e:
             print(f"guest_probe_loop error: {e}")
 
@@ -1783,6 +1780,7 @@ async def lifespan(app: FastAPI):
         await UDP_LOBBY.stop()
         await INTEGRATIONS.stop()
         await asyncio.gather(cleanup_task, guest_probe_task, return_exceptions=True)
+        await asyncio.to_thread(close_transports)
         if db.is_configured():
             await db.dispose()
 
@@ -4114,7 +4112,7 @@ async def _update_post_inner(body: UpdatePostIn) -> dict[str, Any]:
                 check_addr,
                 autopunch=body.autopunch,
                 ap_check=addr_changed,
-                consecutive=True,
+                consecutive=False,
                 giuroll=giuroll,
             )
         except HTTPException as exc:
@@ -5137,7 +5135,7 @@ def soku_echo_packet(
 
 
 def is_valid_reply(data: bytes) -> bool:
-    return len(data) >= 1 and data[0] in (0x07, 0x08)
+    return data == udp_probe.GIUROLL_PONG or udp_probe.game_state(data) is not None
 
 
 def parse_matched_client(data: bytes) -> Optional[tuple[str, int]]:
@@ -5150,56 +5148,27 @@ def parse_matched_client(data: bytes) -> Optional[tuple[str, int]]:
 
 
 def _autopunch_nat_port(host: str, port: int) -> Optional[int]:
-    """AutoPunch リレー Stage 2 と同じ手順で NAT ポートを引く。
-    呼び出し側が _probe_lock を保持していること。"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    """Lookup and later probes share the persistent socket/NAT mapping."""
+    sock = udp_probe.get_transport(_probe_bind_addr(), PROBE_BIND_PORT)
+    relay_host, relay_port = AUTOPUNCH_RELAY.rsplit(":", 1)
     try:
-        bind_addr = _probe_bind_addr()
-        if bind_addr:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind((bind_addr, PROBE_BIND_PORT))
-        else:
-            sock.bind(("0.0.0.0", 0))
+        relay_addr = (socket.gethostbyname(relay_host), int(relay_port))
+        lookup = struct.pack("!H4sH", sock.getsockname()[1], socket.inet_aton(host), port)
 
-        my_port = sock.getsockname()[1]
+        def valid(data):
+            return (
+                len(data) == 8 and data[4:8] == socket.inet_aton(host)
+                and int.from_bytes(data[2:4], "big") > 0
+                and port in (int.from_bytes(data[:2], "big"), int.from_bytes(data[2:4], "big"))
+            )
 
-        relay_host, relay_port_s = AUTOPUNCH_RELAY.rsplit(":", 1)
-        try:
-            relay_port = int(relay_port_s)
-            if not (0 < relay_port < 65536):
-                raise ValueError
-            relay_ip = socket.gethostbyname(relay_host)
-        except (OSError, ValueError):
-            return None
-
-        relay_addr = (relay_ip, relay_port)
-        lookup = struct.pack("!H", my_port) + socket.inet_aton(host) + struct.pack("!H", port)
-        nat_port: Optional[int] = None
-        for _ in range(3):
-            try:
-                sock.sendto(lookup, relay_addr)
-                deadline = time.monotonic() + 1.0
-                while time.monotonic() < deadline:
-                    remaining = deadline - time.monotonic()
-                    sock.settimeout(remaining)
-                    data, addr = sock.recvfrom(4096)
-                    if addr[0] != relay_ip or len(data) != 8:
-                        continue
-                    candidate_nat_port = struct.unpack("!H", data[2:4])[0]
-                    ip = socket.inet_ntoa(data[4:8])
-                    if ip == host:
-                        nat_port = candidate_nat_port
-                        break
-                if nat_port is not None:
-                    break
-            except OSError:
-                pass
-
-        return nat_port
-    except OSError:
-        return None
-    finally:
-        sock.close()
+        for _ in range(2):
+            reply = udp_probe.exchange(sock, relay_addr, lookup, valid, 0.7)
+            if reply is not None:
+                return int.from_bytes(reply[2:4], "big")
+    except (OSError, ValueError):
+        pass
+    return None
 
 
 def parse_probe_addr(post: Post) -> Optional[tuple[str, int]]:
@@ -5230,13 +5199,11 @@ def host_connection_in_progress(
 def guest_probe_paused(rec: PostRecord) -> bool:
     """ゲスト echo プローブを止めるべきか。
 
-    guest_ip 未取得、または guest 未同定の間はキャラセレ/対戦中でもプローブする。
+    待機状態はクライアントが通知済み。接続相手の同定が必要な時だけ問い合わせる。
     """
-    if not rec.guest_ip:
-        return False
-    if not rec.guest_user_id:
-        return False
-    return host_connection_in_progress(rec)
+    if not host_connection_in_progress(rec):
+        return True
+    return bool(rec.guest_ip and rec.guest_user_id)
 
 
 def probe_target_records() -> list[PostRecord]:
@@ -5267,9 +5234,12 @@ def probe_post_status(
     autopunch: bool,
     *,
     timeout_sec: float = GUEST_PROBE_TIMEOUT_SEC,
+    still_current=None,
 ) -> Optional[bytes]:
     """soku echo でホスト状態を 1 回プローブする（スレッド内で呼ぶ）。"""
     with _probe_lock:
+        if still_current is not None and not still_current():
+            return None
         probe_port = port
         if autopunch:
             nat_port = _autopunch_nat_port(host, port)
@@ -5277,29 +5247,52 @@ def probe_post_status(
                 return None
             probe_port = nat_port
 
-        return probe_host_once(
-            host,
-            probe_port,
-            soku_echo_packet(),
-            timeout_sec=timeout_sec,
-        )
+        try:
+            if still_current is not None and not still_current():
+                return None
+            # This is peer identification, NOT liveness. A pong has no peer IP.
+            sock = udp_probe.get_transport(_probe_bind_addr(), PROBE_BIND_PORT)
+            return udp_probe.exchange(
+                sock, (host, probe_port), soku_echo_packet(),
+                lambda data: udp_probe.game_state(data) is not None, timeout_sec,
+            )
+        except OSError:
+            return None
 
 
 async def probe_guest_for_record(rec: PostRecord, *, force: bool = False) -> None:
     """募集 1 件に対して echo プローブを 1 回実行する (heartbeat 用)。"""
-    if getattr(rec, "monitor", None) is not None or rec.guest_ip and not force:
+    if getattr(rec, "monitor", None) is not None or RECORDS.get(rec.post.id) is not rec:
+        return
+    if not force and guest_probe_paused(rec):
+        return
+    now = time.monotonic()
+    if rec.guest_probe_pending or (
+        not force and now - rec.last_guest_probe_at < GUEST_PROBE_ROUND_SEC
+    ):
         return
     parsed = parse_probe_addr(rec.post)
     if parsed is None:
         return
     host, port = parsed
-    reply = await asyncio.to_thread(
-        probe_post_status,
-        host,
-        port,
-        rec.post.autopunch,
-    )
-    await apply_guest_probe(rec, reply)
+    addr = rec.post.addr
+    def still_current():
+        return RECORDS.get(rec.post.id) is rec and rec.post.addr == addr
+    rec.last_guest_probe_at = now
+    rec.guest_probe_pending = True
+    try:
+        worker = asyncio.create_task(asyncio.to_thread(
+            probe_post_status, host, port, rec.post.autopunch, still_current=still_current,
+        ))
+        try:
+            reply = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            await worker  # Keep single-flight ownership until the UDP work ends.
+            raise
+        if still_current():
+            await apply_guest_probe(rec, reply)
+    finally:
+        rec.guest_probe_pending = False
 
 
 async def apply_guest_probe(rec: PostRecord, reply: Optional[bytes]) -> None:
@@ -5385,32 +5378,17 @@ def probe_host_once(
     packet: bytes,
     *,
     timeout_sec: float = 0.2,
+    giuroll: bool = False,
 ) -> Optional[bytes]:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    """Liveness first: a Giuroll pong needs no spectator INIT_REQUEST."""
     try:
-        bind_addr = _probe_bind_addr()
-        if bind_addr:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind((bind_addr, PROBE_BIND_PORT))
-
-        sock.settimeout(timeout_sec)
-        sock.sendto(packet, (host, port))
-
-        # 送信元ポート固定時は他ホストからの迷いパケットも届き得るので
-        # 送信先からの応答だけを受け取る
-        deadline = time.monotonic() + timeout_sec
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return None
-            sock.settimeout(remaining)
-            data, addr = sock.recvfrom(4096)
-            if addr[0] == host or not bind_addr:
-                return data
-    except (socket.timeout, OSError):
+        sock = udp_probe.get_transport(_probe_bind_addr(), PROBE_BIND_PORT)
+        reply, _, _ = udp_probe.probe_reply(
+            sock, (host, port), packet, timeout=timeout_sec, known_giuroll=giuroll,
+        )
+        return reply
+    except OSError:
         return None
-    finally:
-        sock.close()
 
 
 def check_hostable_consecutive(
@@ -5423,6 +5401,7 @@ def check_hostable_consecutive(
     interval_sec: float = 0.1,
     timeout_sec: float = 0.2,
     needed_consecutive: int = 2,
+    giuroll: bool = False,
 ) -> bool:
     packet = soku_echo_packet(
         should_match=should_match,
@@ -5438,6 +5417,7 @@ def check_hostable_consecutive(
                 port,
                 packet,
                 timeout_sec=timeout_sec,
+                giuroll=giuroll,
             )
 
             if reply is not None and is_valid_reply(reply):
@@ -5461,8 +5441,9 @@ def check_hostable_once(
     should_match: bool = False,
     profile_name: str = "asobby",
     timeout_sec: float = 0.2,
+    giuroll: bool = False,
 ) -> bool:
-    """単発 soku echo で到達性を確認する (heartbeat 再検証向け)。"""
+    """単発 ping (通常ホストのみ観戦要求にフォールバック)。"""
     packet = soku_echo_packet(
         should_match=should_match,
         profile_name=profile_name,
@@ -5473,6 +5454,7 @@ def check_hostable_once(
             port,
             packet,
             timeout_sec=timeout_sec,
+            giuroll=giuroll,
         )
     return reply is not None and is_valid_reply(reply)
 
@@ -5495,108 +5477,20 @@ def compute_reachability_uncertain(
     return True  # AP-only はポート制限 NAT 等を含め接続保証なし
 
 
-def check_hostable_autopunch(host: str, port: int) -> tuple[bool, bool]:
-    """AutoPunch リレー経由でホスト登録と soku echo を検証する。
-
-    Returns (reachable, fully_verified). fail-open 時は (True, False)。
-    """
+def check_hostable_autopunch(host: str, port: int, *, giuroll=False) -> tuple[bool, bool]:
+    """Verify an AutoPunch host using the same persistent lookup/probe socket."""
     with _probe_lock:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            bind_addr = _probe_bind_addr()
-            if bind_addr:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.bind((bind_addr, PROBE_BIND_PORT))
-            else:
-                sock.bind(("0.0.0.0", 0))
-
-            my_port = sock.getsockname()[1]
-
-            relay_host, relay_port_s = AUTOPUNCH_RELAY.rsplit(":", 1)
-            try:
-                relay_port = int(relay_port_s)
-                if not (0 < relay_port < 65536):
-                    raise ValueError
-                relay_ip = socket.gethostbyname(relay_host)
-            except (OSError, ValueError):
-                print("autopunch relay resolution failed, skipping verification")
-                return True, False
-
-            relay_addr = (relay_ip, relay_port)
-
-            # Stage 1: リレー到達性 (fail-open)
-            relay_ok = False
-            for _ in range(3):
-                try:
-                    sock.sendto(b"\x00", relay_addr)
-                    deadline = time.monotonic() + 1.0
-                    while time.monotonic() < deadline:
-                        remaining = deadline - time.monotonic()
-                        sock.settimeout(remaining)
-                        data, addr = sock.recvfrom(4096)
-                        if addr[0] == relay_ip and len(data) == 1:
-                            relay_ok = True
-                            break
-                    if relay_ok:
-                        break
-                except OSError:
-                    pass
-
-            if not relay_ok:
-                print("autopunch relay unreachable, skipping verification")
-                return True, False
-
-            # Stage 2: リレー上の登録確認
-            lookup = struct.pack("!H", my_port) + socket.inet_aton(host) + struct.pack("!H", port)
-            nat_port: Optional[int] = None
-            for _ in range(3):
-                try:
-                    sock.sendto(lookup, relay_addr)
-                    deadline = time.monotonic() + 1.0
-                    while time.monotonic() < deadline:
-                        remaining = deadline - time.monotonic()
-                        sock.settimeout(remaining)
-                        data, addr = sock.recvfrom(4096)
-                        if addr[0] != relay_ip or len(data) != 8:
-                            continue
-                        internal_port = struct.unpack("!H", data[0:2])[0]
-                        candidate_nat_port = struct.unpack("!H", data[2:4])[0]
-                        ip = socket.inet_ntoa(data[4:8])
-                        if ip == host:
-                            nat_port = candidate_nat_port
-                            break
-                    if nat_port is not None:
-                        break
-                except OSError:
-                    pass
-
+            nat_port = _autopunch_nat_port(host, port)
             if nat_port is None:
                 return False, True
-
-            # Stage 3: NAT ポートへ soku echo プローブ
-            packet = soku_echo_packet()
-            for _ in range(10):
-                try:
-                    sock.sendto(packet, (host, nat_port))
-                    deadline = time.monotonic() + 0.4
-                    while time.monotonic() < deadline:
-                        remaining = deadline - time.monotonic()
-                        sock.settimeout(remaining)
-                        data, addr = sock.recvfrom(4096)
-                        if addr[0] != host:
-                            continue
-                        if len(data) < 2:
-                            continue
-                        if data[0] in (0x07, 0x08):
-                            return True, True
-                except OSError:
-                    pass
-
+            for _ in range(2):
+                reply = probe_host_once(host, nat_port, soku_echo_packet(), timeout_sec=0.4, giuroll=giuroll)
+                if reply is not None and is_valid_reply(reply):
+                    return True, True
             return False, True
         except OSError:
-            return False, True
-        finally:
-            sock.close()
+            return False, False
 
 
 def parse_ipv4_addr_or_raise(addr: str) -> tuple[str, int]:
@@ -5656,13 +5550,14 @@ def should_reverify_host_on_update(
 
 
 def host_probe_kwargs(*, giuroll: bool = False) -> dict[str, float | int]:
-    """giuroll ホストは UDP echo が不安定になりやすいので probe を緩める。"""
+    """Dedicated Giuroll ping retries; no spectator fallback on known hosts."""
     if giuroll:
         return {
             "attempts": 8,
             "interval_sec": 0.12,
             "timeout_sec": 0.35,
             "needed_consecutive": 1,
+            "giuroll": True,
         }
     return {
         "attempts": 6,
@@ -5743,29 +5638,20 @@ async def verify_hostable_or_raise(
             host,
             port,
             timeout_sec=float(kwargs["timeout_sec"]),
+            giuroll=giuroll,
         )
 
-    # AP チェック (最悪 ~10 秒) は direct チェックと並行して走らせ、
-    # direct が確定したら結果を待たずに破棄する。直結ホストの掲載が
-    # AP タイムアウト待ちでブロックされるのを防ぐ。
-    ap_task = asyncio.create_task(
-        asyncio.to_thread(check_hostable_autopunch, host, port)
+    # Do not start a relay lookup before direct verification has failed.
+    # Cancelling to_thread never stopped its UDP worker, and a parallel AP
+    # lookup could open a NAT hole during the supposedly direct check.
+    direct_lenient = await run_direct(probe_kwargs)
+    direct_strict = direct_lenient and (
+        not consecutive or await run_direct(strict_kwargs)
     )
-
-    try:
-        direct_lenient = await run_direct(probe_kwargs)
-        direct_strict = (
-            await run_direct(strict_kwargs) if direct_lenient else False
-        )
-    except BaseException:
-        ap_task.cancel()
-        raise
-
     if direct_strict:
-        ap_task.cancel()
         return True, False, False
 
-    ap_ok, ap_verified = await ap_task
+    ap_ok, ap_verified = await asyncio.to_thread(check_hostable_autopunch, host, port, giuroll=giuroll)
 
     if ap_ok:
         uncertain = compute_reachability_uncertain(
